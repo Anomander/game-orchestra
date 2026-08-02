@@ -1,0 +1,123 @@
+<div class="game-orchestra-custom-playlist-editor-container">
+  <p class="hint">{{localize "GameOrchestra.CustomEditor.Hint"}} ({{playlistName}})</p>
+
+  <div class="game-orchestra-editor-body">
+    <aside class="game-orchestra-editor-panel">
+      <!-- Wrapped separately from .game-orchestra-editor-validation below so the two can scroll
+           independently: only ONE pane is ever open (see handleTogglePane) and it stretches to
+           fill this stack, scrolling its own body; validation stays pinned in view below it -
+           see docs/graph-editor-panel-plan.md D4.
+
+           Exactly one section must start without .game-orchestra-collapsed, or the stack opens with
+           nothing expanded and a column of bare headers. -->
+      <div class="game-orchestra-pane-stack">
+        <section class="game-orchestra-pane game-orchestra-collapsed" data-pane="palette">
+          <button type="button" class="game-orchestra-pane-header" data-action="togglePane" data-pane="palette"
+                  aria-expanded="false" aria-controls="game-orchestra-pane-body-palette">
+            <i class="fas fa-caret-right game-orchestra-pane-caret"></i>
+            <span>{{localize "GameOrchestra.CustomEditor.Pane.Palette"}}</span>
+          </button>
+          <div class="game-orchestra-pane-body" id="game-orchestra-pane-body-palette">
+            <!-- Presets come FIRST: a preset builds a whole working graph in one go, so it is the
+                 fastest route out of an empty canvas, whereas the buttons below assemble one node
+                 at a time. A <select>, so it dispatches through the delegated change listener
+                 (_CHANGE_ACTIONS) rather than the data-action click map. -->
+            <select class="game-orchestra-preset-select" data-change-action="applyPreset" title="{{localize 'GameOrchestra.CustomEditor.Preset.Hint'}}">
+              <option value="">{{localize "GameOrchestra.CustomEditor.Preset.Placeholder"}}</option>
+              {{#each presets}}
+              <option value="{{this.id}}" title="{{localize this.descriptionKey}}" {{#unless this.enabled}}disabled{{/unless}}>
+                {{localize this.labelKey}}{{#unless this.enabled}} ({{localize "GameOrchestra.CustomEditor.Preset.NeedsSounds"}}){{/unless}}
+              </option>
+              {{/each}}
+            </select>
+            <div class="game-orchestra-palette-list">
+              {{#each palette}}
+              <button type="button" data-action="addNode" data-node-type="{{this.type}}" title="{{localize this.label}}">
+                <i class="fas fa-plus"></i> {{localize this.label}}
+              </button>
+              {{/each}}
+            </div>
+          </div>
+        </section>
+
+        <section class="game-orchestra-pane" data-pane="properties">
+          <button type="button" class="game-orchestra-pane-header" data-action="togglePane" data-pane="properties"
+                  aria-expanded="true" aria-controls="game-orchestra-pane-body-properties">
+            <i class="fas fa-caret-down game-orchestra-pane-caret"></i>
+            <span>{{localize "GameOrchestra.CustomEditor.Pane.Properties"}}</span>
+          </button>
+          <!-- Populated exclusively via CustomPlaylistEditor#_renderInspector() (custom-playlist-inspector.mjs),
+               never re-rendered through this Handlebars template after the initial mount - see the class doc
+               in custom-playlist-editor.mjs for why a full re-render here breaks node dragging. -->
+          <div class="game-orchestra-pane-body game-orchestra-editor-inspector" id="game-orchestra-pane-body-properties"></div>
+        </section>
+
+        <section class="game-orchestra-pane game-orchestra-collapsed" data-pane="tracks">
+          <button type="button" class="game-orchestra-pane-header" data-action="togglePane" data-pane="tracks"
+                  aria-expanded="false" aria-controls="game-orchestra-pane-body-tracks">
+            <i class="fas fa-caret-right game-orchestra-pane-caret"></i>
+            <span>{{localize "GameOrchestra.CustomEditor.Pane.Tracks"}}</span>
+          </button>
+          <!-- Populated exclusively via CustomPlaylistEditor#_renderTracks(), which renders the
+               mixer in its compact + graph-tools flavour (playlist-mixer-render.mjs). Same
+               never-re-rendered-through-Handlebars rule as the Properties pane above.
+
+               One pane, not two: the track list and the mixer answer questions about the same
+               rows - "which of these haven't I placed?" and "why is this one so loud?" - and
+               having them in separate panes of a single-open accordion meant switching panes to
+               compare. Every row is still a drag source for the canvas and still carries its
+               add-node button. -->
+          <div class="game-orchestra-pane-body game-orchestra-editor-tracks game-orchestra-mixer game-orchestra-mixer-compact"
+               id="game-orchestra-pane-body-tracks"></div>
+        </section>
+
+      </div>
+
+      <!-- Deliberately outside the pane stack above (and never itself collapsed) - see
+           docs/graph-editor-panel-plan.md D4: validation has to stay visible even while the
+           Properties pane containing the rest of the inspector is collapsed. Populated via
+           CustomPlaylistEditor#_renderValidation() (custom-playlist-inspector.mjs#buildValidationHtml). -->
+      <div class="game-orchestra-editor-validation"></div>
+    </aside>
+
+    <div class="game-orchestra-canvas-wrapper">
+      <div class="game-orchestra-canvas-toolbar">
+        <!-- Both start disabled and are enabled/disabled from
+             CustomPlaylistEditor#_updateHistoryButtons() as the history changes - at mount
+             there is nothing to undo, and rendering them enabled would flash a live-looking
+             control that does nothing. -->
+        <button type="button" data-action="undo" disabled title="{{localize 'GameOrchestra.CustomEditor.Canvas.Undo'}}"><i class="fas fa-rotate-left"></i></button>
+        <button type="button" data-action="redo" disabled title="{{localize 'GameOrchestra.CustomEditor.Canvas.Redo'}}"><i class="fas fa-rotate-right"></i></button>
+        <button type="button" data-action="zoomIn" title="{{localize 'GameOrchestra.CustomEditor.Canvas.ZoomIn'}}"><i class="fas fa-search-plus"></i></button>
+        <button type="button" data-action="zoomOut" title="{{localize 'GameOrchestra.CustomEditor.Canvas.ZoomOut'}}"><i class="fas fa-search-minus"></i></button>
+        <button type="button" data-action="zoomReset" title="{{localize 'GameOrchestra.CustomEditor.Canvas.ZoomReset'}}"><i class="fas fa-compress"></i></button>
+      </div>
+      <div class="game-orchestra-drawflow-canvas">
+        <!-- Deliberately no class attribute here - Drawflow calls
+             classList.add("parent-drawflow") on whatever element it's given,
+             and its own click-dispatch logic checks classList[0] (the FIRST
+             class only). If this div already had a class of ours, that would
+             stay classList[0] and silently break background-drag-to-pan
+             clicks that land directly on it (visible after zooming out,
+             where Drawflow's scaled-down inner canvas no longer covers the
+             full container). Query it via [data-drawflow-mount], not a class. -->
+        <div data-drawflow-mount></div>
+      </div>
+      <p class="game-orchestra-canvas-hint">{{localize "GameOrchestra.CustomEditor.Canvas.PanZoomHint"}}</p>
+      {{#if activityUnavailable}}
+      <p class="game-orchestra-canvas-hint"><i class="fas fa-info-circle"></i> {{localize "GameOrchestra.CustomEditor.ActivityUnavailable"}}</p>
+      {{/if}}
+    </div>
+  </div>
+
+  <footer class="sheet-footer flexrow game-orchestra-editor-footer">
+    <button type="button" data-action="save">
+      <i class="fas fa-save"></i> {{localize "GameOrchestra.UI.Save"}}
+    </button>
+    {{#if hasExistingGraph}}
+    <button type="button" data-action="removeCustomPlayback">
+      <i class="fas fa-undo"></i> {{localize "GameOrchestra.CustomEditor.RemoveButton"}}
+    </button>
+    {{/if}}
+  </footer>
+</div>

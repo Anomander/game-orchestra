@@ -1,0 +1,46 @@
+{
+  "authors": [
+    {
+      "name": "Anomander",
+      "url": "https://github.com/Anomander"
+    }
+  ],
+  "bugs": "https://github.com/Anomander/game-orchestra/issues",
+  "changelog": "https://github.com/Anomander/game-orchestra/releases",
+  "compatibility": {
+    "minimum": "14",
+    "verified": "14.364"
+  },
+  "description": "Dynamic context-aware audio manager for FoundryVTT. Automatically switches between area and combat playlists based on game state, supports custom visual playback graphs, per-token combat themes, mood/phase overlays, position memory, and crossfading.",
+  "download": "",
+  "esmodules": [
+    "scripts/game-orchestra.mjs"
+  ],
+  "scripts": [
+    "scripts/vendor/drawflow.min.js"
+  ],
+  "styles": [
+    "scripts/vendor/drawflow.min.css",
+    "styles/game-orchestra.css"
+  ],
+  "flags": {},
+  "id": "game-orchestra",
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    },
+    {
+      "lang": "pt-BR",
+      "name": "Português (Brasil)",
+      "path": "lang/pt-BR.json"
+    }
+  ],
+  "license": "https://github.com/Anomander/game-orchestra?tab=License-1-ov-file",
+  "manifest": "https://github.com/Anomander/game-orchestra/releases/latest/download/module.json",
+  "readme": "https://github.com/Anomander/game-orchestra?tab=readme-ov-file",
+  "title": "Game Orchestra",
+  "url": "https://github.com/Anomander/game-orchestra",
+  "version": "1.0.1"
+}

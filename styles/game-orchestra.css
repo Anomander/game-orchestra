@@ -1,0 +1,2600 @@
+/* Game Orchestra Styling */
+
+/* Music Configuration Application (GameOrchestraConfig) */
+.game-orchestra-config {
+  min-width: 420px;
+}
+
+.game-orchestra-config .playlist-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.game-orchestra-config .mood-subtitle {
+  font-size: 0.85em;
+  font-weight: normal;
+  opacity: 0.8;
+}
+
+.game-orchestra-config footer.flexrow {
+  margin-top: 10px;
+}
+
+.mood-tabs {
+  margin-bottom: 10px;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border-subtle, #7a7971);
+  padding-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.mood-tabs .item {
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.world-active-indicator {
+  color: #2ecc71;
+  font-weight: bold;
+  margin-left: 2px;
+}
+
+.override-indicator {
+  font-weight: bold;
+}
+
+.mood-card-header .override-indicator {
+  margin-left: auto;
+}
+
+.mood-tabs .override-indicator {
+  margin-left: 2px;
+}
+
+/* Mood Widget Floating State */
+.game-orchestra-mood-widget {
+  min-width: 240px;
+  pointer-events: auto !important;
+}
+
+.game-orchestra-mood-widget .window-content {
+  padding: 8px;
+  overflow: visible;
+}
+
+.game-orchestra-mood-widget-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mood-active-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.mood-widget-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.widget-action-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-text-subtle, #aaa);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.widget-action-btn:hover {
+  color: var(--color-text-light, #fff);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.widget-action-btn:active i {
+  transform: rotate(180deg);
+  transition: transform 0.2s ease;
+}
+
+.mood-active-badge {
+  font-size: 0.85em;
+  padding: 3px 10px;
+  border-radius: 12px;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: bold;
+}
+
+.mood-active-badge.default {
+  background-color: #64748b;
+}
+
+.mood-widget-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mood-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.2));
+  background: var(--color-bg-btn, rgba(0, 0, 0, 0.2));
+  color: var(--color-text-light, #f0f0f0);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  font-size: 0.9em;
+  text-align: left;
+  width: 100%;
+}
+
+.mood-pill * {
+  pointer-events: none;
+}
+
+.mood-pill:hover {
+  background: var(--color-bg-btn-hover, rgba(255, 255, 255, 0.15));
+  border-color: var(--color-border-highlight, #ff9800);
+}
+
+.mood-pill.active {
+  background: var(--mood-color, #3b82f6);
+  color: #ffffff;
+  border-color: var(--mood-color, #3b82f6);
+  font-weight: bold;
+}
+
+/* Compact Widget Mode (Option B: Compact Horizontal Icon Strip) */
+#ui-left-column-1 .game-orchestra-mood-widget.compact .window-content,
+#ui-left .game-orchestra-mood-widget.compact .window-content,
+.game-orchestra-mood-widget.compact .window-content {
+  display: block !important;
+  padding: 4px !important;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.compact .mood-active-bar,
+#ui-left .game-orchestra-mood-widget.compact .mood-active-bar,
+.game-orchestra-mood-widget.compact .mood-active-bar {
+  display: none !important;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.compact .mood-widget-pills,
+#ui-left .game-orchestra-mood-widget.compact .mood-widget-pills,
+.game-orchestra-mood-widget.compact .mood-widget-pills {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.compact .mood-pill,
+#ui-left .game-orchestra-mood-widget.compact .mood-pill,
+.game-orchestra-mood-widget.compact .mood-pill {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  min-width: 28px !important;
+  padding: 5px 6px !important;
+  justify-content: center !important;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.compact .mood-pill span,
+#ui-left .game-orchestra-mood-widget.compact .mood-pill span,
+.game-orchestra-mood-widget.compact .mood-pill span {
+  display: none !important;
+}
+
+/* Docked Widget State (Matching wgtgm-mini-calendar) */
+#ui-left-column-1 .game-orchestra-mood-widget.docked,
+#ui-left .game-orchestra-mood-widget.docked,
+.game-orchestra-mood-widget.docked {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  width: 100% !important;
+  height: auto !important;
+  z-index: auto !important;
+  box-shadow: none !important;
+  border: 1px solid var(--color-border-dark, rgba(255, 255, 255, 0.2)) !important;
+  border-radius: 5px !important;
+  pointer-events: auto !important;
+  opacity: 0.45 !important;
+  transition: opacity 0.2s ease-in-out, background-color 0.2s ease-in-out !important;
+  background: var(--color-bg-dark, rgba(10, 10, 15, 0.85)) !important;
+  backdrop-filter: blur(8px) !important;
+  margin-top: 4px !important;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.docked:hover,
+#ui-left .game-orchestra-mood-widget.docked:hover,
+.game-orchestra-mood-widget.docked:hover {
+  opacity: 1 !important;
+  background: var(--color-bg-dark, rgba(10, 10, 15, 0.95)) !important;
+}
+
+.game-orchestra-mood-widget.docked .window-content,
+.game-orchestra-mood-widget.docked .window-header {
+  background: transparent !important;
+}
+
+.game-orchestra-mood-widget.docked .window-resizable-handle {
+  display: none !important;
+}
+
+/* Overlay Config Application (MoodConfigApp / PhaseConfigApp) */
+.game-orchestra-overlay-config {
+  min-width: 480px;
+}
+
+.game-orchestra-overlay-config .mood-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.game-orchestra-overlay-config .mood-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.2));
+  border-radius: 6px;
+  background: var(--color-bg-btn, rgba(0, 0, 0, 0.2));
+}
+
+.game-orchestra-overlay-config .mood-drag-handle {
+  cursor: grab;
+  color: var(--color-text-dark, #888);
+  padding: 0 4px;
+}
+
+.game-orchestra-overlay-config .mood-label-input {
+  flex: 1 1 160px;
+  min-width: 130px;
+}
+
+.game-orchestra-overlay-config .mood-icon-select {
+  flex: 1 1 170px;
+  min-width: 140px;
+  height: 30px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-bg-option, rgba(20, 20, 30, 0.8));
+  color: var(--color-text-light, #f0f0f0);
+}
+
+.game-orchestra-overlay-config .mood-color-input {
+  width: 40px;
+  height: 30px;
+  padding: 0 2px;
+  border: 1px solid var(--color-border-subtle, #666);
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+
+/* Playlist Hierarchy Tree Application */
+.game-orchestra-playlist-tree-window {
+  min-width: 680px;
+}
+
+.game-orchestra-playlist-tree {
+  gap: 10px;
+}
+
+.game-orchestra-playlist-tree .tree-header-bar {
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+}
+
+.game-orchestra-playlist-tree .active-resolution-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(46, 204, 113, 0.15);
+  border: 1px solid #2ecc71;
+  color: #2ecc71;
+  font-size: 0.85em;
+  font-weight: bold;
+}
+
+.game-orchestra-playlist-tree .active-resolution-pill .active-dot {
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+.game-orchestra-playlist-tree .tree-nodes-container {
+  gap: 12px;
+}
+
+/* Area (mood) / Combat (phase) tree-nodes laid out as two side-by-side
+   columns, matching the "Scene/Global World Defaults" sections' existing
+   Area | Combat context-box layout one level up. Wraps to stacked columns
+   below min-width rather than squeezing the mood-grid cards illegibly. */
+.game-orchestra-playlist-tree .tree-columns {
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.game-orchestra-playlist-tree .tree-column {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.game-orchestra-playlist-tree .tree-column .tree-node {
+  flex: 1;
+}
+
+/* The following mood-grid/context-box component styles are shared between the
+   Playlist Hierarchy Tree and GameOrchestraConfig's token mood-grid layout. */
+.game-orchestra-playlist-tree .tree-node,
+.game-orchestra-mood-grid .tree-node {
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  border-radius: 6px;
+  background: var(--color-bg-option, rgba(15, 15, 25, 0.6));
+  padding: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.game-orchestra-playlist-tree .tree-node.is-resolving,
+.game-orchestra-mood-grid .tree-node.is-resolving {
+  border-color: #2ecc71;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.3);
+}
+
+.game-orchestra-playlist-tree .tree-node-header,
+.game-orchestra-mood-grid .tree-node-header {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+}
+
+.game-orchestra-playlist-tree .tree-node-header.clickable,
+.game-orchestra-mood-grid .tree-node-header.clickable {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15ease;
+}
+
+.game-orchestra-playlist-tree .tree-node-header.clickable:hover,
+.game-orchestra-mood-grid .tree-node-header.clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.game-orchestra-playlist-tree .section-chevron,
+.game-orchestra-mood-grid .section-chevron {
+  width: 14px;
+  text-align: center;
+  color: var(--color-text-subtle, #aaa);
+  transition: transform 0.15s ease;
+}
+
+.game-orchestra-playlist-tree .node-title,
+.game-orchestra-mood-grid .node-title {
+  font-weight: bold;
+  font-size: 1.05em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.game-orchestra-playlist-tree .resolving-badge,
+.game-orchestra-mood-grid .resolving-badge {
+  font-size: 0.8em;
+  color: #2ecc71;
+  font-weight: bold;
+}
+
+.game-orchestra-playlist-tree .mood-grid,
+.game-orchestra-mood-grid .mood-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
+}
+
+.game-orchestra-playlist-tree .mood-card,
+.game-orchestra-mood-grid .mood-card {
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  border-radius: 6px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.game-orchestra-playlist-tree .mood-card.resolving-mood,
+.game-orchestra-playlist-tree .mood-card.is-resolving,
+.game-orchestra-mood-grid .mood-card.resolving-mood,
+.game-orchestra-mood-grid .mood-card.is-resolving {
+  border-color: #2ecc71 !important;
+  box-shadow: 0 0 8px rgba(46, 204, 113, 0.4);
+}
+
+.game-orchestra-playlist-tree .mood-card-header,
+.game-orchestra-mood-grid .mood-card-header {
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--mood-color, #3b82f6);
+}
+
+.game-orchestra-playlist-tree .mood-card-header.clickable,
+.game-orchestra-mood-grid .mood-card-header.clickable {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: background 0.15s ease;
+}
+
+.game-orchestra-playlist-tree .mood-card-header.clickable:hover,
+.game-orchestra-mood-grid .mood-card-header.clickable:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.game-orchestra-playlist-tree .context-boxes {
+  display: flex;
+  gap: 8px;
+}
+
+.game-orchestra-playlist-tree .context-box,
+.game-orchestra-mood-grid .context-box {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.15);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.game-orchestra-playlist-tree .context-box.drop-hover,
+.game-orchestra-mood-grid .context-box.drop-hover {
+  border-color: #2ecc71;
+  background: rgba(46, 204, 113, 0.12);
+}
+
+.game-orchestra-playlist-tree .context-box-header,
+.game-orchestra-mood-grid .context-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+}
+
+.game-orchestra-playlist-tree .context-box-header .box-title,
+.game-orchestra-mood-grid .context-box-header .box-title {
+  font-size: 0.85em;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-light, #e0e0e0);
+}
+
+.game-orchestra-playlist-tree .context-box-body,
+.game-orchestra-mood-grid .context-box-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.game-orchestra-playlist-tree .track-row,
+.game-orchestra-mood-grid .track-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.game-orchestra-playlist-tree select,
+.game-orchestra-mood-grid .context-box select {
+  width: 100%;
+  height: 28px;
+  padding: 2px 4px;
+  font-size: 0.85em;
+  border-radius: 4px;
+}
+
+/* Foundry's core .flexrow > * rule gives every direct child flex: 1, which
+   splits the row 50/50 between the badge and the select. Pin the badge to
+   its content width so the select gets the rest. */
+.game-orchestra-playlist-tree .track-row .soundboard-required-badge,
+.game-orchestra-mood-grid .track-row .soundboard-required-badge {
+  flex: 0 0 auto;
+  color: #ef4444;
+  font-weight: bold;
+  font-size: 1.1em;
+  margin: 0 2px;
+  cursor: help;
+}
+
+.game-orchestra-playlist-tree .track-row select,
+.game-orchestra-mood-grid .track-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.game-orchestra-playlist-tree .clear-btn,
+.game-orchestra-mood-grid .clear-btn {
+  flex: 0 0 22px;
+  height: 22px;
+  width: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 0.75em;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.game-orchestra-playlist-tree .clear-btn:hover,
+.game-orchestra-mood-grid .clear-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+/* Quick-open for a custom playlist's graph editor. Deliberately NOT in the
+ * card header beside the (destructive, irreversible) clear button, where two
+ * 22px icon squares sat a few pixels apart and a misclick deleted the
+ * assignment. It lives in the card body instead, below the playlist select and
+ * in the slot the track picker occupies for non-custom playlists - full width,
+ * labelled, and nowhere near the trash icon. */
+.game-orchestra-playlist-tree .graph-btn {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 26px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  background: rgba(34, 211, 238, 0.15);
+  color: #22d3ee;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+}
+
+.game-orchestra-playlist-tree .graph-btn:hover {
+  background: rgba(34, 211, 238, 0.3);
+}
+
+.game-orchestra-mood-grid {
+  gap: 12px;
+}
+
+.game-orchestra-playlist-tree .tree-footer-bar {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  display: flex;
+  justify-content: flex-end;
+}
+
+.game-orchestra-playlist-tree .mood-config-btn {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 0.9em;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Custom Playlist Graph Editor */
+
+.game-orchestra-custom-playlist-editor-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* Explicit floor independent of whether the ApplicationV2 window-content
+     chain hands down a definite height - without this, "height: 100%" can
+     resolve to 0 in some layout contexts, which silently breaks Drawflow's
+     drag math (it divides by clientWidth/clientHeight; 0 -> NaN offsets that
+     the browser drops with no console error). */
+  min-height: 500px;
+  gap: 8px;
+}
+
+.game-orchestra-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  /* Same fallback-floor reasoning as above, one level down. */
+  min-height: 420px;
+  gap: 8px;
+}
+
+/* Left-hand accordion panel: Add Element / Properties / Tracks / Settings, single-open (see
+   custom-playlist-editor.mjs's handleTogglePane doc), plus the pinned validation region below
+   them (see .game-orchestra-editor-validation further down). min-height:0 is load-bearing on a flex
+   child - without it this column refuses to shrink below its content's natural height and
+   .game-orchestra-pane-stack below never gets a chance to hand its open pane a bounded height. */
+.game-orchestra-editor-panel {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+/* The stack fills the panel down to the pinned validation region, and the single open pane takes
+   whatever the collapsed headers leave (see .game-orchestra-pane below). overflow:hidden rather than
+   auto: the stack itself must never scroll, or the open pane would grow to its content's natural
+   height and push the others off the bottom instead of scrolling inside itself - which is the
+   whole point of stretching it. .game-orchestra-pane-body owns the scrolling. */
+.game-orchestra-pane-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Collapsed panes are header-only and size to it; the open one absorbs the rest of the column.
+   min-height:0 on the open pane is what lets it shrink its body below the body's content height
+   so the body's own overflow-y can engage - without it the pane floors at its content size and
+   overflows the stack. */
+.game-orchestra-pane {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.game-orchestra-pane:not(.game-orchestra-collapsed) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.game-orchestra-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--color-cool-4, #2a2a2a);
+  border: none;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.game-orchestra-pane-caret {
+  transition: transform 0.15s ease;
+  width: 0.9em;
+}
+
+.game-orchestra-pane.game-orchestra-collapsed .game-orchestra-pane-caret {
+  transform: rotate(-90deg);
+}
+
+/* The one scroll container in the stack - see .game-orchestra-pane-stack. flex:1 1 auto + min-height:0
+   makes it claim the open pane's full height and scroll internally rather than growing it. */
+.game-orchestra-pane-body {
+  padding: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.game-orchestra-pane.game-orchestra-collapsed .game-orchestra-pane-body {
+  display: none;
+}
+
+/* Plain flex-wrap button list - the same layout the old top palette strip used
+   (.game-orchestra-editor-palette, before it moved into this pane), just relocated. Buttons are
+   deliberately unstyled beyond that: Foundry's own base button styling is enough, matching
+   every other plain data-action button in this template (zoom controls, Save, etc). */
+.game-orchestra-palette-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* No max-height and no scroller of its own. It had both (220px) back when the pane sized to its
+   content; now the open pane stretches to the bottom of the window and .game-orchestra-pane-body is the
+   one scroll container in the stack, so an inner cap just stranded the list at 220px inside a
+   much taller pane with dead space below it - REPORTED LIVE. Anything added to a pane body has
+   to let that body do the scrolling. */
+.game-orchestra-track-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.game-orchestra-track-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: grab;
+}
+.game-orchestra-track-row:hover {
+  background: var(--color-cool-4, #2a2a2a);
+}
+
+.game-orchestra-track-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-orchestra-track-used {
+  font-size: 0.75em;
+  color: var(--color-text-dark, #aaa);
+  flex: 0 0 auto;
+}
+
+/* Drop-hover feedback on the canvas wrapper - outline/box-shadow, never border: a border
+   changes the wrapper's client box, and Drawflow's drag math divides by that box's live
+   clientWidth/clientHeight (see the min-height/min-width comments on this same wrapper above). */
+.game-orchestra-drawflow-canvas.drop-hover {
+  outline: 2px dashed var(--color-cool-highlight, #4caf50);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 24px rgba(76, 175, 80, 0.15);
+}
+
+.game-orchestra-canvas-wrapper {
+  position: relative;
+  flex: 1 1 auto;
+  /* Drawflow requires a laid-out, non-zero-size container at construction
+     time - explicit non-zero floors on both axes, not just height, since a
+     zero clientWidth breaks drag math exactly the same way. */
+  min-width: 400px;
+  min-height: 420px;
+}
+
+.game-orchestra-drawflow-canvas {
+  /* The shared chrome colour for every node's border and port dots. Node TYPE
+     is carried by shape + icon (see the long comment above the node rules
+     below), so spending a per-type hue on the border too was redundant - and
+     it left no colour free to mean anything else, which is why selection,
+     multi-select, playback and hover each had to invent their own separate
+     visual channel. Keeping the chrome neutral reserves hue for STATE:
+     amber/red = validation, blue = selected, cyan = playing, amber = hovered.
+     The per-type --game-orchestra-node-accent is still declared by each type's rule
+     and still colours that type's icon - it is simply no longer used here. */
+  --game-orchestra-node-neutral: #6b7280;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  background: var(--color-cool-3, #1e1e1e);
+  /* Subtle grid so panning/zooming has a visible frame of reference. */
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+  overflow: hidden;
+}
+
+/* Drawflow's own stylesheet does not size .parent-drawflow itself - this
+   fills the styled/positioned wrapper above. See the template's comment on
+   this element for why it must otherwise be class-free. */
+.game-orchestra-drawflow-canvas [data-drawflow-mount] {
+  width: 100%;
+  height: 100%;
+}
+
+/* Drawflow builds a black "x" delete bubble on every right-click of a node or
+   a wire (its contextmenu() handler appends a .drawflow-delete div to the
+   selected node, or to the canvas at the pointer for a selected connection).
+   It sits over the node's own corner and over whatever the wire passes, it is
+   the only piece of vendor chrome that ignores this module's styling, and it
+   duplicates a route that already exists - Delete removes the selection, both
+   Drawflow's own single node/connection (its key() handler) and this editor's
+   marquee selection (_deleteMultiSelection).
+
+   Hidden rather than suppressed at the event level: Drawflow binds its
+   contextmenu handler to the canvas container itself, so blocking it would
+   mean a capture-phase listener on an ancestor swallowing every right-click
+   inside the canvas - and right-drag on empty canvas is this editor's pan
+   gesture. `display: none` also takes the bubble out of hit-testing, so
+   Drawflow's own click handler (which matches on the element being the click
+   target) can never fire for it either. */
+.game-orchestra-drawflow-canvas .drawflow-delete {
+  display: none;
+}
+
+.game-orchestra-canvas-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.game-orchestra-canvas-toolbar button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Undo/Redo spend most of an editing session disabled (nothing to undo yet,
+   nothing redone since the last edit), so they are dimmed rather than hidden:
+   a control that vanishes and reappears is harder to aim at than one that
+   greys out, and their position in the toolbar is what makes them findable. */
+.game-orchestra-canvas-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.game-orchestra-canvas-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 2;
+  margin: 0;
+  font-size: 0.75em;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 3px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* Pinned below .game-orchestra-pane-stack, outside every .game-orchestra-pane - see
+   docs/graph-editor-panel-plan.md D4: a failed Save's reasons must stay visible even while the
+   Properties pane containing the rest of the inspector is collapsed, so this can't share that
+   pane's scroll container or its collapsed state. flex:0 0 auto (not 1) so it takes only the
+   height its content needs and never eats space the pane stack could use; max-height/overflow
+   are still there as a backstop against a graph with an unusually large number of issues.
+   display is toggled between '' and 'none' by CustomPlaylistEditor#_renderValidation() - empty
+   is common (a valid graph) and shouldn't leave a visible empty box. */
+.game-orchestra-editor-validation {
+  flex: 0 0 auto;
+  max-height: 34%;
+  overflow-y: auto;
+}
+
+.game-orchestra-exit-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The row's own column widths, set here rather than left to Foundry's
+   .form-group defaults (where `label` takes a flex share and grows to swallow
+   the free space). Two things depended on that and both were wrong: a Fork exit
+   row is just a label and a delete button, so the button was pushed away from
+   the label instead of sitting beside it - reported live - and a Random row's
+   two inputs could not be lined up under a header.
+
+   Fixed-basis label + flexing controls gives one layout that works for all
+   three shapes: Fork (label, button) packs left; Random (label, weight,
+   cooldown, button) and Condition (label, kind, value, button) let the middle
+   controls share the remaining width, which puts their buttons at the right.
+
+   The inspector class is doubled onto every one of these selectors on purpose.
+   Foundry's own `.form-group > label` is (0,1,1) - exactly what the undoubled
+   selector would be - so the two would merely TIE and the winner would come
+   down to load order, or lose outright if Foundry ever qualifies its rule with
+   an ancestor. Verified by rendering under both orderings. Same reasoning as
+   HR-C's doubled canvas class against the Drawflow vendor sheet. */
+.game-orchestra-editor-inspector .game-orchestra-exit-row > label {
+  flex: 0 0 auto;
+  min-width: 3.4em;
+}
+
+.game-orchestra-editor-inspector .game-orchestra-exit-row > input,
+.game-orchestra-editor-inspector .game-orchestra-exit-row > select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Column captions for a Random node's exits. Sized to match the row below it:
+   each caption takes the same flex share as the input it names, and the spacer
+   stands in for the delete button so the captions do not drift right. */
+/* The shrink goes on the CAPTIONS, never on the row. The label's `min-width` is
+   in em, so a font-size on the row itself resolves that em against the smaller
+   size - measured 34px here against the exit rows' 48px, which slid every
+   caption left of the input it names. Caught by rendering the two rows together
+   and diffing their column x-positions. */
+.game-orchestra-exit-columns {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.game-orchestra-editor-inspector .game-orchestra-exit-columns > span {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 0.72em;
+}
+
+.game-orchestra-editor-inspector .game-orchestra-exit-columns > .game-orchestra-exit-row-spacer {
+  flex: 0 0 22px;
+}
+
+/* Compact, square delete buttons in exit rows, matching the tree and mood grids
+   rather than Foundry's full-size button - an exit row is a dense list, and the
+   default button rendered as a box several times the height of the text. The
+   22px basis is what .game-orchestra-exit-row-spacer above is measured against. */
+.game-orchestra-editor-inspector .game-orchestra-exit-row .clear-btn {
+  flex: 0 0 22px;
+  height: 22px;
+  width: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 0.75em;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.game-orchestra-editor-inspector .game-orchestra-exit-row .clear-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+.game-orchestra-validation-errors {
+  margin-top: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  font-size: 0.85em;
+}
+
+.game-orchestra-validation-warnings {
+  margin-top: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  font-size: 0.85em;
+}
+
+.game-orchestra-validation-infos {
+  margin-top: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-text-dark, #aaa);
+  font-size: 0.85em;
+}
+
+.game-orchestra-empty-playlist-hint {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  font-size: 0.85em;
+}
+
+.game-orchestra-editor-footer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* Drawflow node styling to match the module's dark theme.
+ *
+ * Node TYPE is distinguished by shape + icon alone (no visible text label -
+ * the type name lives in a `title` hover tooltip instead, set by
+ * buildNodeInnerHtml() in custom-playlist-node-render.mjs). Shapes reflect
+ * what each node actually does:
+ *   start=triangle pointing right (play), end=triangle pointing left,
+ *   mirroring start (flow terminates), track=pill (audio, continuous),
+ *   delay=parallelogram (skewed, suggesting a shift in time),
+ *   condition=a wide rectangle whose branch exits run along its BOTTOM edge
+ *   and whose fallback exit sits on top (it was a diamond once; the exits
+ *   needed a straight edge to spread along), fork/random=a narrow vertical bar that grows taller
+ *   as exits are added (see computeNodeHeightPx() in
+ *   custom-playlist-node-render.mjs) - both spread their behavior across
+ *   several output ports stacked along that height; icon + accent color tell
+ *   the two apart from each other.
+ *
+ * The shape itself lives on the ::before pseudo-element, NOT on
+ * .drawflow-node directly, specifically so it never clips anything: ports
+ * (.input/.output) are children of .drawflow-node positioned via negative
+ * offset (see the vendored drawflow.min.css) to sit just outside the node's
+ * own box, and a clip-path applied to an ancestor clips ALL of its rendered
+ * descendants - including those - to whatever polygon the shape uses,
+ * chopping port circles into half-moons wherever they fall outside it (this
+ * was visibly wrong in practice, not just theoretical). Keeping
+ * .drawflow-node itself an unclipped plain box means ports always render as
+ * full circles regardless of the shape drawn behind them. Connection wires
+ * are unaffected either way: Drawflow measures each port's actual live
+ * bounding-box position to draw them, never anything derived from the visual
+ * outline.
+ */
+/* ".game-orchestra-drawflow-canvas" is repeated below (a valid, deliberate
+ * specificity-boost - CSS counts a repeated class selector once per
+ * occurrence) so this beats Drawflow's own same-shape ".drawflow .drawflow-node"
+ * rule on specificity alone, with no dependency on stylesheet load order.
+ * This is not theoretical: it's already burned us once (a flat cyan fill and
+ * near-default rectangle briefly won out over this rule's own dark
+ * background before this fix, tied to which stylesheet happened to load
+ * last). */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node {
+  background: transparent;
+  border: none;
+  color: var(--color-text-light-primary, #eee);
+  min-width: 130px;
+  min-height: 64px;
+  padding: 0;
+  transition: filter 0.1s ease;
+}
+
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--color-cool-4, #2a2a2a);
+  /* Neutral, not --game-orchestra-node-accent - see the --game-orchestra-node-neutral
+     declaration on .game-orchestra-drawflow-canvas for why type colour was taken off
+     the border. */
+  border: 2px solid var(--game-orchestra-node-neutral, #6b7280);
+}
+
+/* Hover lift. On ::before - the shape layer - and NOT on .drawflow-node.
+ *
+ * `filter` applies to an element's whole SUBTREE, so on the node it gave every
+ * descendant its own 6px-blur shadow: the name caption, the exit chips, the
+ * icon and each port dot. Reported live as "nodes look blurry when hovered",
+ * and that is exactly right - rendering the two side by side, the shape's
+ * border stays pixel-identical (measured: the same 14-sample transition across
+ * it either way) while the small text smears into its own halo. The blur was
+ * never the shape; it was the text.
+ *
+ * ::before has no descendants, so filtering it shadows the shape alone.
+ * drop-shadow rather than box-shadow because box-shadow follows the border box
+ * and is clipped away entirely by a clip-path - which would silently drop the
+ * shadow on Delay's circle and both triangles (verified by rendering).
+ *
+ * Start/End get next to nothing from this: their visible outline is the scaled
+ * ::after polygon, and ::before is opaque on top of it, so its shadow falls
+ * underneath. Extending the rule to ::after was tried here and changed nothing
+ * measurable - consistent with the note further down that a drop-shadow on
+ * those triangles was already rejected from live testing.
+ *
+ * Keeping `filter` off the node also stops hover from colliding with the
+ * playback highlight, which animates the node's own `filter` (see
+ * game-orchestra-node-breathe). `filter` does not compose, so the two were fighting
+ * over one property; now they own different elements. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node:hover::before {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5));
+}
+
+/* Validation state, applied to the node ELEMENT by _refreshIssueBadges()
+ * alongside the corner badge (not to .drawflow_content_node, which
+ * _refreshNodeDisplay() replaces wholesale - a class written there would
+ * silently vanish on the next content refresh).
+ *
+ * The whole node takes the state colour rather than only the 18px corner
+ * badge, so an invalid graph is legible at a glance and from across a zoomed-
+ * out canvas instead of requiring a hunt for small dots. This is what the
+ * neutral chrome above buys.
+ *
+ * Both `background` and `border-color` are set, and the background is an
+ * opaque blend rather than a translucent wash layered over the base colour:
+ * ::before paints a single background, so a semi-transparent state colour
+ * would let the canvas grid show through the node body. Deliberately placed
+ * BEFORE the .selected rules below - an explicit selection still wins the
+ * border, since a user clicking a node wants to see that it is selected. The
+ * fill stays state-coloured either way, so a selected node never loses its
+ * warning/error reading.
+ *
+ * Severity is never encoded by hue alone: the badge carries a distinct glyph
+ * per severity (see _refreshIssueBadges) so this stays readable for anyone who
+ * cannot separate amber from red. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-warning::before {
+  border-color: #f59e0b;
+  background: #3a2f1c;
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-error::before {
+  border-color: #ef4444;
+  background: #3a2020;
+}
+
+/* The Playlist node's inset ring (below) paints the node's own fill colour as
+   its inner band, so it has to follow the state fill or a warned/errored
+   Playlist node keeps a stripe of the old neutral colour through its middle. */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist.game-orchestra-node-warning::before {
+  box-shadow: inset 0 0 0 4px #3a2f1c, inset 0 0 0 6px #f59e0b;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist.game-orchestra-node-error::before {
+  box-shadow: inset 0 0 0 4px #3a2020, inset 0 0 0 6px #ef4444;
+}
+
+/* Same specificity-boost as the base rule above - Drawflow's own
+ * ".drawflow .drawflow-node.selected{background:red}" is also a three-class
+ * selector, so without this a selected node could show vendor's red fill
+ * bleeding through depending on load order (this was visibly happening: a
+ * red/orange fill covering part of the shape when selected). Selection is
+ * deliberately border-only here - no background change - so the shape's own
+ * fill never changes; the visible feedback is a thicker, brighter border. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.selected {
+  background: transparent;
+}
+
+/* Selection is a BORDER COLOUR CHANGE, not a glow. It used to add
+ * `filter: drop-shadow(0 0 2px #3b82f6) drop-shadow(0 0 5px #60a5fa)` here and
+ * a blurred halo layer below; both are gone. A thicker blue edge says
+ * "selected" without spilling light across the neighbouring nodes, and it
+ * leaves drop-shadow free as the playback highlight's own channel (see
+ * .game-orchestra-node-active further down, which still uses it). */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.selected::before {
+  border-color: #3b82f6;
+  border-width: 4px;
+}
+
+/* --- Outline layer, Start and End only ---
+ *
+ * border-width is measured perpendicular to the BOX's own edges, not to
+ * whatever angle clip-path cuts through it, so on the ~45deg edges of these
+ * two triangles the clip exposes only a sliver of the border above and it
+ * barely reads as an outline at all. They are the ONLY two shapes with that
+ * problem: Track/Fork/Random/Playlist are border-radius rectangles, Condition
+ * is a rounded rectangle (it was a diamond once - hence the four-clip-path
+ * wording this comment used to carry), and Delay's `clip-path: circle(50%)`
+ * lands exactly on its own border-radius:50% edge, so a border survives all
+ * the way round. Every one of those is outlined by the ::before rule above.
+ *
+ * So these two get a second pseudo-element instead: a solid copy of the same
+ * triangle sitting behind ::before (z-index -2 vs -1), grown just enough that
+ * a band of it shows past ::before's opaque edge. That band IS the outline: a
+ * crisp edge that follows the diagonals, carrying no blur.
+ *
+ * A drop-shadow on ::before was tried for this first, on the theory that it
+ * traces the rendered post-clip silhouette uniformly. Live testing showed it
+ * does not: it reads only at the VERTICES, where two edges' worth of shadow
+ * overlap and reinforce, and stays nearly invisible along a flat diagonal.
+ *
+ * === Why a scale() about the incentre, and not `inset: -Npx` ===
+ *
+ * REPORTED LIVE as a skewed selection border, and it was: `inset: -4px` grows
+ * the BOX by 4px on each side, and clip-path percentages then re-resolve
+ * against that bigger box. For a rectangle that does outset every edge by 4px,
+ * but for a triangle it does not - it scales the polygon about the box's
+ * CENTRE, and a centre-scaled polygon's edges move by an amount that depends on
+ * how far each edge sits from that centre. Measured on the 96x96 Start node:
+ * the flat vertical edge gained the full 4px while both diagonals gained only
+ * ~1.46px, so the outline was nearly 3x thicker down the left side than around
+ * the point. The old ::before border made it worse still - it survives only on
+ * that same flat edge, stacking another 4px exactly where the outline was
+ * already heaviest, for ~8px against ~1.5px.
+ *
+ * A uniform outset of a polygon is a scale about its INCENTRE, not its centre:
+ * that is the one point equidistant from all three edges, so scaling about it
+ * moves every edge outward by the same perpendicular distance. For an
+ * equilateral triangle of side s the inradius is r = s/(2*sqrt(3)); these are
+ * s=96 (the box height, which is the flat edge's length), so r = 27.7128px, and
+ * the incentre sits r in from the flat edge at 27.7128/96 = 28.8675% across.
+ * An outline of w px is then scale (r + w)/r:
+ *     w = 2px -> 1.0722    w = 4px -> 1.1443
+ * If the 96px box size ever changes, both scales have to be recomputed - they
+ * are ratios against that specific inradius, not free-floating constants.
+ *
+ * Because this layer now draws the whole outline, ::before's border is removed
+ * for these two types (below) rather than left to double up on one edge. That
+ * also means the outline is always present, not only when selected: at rest it
+ * paints the same neutral these two used to get on their flat edge alone, so a
+ * Start/End triangle finally has a visible edge all the way round.
+ *
+ * `content` is what gates this to Start/End - every other node has no ::after
+ * box at all, so the state background rules below simply have nothing to paint.
+ * Each clip-path here must match that shape's own ::before rule further down
+ * exactly, or the outline won't line up with the visible shape. */
+/* The type class is doubled (HR-C's specificity boost, same trick as the
+   canvas class) to make this 5 classes deep. Four would only beat the ::before
+   rules ABOVE it, and .game-orchestra-multi-selected::before further down is also four
+   - it would win the tie on order and hand these two shapes a dashed 3px border
+   back on the flat edge alone, which is the exact doubling this rule exists to
+   remove. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start.game-orchestra-node-start::before,
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end.game-orchestra-node-end::before {
+  border: none;
+}
+
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::after,
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--game-orchestra-node-neutral, #6b7280);
+  transform: scale(var(--game-orchestra-outline-scale, 1.0722));
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::after {
+  clip-path: polygon(0% 0%, 86.6% 50%, 0% 100%);
+  transform-origin: 28.8675% 50%;
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after {
+  /* Mirrored: 100% - 28.8675%. */
+  clip-path: polygon(100% 0%, 13.4% 50%, 100% 100%);
+  transform-origin: 71.1325% 50%;
+}
+
+/* Same ordering rule as the ::before state/selection rules above: validation
+   state first, so an explicit selection still wins the outline colour. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-warning::after {
+  background: #f59e0b;
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-error::after {
+  background: #ef4444;
+}
+/* 4px, matching the border-width the rectangular shapes take when selected. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.selected::after {
+  background: #3b82f6;
+  --game-orchestra-outline-scale: 1.1443;
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-multi-selected::after {
+  background: #f59e0b;
+  --game-orchestra-outline-scale: 1.1443;
+}
+
+/* NOT position:absolute here (that was tried and reverted - it pulled this
+ * element out of .drawflow-node's flex row entirely, leaving .inputs/.outputs
+ * - both width:0 in the vendored CSS - as the only remaining flex items, so
+ * they collapsed together at the row's start instead of sitting pinned to the
+ * node's left/right edges: every port position broke at once. Kept as a
+ * normal flex-row participant instead; height:100% now reliably resolves
+ * because .drawflow-node has a genuinely definite height for every node type
+ * (Start/End get explicit width+height above; Fork/Random get an inline style
+ * height; everything else sizes from its own content) - that was the actual
+ * fix.
+ *
+ * Selector is 4 classes deep (.game-orchestra-drawflow-canvas repeated + .drawflow-node
+ * + .drawflow_content_node), not 2 - confirmed via computed styles that a
+ * 2-class version of this rule was losing the `display` property outright to
+ * Drawflow's own ".drawflow .drawflow-node .drawflow_content_node{width:100%;
+ * display:block}" (3 classes, higher specificity). display staying "block"
+ * instead of "flex" meant nothing ever centered .game-orchestra-node-content
+ * vertically - it just sat at the default block-flow top, exactly matching
+ * what was reported live. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node .drawflow_content_node {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  position: relative;
+  z-index: 1;
+}
+
+.game-orchestra-node-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  /* Generous padding: angular clip-path shapes cut their corners away, so
+     content needs to stay clear of the box's actual corners to avoid being
+     visually clipped by the shape. */
+  padding: 14px 26px;
+  text-align: center;
+}
+
+.game-orchestra-node-icon {
+  color: var(--game-orchestra-node-accent, #888);
+  font-size: 1.3em;
+}
+
+.game-orchestra-node-detail {
+  font-size: 0.75em;
+  color: var(--color-text-dark, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Every per-type rule below targets ".drawflow-node.game-orchestra-node-X" (three
+ * classes: the shared ancestor + Drawflow's own node class + our type class)
+ * rather than just ".game-orchestra-node-X" alone. This is not cosmetic - a
+ * single-class selector has LOWER specificity than both the shared base rule
+ * above (.game-orchestra-drawflow-canvas .drawflow-node, two classes) and Drawflow's
+ * own vendor rule (.drawflow .drawflow-node, also two classes), so any
+ * conflicting property (width/min-width/min-height, most importantly) would
+ * silently lose and fall back to the base/vendor value - which is exactly
+ * what made every node the same default size regardless of its intended
+ * shape. The three-class form here beats both unconditionally, with no
+ * dependency on stylesheet load order.
+ */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start {
+  --game-orchestra-node-accent: #4caf50;
+  /* Equal width/height (a square box) is required for the clip-path below to
+     draw an actual EQUILATERAL triangle, not just isosceles: for a triangle
+     whose flat edge spans the box's full height H, the apex must sit
+     H*sqrt(3)/2 (~86.6%) of the way across a box of the SAME width for all
+     three sides to come out equal length. */
+  min-width: 96px;
+  min-height: 96px;
+  /* min-* alone isn't enough: Drawflow's own base rule sets an explicit
+     width:160px, which wins over a bare min-width (they're different
+     properties) and left this box 160x96 - wide and flat, not square, so the
+     "equilateral" clip-path below was actually drawing an isosceles triangle. */
+  width: 96px;
+  height: 96px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::before {
+  clip-path: polygon(0% 0%, 86.6% 50%, 0% 100%);
+}
+.game-orchestra-node-start .game-orchestra-node-content {
+  /* Biased toward the flat (left) edge - content centered at 50% would sit
+     right where the triangle is narrowing toward its apex. */
+  padding: 16px 40px 16px 14px;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end {
+  --game-orchestra-node-accent: #ef4444;
+  min-width: 96px;
+  min-height: 96px;
+  width: 96px;
+  height: 96px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::before {
+  /* Mirror of start: equilateral triangle pointing left instead of right
+     (apex at 100% - 86.6% = 13.4%). */
+  clip-path: polygon(100% 0%, 13.4% 50%, 100% 100%);
+}
+.game-orchestra-node-end .game-orchestra-node-content {
+  padding: 16px 14px 16px 40px;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track {
+  --game-orchestra-node-accent: #3b82f6;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track::before {
+  border-radius: 999px;
+}
+.game-orchestra-node-track .game-orchestra-node-content {
+  padding-left: 6px;
+  padding-right: 6px;
+  /* Same reason as Delay's: the drain overlay is absolutely positioned, and a
+     positioned element otherwise paints over an in-flow sibling regardless of
+     document order - the sound name would disappear under the wash. */
+  position: relative;
+  z-index: 1;
+}
+
+/* A rounded rectangle with a doubled (inset ring) outline, distinct from
+   Track's plain pill - the second ring reads as "a container of tracks"
+   rather than a single one. border-radius, like Track, so this needs no
+   .selected::after outline rule of its own - the generic border treatment
+   already works on any border-radius shape, and only Start and End need that
+   second layer (see its comment for why). */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist {
+  --game-orchestra-node-accent: #14b8a6;
+  min-width: 140px;
+  min-height: 74px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist::before {
+  border-radius: 14px;
+  box-shadow: inset 0 0 0 4px var(--color-cool-4, #2a2a2a), inset 0 0 0 6px var(--game-orchestra-node-neutral, #888);
+}
+.game-orchestra-node-playlist .game-orchestra-node-content {
+  padding: 12px 16px;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay {
+  --game-orchestra-node-accent: #f59e0b;
+  /* A circle needs a square box, and (as with start/end above) min-width alone
+     loses to Drawflow's explicit width:160px - both have to be set. */
+  min-width: 92px;
+  min-height: 92px;
+  width: 92px;
+  height: 92px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay::before {
+  border-radius: 50%;
+}
+.game-orchestra-node-delay .game-orchestra-node-content {
+  padding: 12px 8px;
+  /* Positioned so it paints ABOVE the drain overlay: the overlay is absolutely
+     positioned, and positioned elements otherwise win over in-flow siblings
+     regardless of document order. */
+  position: relative;
+  z-index: 1;
+}
+
+/* The drain overlay, shared by Delay (a wait) and Track (one pass of a sound) -
+   the two node types whose token-holding time the engine knows in advance. The
+   outer element covers the node box and is clipped to that type's own shape;
+   the inner one is the level, animated by the engine's real duration (see
+   _setNodeDrain). Both are inert - the node underneath still drags and clicks
+   normally.
+
+   The level is EMPTY at rest (zero height/width) and only paints while an
+   animation is running on it. That is load-bearing, not incidental: a node with
+   no countdown must show nothing at all, and the editor stops a drain by
+   removing the animation, not by setting an end state. */
+.game-orchestra-node-fill {
+  position: absolute;
+  pointer-events: none;
+}
+.game-orchestra-node-fill-level {
+  position: absolute;
+}
+
+/* Delay: an hourglass. Clipped to the circle, and the level drains downward. */
+.game-orchestra-node-delay .game-orchestra-node-fill {
+  inset: 0;
+  clip-path: circle(50%);
+  overflow: hidden;
+}
+.game-orchestra-node-delay .game-orchestra-node-fill-level {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  /* The bright "sand surface" line is the first pixel of a gradient, NOT a
+     border-top. A border paints outside the content box, so it stayed visible
+     at full strength even at height:0 - every idle Delay node carried a
+     permanent amber line across its bottom, whether or not a countdown was
+     running. A zero-height box paints no background at all, so this simply
+     disappears when the drain is empty. */
+  background: linear-gradient(to bottom, rgba(245, 158, 11, 0.85) 0 1px, rgba(245, 158, 11, 0.32) 1px);
+}
+
+/* Track: the same idea turned on its side - the remaining time is a block held
+   against the pill's RIGHT edge, so as the sound plays the level's leading edge
+   sweeps left to right and the node empties out behind it, one sweep per loop
+   iteration.
+
+   Inset by the 2px border (unlike Delay, which clips to a circle inside its own
+   box) so the wash sits inside the pill's outline rather than over it, and
+   given the same 999px radius so it follows the pill's ends instead of being
+   clipped square. */
+.game-orchestra-node-track .game-orchestra-node-fill {
+  inset: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.game-orchestra-node-track .game-orchestra-node-fill-level {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 0;
+  background: linear-gradient(to right, rgba(59, 130, 246, 0.85) 0 1px, rgba(59, 130, 246, 0.28) 1px);
+}
+
+@keyframes game-orchestra-delay-drain {
+  from { height: 100%; }
+  to { height: 0%; }
+}
+@keyframes game-orchestra-track-drain {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition {
+  --game-orchestra-node-accent: #00bcd4;
+  /* The same 64px bar as Fork and Random. It was 150px wide back when its
+     branch exits fanned along the bottom edge and needed the room; once they
+     moved to the right-edge stack that width had nothing left to fill - its
+     detail line is empty by design (see node-anatomy.md R1) - so the box
+     rendered as a large empty square. HEIGHT is what scales, set inline by
+     _refreshNodeDisplay() from computeNodeHeightPx(); min-height here is the
+     one-exit floor and must stay equal to its baseHeightPx in
+     EXIT_STACK_METRICS. */
+  min-width: 64px;
+  width: 64px;
+  min-height: 64px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition::before {
+  border-radius: 6px;
+}
+
+/* Fork/Random: a narrow vertical bar. Height is set inline per-node by
+   _refreshNodeDisplay() (custom-playlist-editor.mjs) proportional to exit
+   count - min-height here is only the floor for the minimum exit count.
+   Condition is the same bar (see its own block above). All three branching
+   types therefore share one silhouette, and are told apart by icon, accent and
+   - most usefully - their exit chips: Random shows shares, Condition shows
+   predicates, Fork shows none at all. */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork,
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random {
+  min-width: 64px;
+  width: 64px;
+  min-height: 64px;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork::before,
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random::before {
+  border-radius: 10px;
+}
+/* Condition included: the shared .game-orchestra-node-content padding is 14px 26px,
+   which leaves 12px of usable width inside a 64px bar and squeezes the icon. */
+.game-orchestra-node-fork .game-orchestra-node-content,
+.game-orchestra-node-random .game-orchestra-node-content,
+.game-orchestra-node-condition .game-orchestra-node-content {
+  padding: 10px 6px;
+}
+.game-orchestra-node-fork .game-orchestra-node-detail,
+.game-orchestra-node-random .game-orchestra-node-detail {
+  white-space: normal;
+  font-size: 0.7em;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork { --game-orchestra-node-accent: #9c27b0; }
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random { --game-orchestra-node-accent: #eab308; }
+
+/* The node's name, as a caption below the shape. Absolutely positioned rather
+   than laid out inside it: most shapes clip their own corners away, leaving too
+   little interior room, and .drawflow-node is deliberately never clipped (see
+   the shape comment above) so anything overflowing it still renders. */
+.game-orchestra-node-name {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 4px;
+  max-width: 160px;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--color-text-light-primary, #e8e8e8);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* Zoom-gated detail: below the threshold in zoomTier()
+   (custom-playlist-node-render.mjs) the canvas drops to shape + icon only.
+   Text at that size is unreadable, and the name caption in particular sits
+   BELOW its node, where at low zoom it overlaps whatever is underneath -
+   so at a distance the captions read as clutter rather than as labels.
+   The attribute is stamped on the canvas element by the editor's 'zoom'
+   subscription; everything from here down is plain CSS, so no re-render or
+   per-node DOM work happens on a zoom. Shape, icon, ports, wires, the issue
+   badge and every state colour deliberately survive - at low zoom those are
+   exactly what you are still trying to read. */
+.game-orchestra-drawflow-canvas[data-zoom-tier='compact'] .game-orchestra-node-detail,
+.game-orchestra-drawflow-canvas[data-zoom-tier='compact'] .game-orchestra-node-name {
+  display: none;
+}
+
+/* Validation badge: a node with a warning or error carries a marker at its
+   top-right corner, so a problem is visible on the canvas and not only in the
+   inspector's list. Offset outward past the corner rather than inset, which
+   would land it on top of a Fork/Random node's stacked output ports. Kept
+   clickable (not pointer-events:none) both so its tooltip works and so it can
+   open the issue balloon - a click on it still reaches the node underneath and
+   selects it, since it is a child of the node element, and the balloon handler
+   deliberately does not stop propagation so that keeps working. */
+.game-orchestra-node-issue {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translate(40%, -40%);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62em;
+  font-weight: 700;
+  color: #1e1e1e;
+  border: 2px solid #1e1e1e;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+  z-index: 3;
+  cursor: pointer;
+}
+
+.game-orchestra-node-issue-warning {
+  background: #f59e0b;
+}
+
+.game-orchestra-node-issue-error {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* Exit adder: a "+" at the top-LEFT corner of a node whose exits are
+   expandable (EXPANDABLE_EXIT_NODE_TYPES), appended by _refreshExitAdder().
+   Mirrors the issue badge's geometry at the opposite corner - left = add,
+   right = problems - and that corner specifically because it is the one point
+   that does not move as the node grows; see the method's own comment.
+
+   ACHROMATIC on purpose. Hue on this canvas means STATE (warning, error,
+   selected, playing) and nothing else, so the usual green "+" would read as a
+   fifth state channel competing with the four that exist. It borrows the port
+   dot's #ddd instead, which is already the achromatic value in use here.
+
+   Tucked at rest, revealed on hover, exactly like the ports themselves: a
+   permanently visible glyph on every branching node fights the shape+icon
+   canvas this window is built around. pointer-events goes with the opacity -
+   unlike a port, there is never a reason to aim at this one while it is
+   invisible, so leaving it hit-testable would only add a stray click target.
+   :focus-visible is included or a keyboard focus would land on something with
+   no visible presence at all. */
+.game-orchestra-node-add-exit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate(-40%, -40%);
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62em;
+  line-height: 1;
+  background: #2b2b2b;
+  color: #ddd;
+  border: 2px solid var(--game-orchestra-node-neutral, #6b6b6b);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+  z-index: 3;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.drawflow-node:hover .game-orchestra-node-add-exit,
+.game-orchestra-node-add-exit:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.game-orchestra-node-add-exit:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+/* Hidden at the same zoom tier the detail line and name caption are, and for
+   the same reason: below zoomTier()'s threshold an 18px control renders as a
+   ~10px speck that is more likely to be mis-clicked than aimed at. */
+.game-orchestra-drawflow-canvas[data-zoom-tier='compact'] .game-orchestra-node-add-exit {
+  display: none;
+}
+
+/* Exit chip: what guards ONE exit - a Random exit's share, a Condition
+   branch's predicate, an until-Track's escape condition. Channel 4 of
+   docs/wiki/node-anatomy.md. Written into the port element itself by
+   _refreshExitChips(), because only the port knows where it sits: outputs are
+   in Drawflow's normal flow, so their positions are a layout result.
+
+   pointer-events: none is REQUIRED, not tidiness. The chip sits BESIDE its
+   port (left: 100%), so it floats over canvas and over the first stretch of
+   the wire leaving that port - verified by hit-testing the rendered page.
+   Hit-testable, it would be a dead patch: Drawflow's mousedown switch falls
+   through on 'game-orchestra-exit-chip' (no case matches), and the editor's own
+   _isBackgroundTarget() also rejects it, since the chip is inside
+   .drawflow-node - so neither a wire click nor a marquee rect-select started
+   under a chip would do anything. Transparent, both work straight through it.
+
+   The translateY is on the CHIP, never on the port. A transform on a port
+   moves the rect Drawflow measures wire endpoints from while leaving its
+   layout box alone (the same trap documented at length on the port dot), and
+   it would also trap the port's ::after in a new stacking context so the dot
+   stopped tucking. Transforming a child does neither. */
+.game-orchestra-exit-chip {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+  /* Achromatic, like every non-state channel: hue on this canvas means
+     validation or playback, and a coloured chip would read as a state. */
+  background: #202020;
+  color: #cfcfcf;
+  border: 1px solid #4a4a4a;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.game-orchestra-exit-chip .fa-hourglass-half {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* Same tier as the detail line and caption: at low zoom these stop being
+   information and become a smear alongside the wires. */
+.game-orchestra-drawflow-canvas[data-zoom-tier='compact'] .game-orchestra-exit-chip {
+  display: none;
+}
+
+/* Issue balloon: every message for ONE node, opened by clicking that node's
+ * badge. Content comes from buildIssueBalloonHtml() (custom-playlist-inspector.mjs).
+ *
+ * position:fixed and appended to document.body, NOT into the canvas - exactly
+ * the same reasoning as .game-orchestra-rect-select below: .game-orchestra-drawflow-canvas
+ * sets overflow:hidden, so a balloon rendered inside it would be clipped at
+ * the canvas edge, which is precisely where a badge near the edge needs it to
+ * appear. Being outside the canvas also means Drawflow's pan/zoom transform
+ * doesn't move it, which is why the editor closes it on zoom/translate/
+ * nodeMoved rather than trying to keep it glued to a moving node. */
+.game-orchestra-issue-balloon {
+  position: fixed;
+  z-index: 100001;
+  max-width: 320px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 6px 10px 6px 4px;
+  border-radius: 4px;
+  background: #16181d;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65);
+  font-size: 0.8em;
+  line-height: 1.35;
+}
+
+.game-orchestra-issue-balloon-list {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.game-orchestra-issue-balloon-list li {
+  margin: 2px 0;
+}
+
+.game-orchestra-issue-balloon-warning {
+  color: #f59e0b;
+}
+
+.game-orchestra-issue-balloon-error {
+  color: #ef4444;
+}
+
+/* Validation entries that name a node double as a "take me there" control. Validation itself
+   renders in the pinned .game-orchestra-editor-validation region (see that rule's doc), not inside
+   .game-orchestra-editor-inspector - both are listed since nothing else currently puts a
+   .game-orchestra-issue-locatable inside the inspector, but there's no reason this couldn't apply there
+   too. */
+.game-orchestra-editor-inspector .game-orchestra-issue-locatable,
+.game-orchestra-editor-validation .game-orchestra-issue-locatable {
+  cursor: pointer;
+}
+
+.game-orchestra-editor-inspector .game-orchestra-issue-locatable:hover,
+.game-orchestra-editor-validation .game-orchestra-issue-locatable:hover {
+  text-decoration: underline;
+}
+
+/* --- Port dots --- Recolored for visibility against the dark canvas
+ * background, and "tucked in" the way Grasshopper's are: at rest the dot sits
+ * centred on the node's own edge, so the body covers its inner half and only
+ * the outer sliver shows. It steps out clear of that edge - full size, drawn on
+ * top - only when the pointer is doing something with it. An idle graph then
+ * reads as shapes and wires rather than as a field of dots.
+ *
+ * THREE things move on reveal, all driven by custom properties set on the PORT
+ * and consumed by its ::after: the outward step, the scale, and the paint
+ * layer. Keeping them as properties means each reveal rule below is a one-liner
+ * that never has to out-specify ::after's own `transform` / `z-index`.
+ *
+ * --- Why the dot is a pseudo-element ---
+ *
+ * The port element itself is left fully transparent and the visible dot is its
+ * ::after, so every move here is a transform on a CHILD. That indirection is
+ * load-bearing, not stylistic, for three separate reasons:
+ *
+ * 1. WIRE ENDPOINTS. Drawflow computes each one as `port.offsetWidth / 2 +
+ *    (port.getBoundingClientRect().x - canvasRect.x) / zoom`
+ *    (updateConnectionNodes, vendor/drawflow.min.js) - one LAYOUT measure plus
+ *    one VISUAL one. A transform on the port moves the second while leaving the
+ *    first alone, so a port that stepped out on hover would drag its wire's
+ *    endpoint with it and the wire would jump. Transforming a child leaves the
+ *    port's own border box untouched, so the endpoint never moves.
+ * 2. STACKING. A transform on the port creates a stacking context, which traps
+ *    its ::after inside and paints the dot over the node body rather than
+ *    tucked under it - the same trap as a numeric z-index (below). Confirmed by
+ *    rendering: Condition centred its ports with translateX/Y(-50%) and was the
+ *    one node type whose ports never tucked. Those are negative margins now.
+ *    Never put a transform on a port element.
+ * 3. HIT AREA. The port keeps its full 20px box and stays above the node body,
+ *    so you can still aim at it even where its dot is hidden - only the dot
+ *    goes behind. This is the whole reason the port keeps `z-index: auto`
+ *    (below) rather than the vendor's `z-index: 1`.
+ *
+ * --- Why `z-index: auto` on the port is required ---
+ *
+ * The node's shape lives on .drawflow-node::before at z-index -1, so a dot has
+ * to sit BELOW that to look tucked under the body. A z-index of 1 on the port
+ * (the vendor default) would make the port a stacking context and trap its
+ * ::after inside it, painting the dot above the shape no matter what z-index
+ * the dot asks for. With `auto` the port is positioned but forms no stacking
+ * context, so its ::after competes directly in .drawflow-node's context and can
+ * drop to -2 (under the shape) or rise to 1 (over everything) - while the port
+ * element itself, being positioned, still paints above the node's content and
+ * stays hit-testable across its whole box.
+ *
+ * --- Why the canvas class is doubled here ---
+ *
+ * Drawflow's own ".drawflow .drawflow-node .input" is three classes, exactly
+ * what an undoubled selector here would be, and IT was winning the tie: the
+ * port kept its vendor 20px size and its opaque fill (#fff, or #ff0 for
+ * inputs), so every port rendered as the vendor's big circle with this file's
+ * small ::after dot floating beside it - two dots per port, only one of which
+ * moved. Confirmed live from a screenshot, not deduced. module.json does load
+ * drawflow.min.css first, so a tie should resolve this file's way; it does not
+ * in practice, which is precisely the failure HR-C and the identical doubling
+ * on .drawflow-node above exist to rule out. Do not un-double it.
+ *
+ * --- Port placement ---
+ *
+ * Drawflow leaves outputs 3px past the right edge but inputs a full 27px off
+ * the left - a gap that fits neither size, and visibly lopsided once the dot
+ * is meant to sit ON the edge. Both are re-anchored below so each port's centre
+ * lands exactly on its node edge: half the box inside, half out, which is also
+ * what the Condition rules above have always done. That makes the resting dot
+ * straddle the edge with no offset at all, and puts the wire endpoint (the
+ * port centre, which Drawflow measures) right where the nub is, instead of
+ * leaving a bare stretch of wire between the two.
+ *
+ * 10px is half a port's 20px border box, and `box-sizing` is pinned below so
+ * that stays true whatever the host page's reset says. That is not a
+ * precaution: Foundry ships a global border-box reset, under which a
+ * content-box 16px+2px port measures 16px instead of 20px. Every offset here
+ * then over-shoots by 2px in the SAME screen direction, which pushes the left
+ * nub 2px further out and pulls the right one 2px further in - a 4px asymmetry
+ * from a pair of rules that look perfectly symmetric. Reported from a live
+ * screenshot measuring 13px against 9px, and reproduced by rendering the same
+ * markup under both regimes.
+ *
+ * 20px is roughly Drawflow's original port size, and is also what makes the dot
+ * worth tucking - the 12px it briefly used read as a speck. The dot matches the
+ * port box exactly, so the hit area and the visible circle coincide. With the
+ * vendor's 5px margin-bottom that gives a 25px stride for stacked Fork/Random
+ * exits, just inside the 26px BAR_HEIGHT_PER_EXIT_PX the bar grows by per exit
+ * (custom-playlist-node-render.mjs). Going bigger overflows the bar, so raise
+ * that constant first if these ever grow again.
+ *
+ * The Condition rules above encode this same half-box figure. Change one, change
+ * both. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node .input,
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node .output {
+  background: transparent;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+  height: 20px;
+  width: 20px;
+  z-index: auto;
+}
+
+/* The outward direction each port steps when revealed - away from the body,
+   so which way depends on the edge it sits on. Kept as a vector per port type
+   rather than baked into the reveal rules, so those stay one line and identical
+   for every port. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node .output {
+  right: 10px;
+  --game-orchestra-port-out-x: 14px;
+}
+
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node .input {
+  left: -10px;
+  --game-orchestra-port-out-x: -14px;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node .input::after,
+.game-orchestra-drawflow-canvas .drawflow-node .output::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  box-sizing: border-box;
+  background: #ddd;
+  border: 2px solid #1e1e1e;
+  border-radius: 50%;
+  /* Never steal the pointer from its own port - see reason 3 above. */
+  pointer-events: none;
+  z-index: var(--game-orchestra-port-z, -2);
+  /* --game-orchestra-port-reveal is the 0/1 switch every reveal rule flips; the step
+     is the port's own outward vector times that, so one property drives all
+     four edges. */
+  transform: translate(
+      calc(var(--game-orchestra-port-out-x, 0px) * var(--game-orchestra-port-reveal, 0)),
+      calc(var(--game-orchestra-port-out-y, 0px) * var(--game-orchestra-port-reveal, 0))
+    )
+    scale(var(--game-orchestra-port-scale, 1));
+  /* z-index is left out of the transition on purpose: it steps rather than
+     eases, so the dot comes to the front the instant it starts moving out and
+     slips back behind the body as it settles home. */
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+/* Inputs and outputs share one colour on purpose. Outputs used to take
+   --game-orchestra-node-neutral instead, on the reasoning that a port's colour is
+   where the eye goes when wiring and so should not compete with a state
+   colour. That value is the node BORDER's own, which is exactly what a tucked
+   dot is half-buried in: the output nub fused with the border and read as a
+   smaller, flatter bump than the #ddd input opposite it, though both are
+   geometrically identical (measured: both centres land within 0px of their
+   node edge). #ddd is achromatic, so it still cedes hue entirely to state. */
+
+/* The two reveal triggers. `:hover` covers both pointing at a port and
+   dragging a wire onto it - Drawflow's wire drag runs off document listeners
+   with no pointer capture, so the port under the cursor still matches :hover
+   mid-drag. .game-orchestra-port-revealed is the far end of that story, applied by
+   custom-playlist-editor.mjs (_setWirePortsRevealed) to BOTH ports of a wire
+   the pointer is over, since CSS can't reach from a hovered <svg> sibling
+   into the two nodes it happens to join. */
+.game-orchestra-drawflow-canvas .drawflow-node .input:hover,
+.game-orchestra-drawflow-canvas .drawflow-node .output:hover,
+.game-orchestra-drawflow-canvas .drawflow-node .input.game-orchestra-port-revealed,
+.game-orchestra-drawflow-canvas .drawflow-node .output.game-orchestra-port-revealed {
+  --game-orchestra-port-reveal: 1;
+  --game-orchestra-port-scale: 1.15;
+  --game-orchestra-port-z: 2;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node .input:hover::after,
+.game-orchestra-drawflow-canvas .drawflow-node .output:hover::after {
+  background: #3b82f6;
+}
+
+/* Marquee rectangle drawn during a left-drag rect-select (custom-playlist-editor.mjs
+ * _onRectSelectMove) - screen-space (position:fixed, appended to document.body),
+ * since it tracks raw mouse coordinates rather than anything canvas-relative. */
+.game-orchestra-rect-select {
+  position: fixed;
+  border: 1px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.15);
+  pointer-events: none;
+  z-index: 100000;
+}
+
+/* Distinct from Drawflow's own (solid blue) .selected border - a dashed amber
+ * border makes clear this node is part of a marquee selection, not the single
+ * node Drawflow itself thinks is selected (the two are deliberately kept
+ * independent - see _clearMultiSelection's doc). */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-multi-selected::before {
+  border-color: #f59e0b;
+  border-width: 3px;
+  border-style: dashed;
+}
+
+.game-orchestra-drawflow-canvas .connection .main-path {
+  stroke: #6b7280;
+  stroke-width: 3px;
+}
+
+.game-orchestra-drawflow-canvas .connection .main-path:hover,
+.game-orchestra-drawflow-canvas .connection .main-path.selected {
+  stroke: #3b82f6;
+}
+
+/* Uncertain wires: edges leaving a Random or Condition node, which take only
+ * ONE of their exits (uncertainEdges() in custom-playlist-connection-render.mjs
+ * decides which). A Grasshopper borrow - there, a wire's style tells you what
+ * kind of data flows through it rather than leaving you to infer it from the
+ * component at its source.
+ *
+ * Width + opacity, deliberately not colour or a dash pattern: the dash is
+ * already the playback highlight's channel (marching ants) and multi-select's,
+ * and colour is owned by active/hover. Using a third channel means an uncertain
+ * wire that is ALSO being followed right now still reads as both at once.
+ *
+ * Must stay ABOVE the .game-orchestra-edge-active and .game-orchestra-edge-hover rules
+ * below: those are the same 4-class specificity, so document order is what
+ * decides, and hover's thicker 5px stroke has to win over this 2px one. Both
+ * restore stroke-opacity for the same reason. */
+.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-uncertain .main-path {
+  stroke-width: 2px;
+  stroke-opacity: 0.6;
+}
+
+/* --- Live playback highlight (custom-playlist-editor.mjs #_applyActivityHighlight) ---
+ *
+ * Deliberately a different visual channel from selection: .selected and
+ * .game-orchestra-multi-selected own the ::before border colour (and, for Start/End
+ * only, a crisp ::after outline), so playback state takes drop-shadow on the
+ * node's own box plus stroke changes on the wire. Selection gave drop-shadow up
+ * when it stopped being a glow, which leaves this channel to itself. A node can
+ * be selected AND playing at once, and both must stay readable. */
+@keyframes game-orchestra-node-breathe {
+  0%, 100% { filter: drop-shadow(0 0 3px var(--game-orchestra-active-glow)); }
+  50% { filter: drop-shadow(0 0 11px var(--game-orchestra-active-glow)); }
+}
+@keyframes game-orchestra-node-flash {
+  from { filter: drop-shadow(0 0 12px var(--game-orchestra-active-glow)); }
+  to { filter: drop-shadow(0 0 0 transparent); }
+}
+/* Marching ants: the dash pattern itself shows direction of travel even when
+ * the animation is suppressed for reduced-motion users below. */
+@keyframes game-orchestra-edge-march {
+  to { stroke-dashoffset: -24px; }
+}
+
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-active {
+  --game-orchestra-active-glow: #22d3ee;
+  animation: game-orchestra-node-breathe 1.6s ease-in-out infinite;
+}
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-pulse {
+  --game-orchestra-active-glow: #22d3ee;
+  animation: game-orchestra-node-flash 0.7s ease-out forwards;
+}
+
+/* Three classes (.game-orchestra-drawflow-canvas + .connection + the state class) so
+ * this beats the two-class ".game-orchestra-drawflow-canvas .connection .main-path"
+ * base rule above and Drawflow's own vendored ".connection .main-path" - the
+ * same specificity discipline the node rules further up document. */
+.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-active .main-path,
+.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-pulse .main-path {
+  stroke: #22d3ee;
+  stroke-dasharray: 6 6;
+  animation: game-orchestra-edge-march 0.6s linear infinite;
+  /* An uncertain wire that is actually being followed right now is no longer
+     uncertain - it was taken. Full opacity so the highlight reads at its
+     normal strength (see the .game-orchestra-edge-uncertain rule above). */
+  stroke-opacity: 1;
+}
+
+/* A wire named by a validation issue (_refreshIssueEdges) - #ef4444 to match
+ * .game-orchestra-node-error, so the badged nodes and the wires between them read as
+ * one shape rather than two unrelated problems. Same three-class specificity
+ * discipline as the rule above.
+ *
+ * Thicker AND dashed: the error's whole job is to make a loop findable among
+ * wires that already vary in colour, and stroke-width survives being zoomed out
+ * far enough that hue alone stops resolving. */
+.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-issue .main-path {
+  stroke: #ef4444;
+  stroke-width: 5px;
+  stroke-dasharray: 8 5;
+  stroke-opacity: 1;
+  animation: game-orchestra-edge-march 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Colour and width stay - only the movement goes, exactly as for the
+     activity highlight below. */
+  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-issue .main-path {
+    animation: none;
+  }
+
+  .game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-active,
+  .game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-pulse {
+    animation: none;
+    filter: drop-shadow(0 0 8px var(--game-orchestra-active-glow));
+  }
+  /* Colour and dash pattern stay - only the movement goes. */
+  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-active .main-path,
+  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-pulse .main-path {
+    animation: none;
+  }
+  /* Ports still grow on hover - that's the feedback - but they snap rather
+     than swell. */
+  .game-orchestra-drawflow-canvas .drawflow-node .input::after,
+  .game-orchestra-drawflow-canvas .drawflow-node .output::after {
+    transition: none;
+  }
+}
+
+/* Preset dropdown, sitting below the Add Element grid in its own pane. */
+/* The gap below now lives here rather than on .game-orchestra-palette-list, which used to carry it as
+   the first child - the preset select moved above the button grid. */
+.game-orchestra-pane[data-pane='palette'] .game-orchestra-preset-select {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+/* A read-only inspector value (currently only a Track node's sound - see the track branch in
+   custom-playlist-inspector.mjs for why it stopped being a <select>). Deliberately NOT styled as
+   a disabled input: a greyed-out control invites clicking it and waiting for something to happen,
+   whereas plain emphasised text reads as a fact about the node. */
+.game-orchestra-editor-inspector .game-orchestra-readonly-value {
+  margin: 0;
+  padding: 3px 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.game-orchestra-editor-inspector .game-orchestra-value-empty {
+  font-weight: 400;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* --- Inspector exit-row hover -> which exit is this? (custom-playlist-editor.mjs
+ * #_onExitHover) --- Amber, a third colour distinct from selection (blue) and
+ * live playback (cyan), so a hover reads as "you are pointing at this" rather
+ * than as state. */
+.game-orchestra-editor-inspector .game-orchestra-exit-row:hover {
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 3px;
+}
+
+/* Overshoots full size, so an exit picked out from the inspector reads even
+   against a port the pointer also happens to be over. The scale rides the same
+   custom property as the tucked/revealed states rather than a transform on the
+   port element - see the port-dot block above for why that distinction is not
+   cosmetic. */
+.game-orchestra-drawflow-canvas .drawflow-node .outputs .output.game-orchestra-port-hover {
+  --game-orchestra-port-reveal: 1;
+  --game-orchestra-port-scale: 1.45;
+  --game-orchestra-port-z: 2;
+}
+
+.game-orchestra-drawflow-canvas .drawflow-node .outputs .output.game-orchestra-port-hover::after {
+  background: #f59e0b;
+  box-shadow: 0 0 8px 3px rgba(245, 158, 11, 0.7);
+}
+
+/* Three classes deep, to beat the two-class base ".game-orchestra-drawflow-canvas
+ * .connection .main-path" and Drawflow's own vendored rule. */
+.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-hover .main-path {
+  stroke: #f59e0b;
+  stroke-width: 5px;
+  /* Beats .game-orchestra-edge-uncertain's thinner, faded stroke on document order
+     (same specificity) - pointing at an exit must highlight it whether or not
+     that exit is a conditional one. */
+  stroke-opacity: 1;
+}
+
+/* Fixed (non-removable) exits: a Condition's fallback, a Random's last one.
+ * Occupies the same slot the remove button would, so rows stay aligned. */
+.game-orchestra-editor-inspector .game-orchestra-fixed-exit {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  font-size: 0.85em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Playlist Mixer (playlist-mixer.mjs)
+   One window per playlist, every playlist type. A header strip of
+   playlist-wide controls over a table of one row per track; with rows
+   selected, the header retargets those rows instead - which is why the two
+   share their control styling rather than each having its own.
+   ========================================================================== */
+
+.game-orchestra-mixer .window-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-orchestra-mixer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--color-border-light-tertiary, #7a7971);
+  border-radius: 4px;
+}
+
+/* The scope line is the only thing that tells you whether the controls below
+   address the playlist or the selection, so it must not read as a caption. */
+.game-orchestra-mixer-header[data-scope='selection'] {
+  border-color: #3b82f6;
+}
+
+.game-orchestra-mixer-scope {
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.game-orchestra-mixer-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.game-orchestra-mixer-slider-group label {
+  flex: 0 0 110px;
+}
+
+.game-orchestra-mixer-slider-group input[type='range'] {
+  flex: 1 1 auto;
+}
+
+.game-orchestra-mixer-header .hint {
+  margin: 0 0 4px 118px;
+  font-size: 0.8em;
+}
+
+.game-orchestra-mixer-number-row {
+  display: flex;
+  gap: 12px;
+}
+
+.game-orchestra-mixer-number-row .form-group {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Same intrinsic-minimum trap as the row's fade field above. */
+.game-orchestra-mixer-number-row input {
+  flex: 1 1 60px;
+  min-width: 0;
+}
+
+.game-orchestra-mixer-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* The only scroll container in the window - a row must never scroll inside
+     itself, the same rule the graph editor's pane bodies follow. */
+  overflow-y: auto;
+  max-height: 50vh;
+}
+
+.game-orchestra-mixer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: default;
+}
+
+.game-orchestra-mixer-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Selection is the bulk-edit scope, so it has to read at a glance across a
+   long list - a border colour alone is too quiet at row height. */
+.game-orchestra-mixer-row.game-orchestra-mixer-selected {
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: inset 2px 0 0 #3b82f6;
+}
+
+/* Muted and solo-silenced rows look the same on purpose: both are silent, and
+   the difference is in the tooltip and in which button is lit. */
+.game-orchestra-mixer-row.game-orchestra-mixer-muted .game-orchestra-mixer-name,
+.game-orchestra-mixer-row.game-orchestra-mixer-silenced .game-orchestra-mixer-name {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.game-orchestra-mixer-toggle {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.75em;
+  font-weight: bold;
+  border-radius: 3px;
+}
+
+.game-orchestra-mixer-mute.game-orchestra-mixer-on {
+  background: #b91c1c;
+  color: #fff;
+}
+
+.game-orchestra-mixer-solo.game-orchestra-mixer-on {
+  background: #ca8a04;
+  color: #fff;
+}
+
+.game-orchestra-mixer-name {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-orchestra-mixer-volume {
+  flex: 0 0 120px;
+  min-width: 0;
+}
+
+/* Tabular figures, so a column of percentages does not jitter horizontally as
+   a slider is dragged past 9% / 10% / 100%. */
+.game-orchestra-mixer-readout,
+.game-orchestra-mixer-effective {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.game-orchestra-mixer-effective {
+  min-width: 56px;
+  opacity: 0.7;
+}
+
+.game-orchestra-mixer-effective.game-orchestra-mixer-clamped {
+  color: #f59e0b;
+  opacity: 1;
+}
+
+/* An <input>'s intrinsic minimum width (its `size` attribute, ~20 characters) beats a
+ * flex-basis: `min-width: auto` is the flex default, so the basis below is only a starting
+ * point and the field refuses to shrink to it. Rendered and measured: without the explicit
+ * width + min-width the fade box held ~160px and squeezed every track name down to
+ * "Cave Dri..." on a 620px window. */
+.game-orchestra-mixer-row .game-orchestra-mixer-fade {
+  flex: 0 0 64px;
+  width: 64px;
+  min-width: 0;
+  text-align: right;
+}
+
+.game-orchestra-mixer-usedby,
+.game-orchestra-mixer-order {
+  flex: 0 0 34px;
+  text-align: center;
+  font-size: 0.8em;
+  opacity: 0.8;
+}
+
+.game-orchestra-mixer-usedby {
+  cursor: pointer;
+}
+
+.game-orchestra-mixer-usedby.game-orchestra-mixer-unplaced {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.game-orchestra-mixer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border-light-tertiary, #7a7971);
+}
+
+.game-orchestra-mixer-count {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.game-orchestra-mixer-seam-warning {
+  margin: 4px 0 0;
+  font-size: 0.85em;
+}
+
+.game-orchestra-mixer-footer-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+/* The column header. Shares the row's own column classes (.game-orchestra-mixer-name,
+ * .game-orchestra-mixer-readout, .game-orchestra-mixer-effective) so the two are laid out by one set of
+ * widths; the -col- classes below mirror the widths of the controls they sit above, which have
+ * no shared class of their own to borrow. */
+.game-orchestra-mixer-column-header {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  cursor: default;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--color-border-light-tertiary, #7a7971);
+}
+
+.game-orchestra-mixer-column-header:hover {
+  background: none;
+}
+
+/* Two 22px toggles plus the row's 6px gap. */
+.game-orchestra-mixer-col-toggles {
+  flex: 0 0 50px;
+}
+
+.game-orchestra-mixer-col-volume {
+  flex: 0 0 120px;
+}
+
+.game-orchestra-mixer-col-fade {
+  flex: 0 0 64px;
+  text-align: right;
+}
+
+.game-orchestra-mixer-col-badge {
+  flex: 0 0 34px;
+  text-align: center;
+}
+
+/* ---- Compact layout: the graph editor's Mixer pane -----------------------
+ * The panel is 300px. The fade and node columns and the header's number fields are dropped by
+ * the renderer (buildMixerHtml's `compact`); what is left has to survive the remaining width. */
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-header {
+  padding: 6px;
+  gap: 2px;
+}
+
+/* Label above its slider rather than beside it - at 300px, a 110px label column leaves the
+ * slider unusable. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-slider-group {
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-slider-group label {
+  flex: 1 1 100%;
+  font-size: 0.85em;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-slider-group input[type='range'] {
+  flex: 1 1 60px;
+}
+
+/* The hints are two lines each and there are two of them; the titles on the controls carry the
+ * same information where there is room for it. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-header .hint {
+  display: none;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-scope {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.9em;
+}
+
+.game-orchestra-mixer-expand {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.8em;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-volume {
+  flex: 1 1 60px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-col-volume {
+  flex: 1 1 60px;
+}
+
+/* HR-C-adjacent, and the reason this block exists at all: `.game-orchestra-pane-body` is the ONLY
+ * scroll container in the editor's accordion stack. A max-height + overflow in here would
+ * strand the list at that height inside a much taller pane with dead space below - exactly what
+ * `.game-orchestra-track-list` did once, reported live (see docs/wiki/editor.md § Window layout). */
+.game-orchestra-mixer-compact .game-orchestra-mixer-rows {
+  max-height: none;
+  overflow: visible;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-footer {
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+/* Two lines per row at 300px: the name claims the first on its own, the controls the second.
+ * Measured at the real panel width - on one line the name column collapsed to "Cave Dri..." for
+ * every track, which is the one piece of information a mixer row cannot do without. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-row {
+  flex-wrap: wrap;
+  row-gap: 1px;
+  padding-bottom: 4px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-name {
+  flex: 1 1 100%;
+  order: -1;
+}
+
+/* The column header then labels the SECOND line, so its Track heading has nothing to sit over -
+ * every name is already a row title. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-column-header .game-orchestra-mixer-name {
+  display: none;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-seam-warning {
+  font-size: 0.8em;
+}
+
+/* The Tracks pane's per-row add-node button. `.clear-btn` carries Foundry's borderless styling
+ * but no size of its own, and inside a wrapping flex row that collapsed it to a sliver under the
+ * mute button - rendered and measured at 300px. */
+.game-orchestra-mixer-add {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.8em;
+}
+
+/* Header spacer over that button, so the columns above the rows stay aligned with them. */
+.game-orchestra-mixer-col-add {
+  flex: 0 0 22px;
+}
+
+/* Column budget at 300px, with the graph tools present. Measured: at the standalone window's
+ * gaps and minimums the row needs ~294px and the add button wrapped onto a line of its own under
+ * the mute toggle. Tightening the gap and the two readouts brings the row to ~242px, which fits
+ * with room for the slider to breathe. Change any one of these and re-render the pane. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-row {
+  gap: 4px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-volume {
+  flex: 1 1 40px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-readout {
+  min-width: 34px;
+}
+
+.game-orchestra-mixer-compact .game-orchestra-mixer-effective {
+  min-width: 44px;
+}
+
+/* Two 22px toggles plus the compact row's own 4px gap. */
+.game-orchestra-mixer-compact .game-orchestra-mixer-col-toggles {
+  flex: 0 0 48px;
+}

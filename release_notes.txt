@@ -1,0 +1,5 @@
+## Initial Release of Game Orchestra
+
+- Migrated to standalone Game Orchestra module.
+- Minimum supported Foundry version is v14.
+- Automatic area/combat music switching, token themes, mood/phase overlays, position memory, and visual playback graph editor.

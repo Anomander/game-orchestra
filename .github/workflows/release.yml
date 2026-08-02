@@ -1,0 +1,164 @@
+name: Release Creation
+
+on:
+  push:
+    tags:
+      - 'release-*'
+
+env:
+  REPO_URL: https://github.com/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run unit tests
+        run: npm test
+
+      # Read module ID from module.json
+      - name: Get module ID
+        id: module_id
+        run: echo "id=$(jq -r '.id' module.json)" >> $GITHUB_OUTPUT
+
+      # Extract version from tag (release-X.Y.Z -> X.Y.Z)
+      - name: Set up variables
+        id: get_vars
+        run: |
+          TAG=${GITHUB_REF/refs\/tags\//}
+          VERSION=${TAG#release-}
+          MODULE_ID=${{ steps.module_id.outputs.id }}
+          echo "TAG_NAME=$TAG" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "MODULE_ID=$MODULE_ID" >> $GITHUB_ENV
+          echo "ZIP_NAME=module.zip" >> $GITHUB_ENV
+          echo "RELEASE_DOWNLOAD_URL=${{ env.REPO_URL }}/releases/download/$TAG/module.zip" >> $GITHUB_ENV
+          echo "RELEASE_MANIFEST_URL=${{ env.REPO_URL }}/releases/download/$TAG/module.json" >> $GITHUB_ENV
+          echo "LATEST_MANIFEST_URL=${{ env.REPO_URL }}/releases/latest/download/module.json" >> $GITHUB_ENV
+
+          echo "Tag: $TAG"
+          echo "Version: $VERSION"
+          echo "Module ID: $MODULE_ID"
+
+      # Update module.json with version and download URLs
+      - name: Update module.json
+        uses: microsoft/variable-substitution@v1
+        with:
+          files: 'module.json'
+        env:
+          version: ${{ env.VERSION }}
+          download: ${{ env.RELEASE_DOWNLOAD_URL }}
+          manifest: ${{ env.LATEST_MANIFEST_URL }}
+          flags.hotReload: false
+
+      # Verify the version in module.json matches the tag
+      - name: Verify version
+        run: |
+          MODULE_VERSION=$(jq -r '.version' module.json)
+          if [[ ! "$MODULE_VERSION" == "${{ env.VERSION }}" ]]; then
+            echo "Error: module.json version ($MODULE_VERSION) does not match tag version (${{ env.VERSION }})"
+            exit 1
+          fi
+          echo "Version verified: $MODULE_VERSION"
+
+      # Create zip with module files
+      - name: Zip Files
+        run: |
+          zip -r ${{ env.ZIP_NAME }} \
+            lang/ \
+            scripts/ \
+            styles/ \
+            templates/ \
+            LICENSE \
+            module.json \
+            release_notes.txt \
+            README.md \
+            -x "*.lock" \
+            -x "package*.json" \
+            -x "node_modules/*"
+
+      # Fetch existing release body if it exists
+      - name: Fetch Release Body
+        id: release
+        uses: cardinalby/git-get-release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag: ${{ env.TAG_NAME }}
+          doNotFailIfNotFound: true
+
+      # Update release with the built files
+      - name: Update Release with Files
+        id: create_version_release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          omitNameDuringUpdate: true
+          draft: false
+          prerelease: false
+          omitDraftDuringUpdate: true
+          omitPrereleaseDuringUpdate: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: './module.json, ./${{ env.ZIP_NAME }}'
+          tag: ${{ env.TAG_NAME }}
+          body: |
+            ${{ steps.release.outputs.body }}
+
+            **Installation:** To manually install this release, use the following manifest URL: ${{ env.RELEASE_MANIFEST_URL }}
+
+      # Read module metadata for later steps
+      - name: Read module metadata
+        id: module
+        run: |
+          echo "title=$(jq -r '.title' module.json)" >> $GITHUB_OUTPUT
+          echo "compat_min=$(jq -r '.compatibility.minimum' module.json)" >> $GITHUB_OUTPUT
+          echo "compat_verified=$(jq -r '.compatibility.verified' module.json)" >> $GITHUB_OUTPUT
+          echo "compat_max=$(jq -r '.compatibility.maximum' module.json)" >> $GITHUB_OUTPUT
+
+      # Release to Foundry Package API
+      - name: Release Foundry Package
+        env:
+          FOUNDRY_API_TOKEN: ${{ secrets.FOUNDRY_API_TOKEN }}
+        if: env.FOUNDRY_API_TOKEN != ''
+        run: |
+          jq -n \
+            --arg id "${{ env.MODULE_ID }}" \
+            --arg version "${{ env.VERSION }}" \
+            --arg manifest "${{ env.RELEASE_MANIFEST_URL }}" \
+            --arg download "${{ env.RELEASE_DOWNLOAD_URL }}" \
+            --arg notes "${{ env.REPO_URL }}/releases/tag/${{ env.TAG_NAME }}" \
+            --arg compat_min "${{ steps.module.outputs.compat_min }}" \
+            --arg compat_verified "${{ steps.module.outputs.compat_verified }}" \
+            --arg compat_max "${{ steps.module.outputs.compat_max }}" \
+            '{
+              id: $id,
+              release: {
+                version: $version,
+                manifest: $manifest,
+                download: $download,
+                notes: $notes,
+                compatibility: (
+                  {minimum: $compat_min, verified: $compat_verified}
+                  + (if $compat_max == "" or $compat_max == "null" then {} else {maximum: $compat_max} end)
+                )
+              }
+            }' > payload.json
+
+          cat payload.json
+
+          curl -X POST "https://foundryvtt.com/_api/packages/release_version/" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${{ secrets.FOUNDRY_API_TOKEN }}" \
+            -d @payload.json

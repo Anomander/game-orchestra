@@ -1,0 +1,214 @@
+<div class="flexcol standard-form game-orchestra-config">
+  <input type="hidden" name="documentType" value="{{documentType}}">
+
+{{#if isTokenPhaseGrid}}
+  <div class="game-orchestra-mood-grid flexcol">
+    <div class="tree-node token-moods-node {{#if phasesResolving}}is-resolving{{/if}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="tokenPhases" data-default-collapsed="{{collapsed.phases}}">
+        <div class="node-title">
+          <i class="fas {{#if collapsed.phases}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+          <i class="fas fa-skull"></i>
+          <span>{{localize "GameOrchestra.TokenConfig.PhaseOverrides"}}</span>
+        </div>
+        {{#if phasesResolving}}
+        <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+        {{/if}}
+      </div>
+      {{#unless collapsed.phases}}
+      <div class="tree-node-body mood-grid">
+        {{#each phaseCards}}
+        <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+            <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+            <i class="{{this.icon}}"></i>
+            <span class="mood-label">{{localize this.label}}</span>
+            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
+          </div>
+          {{#unless this.isCardCollapsed}}
+          <div class="context-box playlist-section" data-section="combat" data-phase-id="{{this.phaseId}}">
+            <div class="context-box-header flexrow">
+              <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
+              {{#if combat.playlistId}}
+              <button type="button" class="clear-btn" data-action="clearPhaseEntry" data-phase-id="{{this.phaseId}}" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
+                <i class="fas fa-trash"></i>
+              </button>
+              {{/if}}
+            </div>
+            <div class="context-box-body flexcol">
+              <select class="playlist-select" data-change-action="updatePhaseEntry" data-phase-id="{{this.phaseId}}">
+                <option value="">-- {{localize "GameOrchestra.None"}} --</option>
+                {{#each ../availablePlaylists}}
+                <option value="{{this.id}}" {{#if (eq this.id ../combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
+                {{/each}}
+              </select>
+              {{#if combat.playlistId}}
+              {{#unless combat.isCustom}}
+              <div class="track-row flexrow">
+                {{#if combat.isSoundboard}}
+                <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
+                {{/if}}
+                <select class="track-select" data-change-action="updatePhaseTrack" data-phase-id="{{this.phaseId}}">
+                  {{#unless combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.InitialTrack"}} --</option>{{/unless}}
+                  {{#each combat.tracks}}
+                  <option value="{{this.id}}" {{#if (eq this.id ../combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
+                  {{/each}}
+                </select>
+              </div>
+              {{/unless}}
+              {{/if}}
+            </div>
+          </div>
+          {{/unless}}
+        </div>
+        {{/each}}
+      </div>
+      {{/unless}}
+    </div>
+
+    <div class="tree-node token-default-node {{#if defaultResolving}}is-resolving{{/if}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="tokenDefault" data-default-collapsed="{{collapsed.default}}">
+        <div class="node-title">
+          <i class="fas {{#if collapsed.default}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+          <i class="fas fa-image"></i>
+          <span>{{localize "GameOrchestra.TokenConfig.DefaultCombat"}}</span>
+        </div>
+        {{#if defaultResolving}}
+        <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+        {{/if}}
+      </div>
+      {{#unless collapsed.default}}
+      <div class="tree-node-body default-fields">
+        <div class="context-box playlist-section" data-section="combat" data-phase-id="">
+          <div class="context-box-header flexrow">
+            <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
+            {{#if defaultEntry.combat.playlistId}}
+            <button type="button" class="clear-btn" data-action="clearDefaultEntry" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
+              <i class="fas fa-trash"></i>
+            </button>
+            {{/if}}
+          </div>
+          <div class="context-box-body flexcol">
+            <select class="playlist-select" data-change-action="updateDefaultEntry">
+              <option value="">-- {{localize "GameOrchestra.None"}} --</option>
+              {{#each availablePlaylists}}
+              <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
+              {{/each}}
+            </select>
+            {{#if defaultEntry.combat.playlistId}}
+            {{#unless defaultEntry.combat.isCustom}}
+            <div class="track-row flexrow">
+              {{#if defaultEntry.combat.isSoundboard}}
+              <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
+              {{/if}}
+              <select class="track-select" data-change-action="updateDefaultTrack">
+                {{#unless defaultEntry.combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.InitialTrack"}} --</option>{{/unless}}
+                {{#each defaultEntry.combat.tracks}}
+                <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
+                {{/each}}
+              </select>
+            </div>
+            {{/unless}}
+            {{/if}}
+          </div>
+        </div>
+      </div>
+      {{/unless}}
+    </div>
+  </div>
+{{else}}
+  {{#each playlistConfig as |section|}}
+    <fieldset>
+      <legend>
+        {{section.labelLocalized}}
+        {{#if section.selectedOverlay}}
+          <span class="mood-subtitle">({{localize "GameOrchestra.MoodOverride"}})</span>
+        {{/if}}
+      </legend>
+
+      {{! Each section renders its OWN overlay-tab strip, driven by its own axis
+          (area -> moods, combat -> phases - config.mjs#sectionAxis) - a Scene
+          document's Area and Combat fieldsets can be on different tabs at once. }}
+      <nav class="sheet-tabs tabs mood-tabs" data-axis="{{section.axis}}">
+        <a class="item {{#unless section.selectedOverlay}}active{{/unless}}" data-action="selectOverlay" data-axis="{{section.axis}}" data-overlay="">
+          <i class="fas fa-music"></i> {{localize "GameOrchestra.Default"}}
+        </a>
+        {{#if (eq section.axis "phase")}}
+          {{#each ../availablePhases}}
+          <a class="item {{#if this.isActive}}active{{/if}}" data-action="selectOverlay" data-axis="phase" data-overlay="{{this.id}}" style="--mood-color: {{this.color}};">
+            <i class="{{this.icon}}"></i> {{localize this.label}}
+            {{#if this.isWorldActive}}<span class="world-active-indicator" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">★</span>{{/if}}
+            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
+          </a>
+          {{/each}}
+        {{else}}
+          {{#each ../availableMoods}}
+          <a class="item {{#if this.isActive}}active{{/if}}" data-action="selectOverlay" data-axis="mood" data-overlay="{{this.id}}" style="--mood-color: {{this.color}};">
+            <i class="{{this.icon}}"></i> {{localize this.label}}
+            {{#if this.isWorldActive}}<span class="world-active-indicator" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">★</span>{{/if}}
+            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
+          </a>
+          {{/each}}
+        {{/if}}
+      </nav>
+
+      <div class="standard-form playlist-section" data-section="{{section.id}}" data-item-id="{{section.playlist.id}}">
+        {{#if section.playlist}}
+          <div class="form-group">
+            <label>{{section.labelLocalized}}</label>
+            <div class="form-fields playlist-info">
+              <i class="fas fa-music"></i>
+              <span class="playlist-name">{{section.playlist.name}}</span>
+              <button type="button" data-action="openPlaylist" data-tooltip="{{localize 'PLAYLIST.ViewSheet'}}">
+                <i class="fas fa-edit"></i>
+              </button>
+              <button type="button" data-action="deletePlaylist" data-tooltip="{{localize 'Delete'}}">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>{{localize "GameOrchestra.InitialTrack"}}</label>
+            <div class="form-fields">
+              {{#if section.selectedOverlay}}
+              <select name="music.{{section.id}}.overlays.{{section.selectedOverlay}}.initialTrack">
+                {{{selectOptions section.tracks selected=section.data.initialTrack blank=""}}}
+              </select>
+              {{else}}
+              <select name="music.{{section.id}}.initialTrack">
+                {{{selectOptions section.tracks selected=section.data.initialTrack blank=""}}}
+              </select>
+              {{/if}}
+            </div>
+          </div>
+          {{#if section.allowPriority}}
+            <div class="form-group">
+              <label>{{localize "GameOrchestra.Priority"}}</label>
+              <div class="form-fields">
+                {{#if section.selectedOverlay}}
+                <input type="number" name="music.{{section.id}}.overlays.{{section.selectedOverlay}}.priority" value="{{section.data.priority}}" placeholder="0">
+                {{else}}
+                <input type="number" name="music.{{section.id}}.priority" value="{{section.data.priority}}" placeholder="0">
+                {{/if}}
+              </div>
+            </div>
+          {{/if}}
+        {{else}}
+          <div class="form-group">
+            <div class="form-fields">
+              <p class="hint">{{localize "GameOrchestra.ConfigHelp"}}</p>
+            </div>
+          </div>
+        {{/if}}
+      </div>
+    </fieldset>
+  {{/each}}
+  <footer class="flexrow">
+    {{#each buttons as |button|}}
+      <button type="{{button.type}}" {{#if button.action}}data-action="{{button.action}}" {{/if}}>
+        <i class="{{button.icon}}"></i>
+        {{localize button.label}}
+      </button>
+    {{/each}}
+  </footer>
+{{/if}}
+</div>

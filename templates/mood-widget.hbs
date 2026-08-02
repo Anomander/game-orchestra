@@ -1,0 +1,49 @@
+<div class="game-orchestra-mood-widget-content">
+  <div class="mood-active-bar">
+    {{#if inCombat}}
+      {{#if activePhaseObj}}
+      <span class="mood-active-badge" style="background-color: {{activePhaseObj.color}};">
+        <i class="{{activePhaseObj.icon}}"></i> {{localize activePhaseObj.label}}
+      </span>
+      {{else}}
+      <span class="mood-active-badge default">
+        <i class="fas fa-swords"></i> {{localize "GameOrchestra.Default"}}
+      </span>
+      {{/if}}
+    {{else}}
+      {{#if activeMoodObj}}
+      <span class="mood-active-badge" style="background-color: {{activeMoodObj.color}};">
+        <i class="{{activeMoodObj.icon}}"></i> {{localize activeMoodObj.label}}
+      </span>
+      {{else}}
+      <span class="mood-active-badge default">
+        <i class="fas fa-music"></i> {{localize "GameOrchestra.Default"}}
+      </span>
+      {{/if}}
+    {{/if}}
+  </div>
+
+  {{#if inCombat}}
+  <div class="mood-widget-axis mood-widget-axis-primary">
+    <div class="mood-widget-pills">
+      {{#each phases}}
+      <button type="button" class="mood-pill {{#if this.isActive}}active{{/if}}" data-action="setPhase" data-phase-id="{{this.id}}" data-tooltip="{{localize this.label}}" style="--mood-color: {{this.color}};">
+        <i class="{{this.icon}}"></i>
+        <span>{{localize this.label}}</span>
+      </button>
+      {{/each}}
+    </div>
+  </div>
+  {{else}}
+  <div class="mood-widget-axis mood-widget-axis-primary">
+    <div class="mood-widget-pills">
+      {{#each moods}}
+      <button type="button" class="mood-pill {{#if this.isActive}}active{{/if}}" data-action="setMood" data-mood-id="{{this.id}}" data-tooltip="{{localize this.label}}" style="--mood-color: {{this.color}};">
+        <i class="{{this.icon}}"></i>
+        <span>{{localize this.label}}</span>
+      </button>
+      {{/each}}
+    </div>
+  </div>
+  {{/if}}
+</div>

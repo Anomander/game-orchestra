@@ -1,0 +1,3 @@
+- Ctrl/Cmd-Z to undo actions.
+- When pasting, the new nodes should atomatically be selected.
+- Seamless transitions with predictive pre-fetch (sequential playlist plays cleric beast without hiccups).

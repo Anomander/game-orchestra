@@ -1,0 +1,7 @@
+game-orchestra.lock
+README.html
+node_modules/
+package-lock.json
+coverage/
+
+.claude/
