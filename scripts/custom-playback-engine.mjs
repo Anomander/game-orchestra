@@ -60,6 +60,31 @@ const MAX_ENTER_TRACK_CALLS_PER_WINDOW = 15;
 const MAX_DURATION_PROBE_ATTEMPTS = 20;
 
 /**
+ * How long after adopting an armed hand-off (_enterTrack's `path=armed`) the
+ * engine re-checks that the audio it armed genuinely began.
+ *
+ * `Sound#play({delay})` waits out the delay on an `AudioTimeout`, which is
+ * driven by an `AudioBufferSourceNode.onended` on the shared AudioContext. A
+ * context that is not running never fires it, so the awaited `wait()` inside
+ * Foundry's `Sound##queuePlay` never resolves: the Sound is stuck in STARTING
+ * for good. STARTING reports `Sound#playing === true` while `startTime` stays
+ * undefined - so the seam adopts a track that will never make a sound, the
+ * document stays `playing: true`, no 'end' event can ever arrive, and the graph
+ * sits on that node forever. Confirmed live, twice over: the same sound came
+ * back marked playing from the *previous* session's wedge.
+ *
+ * It also poisons core's own UI - the sidebar's pause button reads
+ * `sound.sound.currentTime`, which is `context.currentTime - undefined` = NaN
+ * for a STARTING sound, and the resulting `pausedTime: NaN` fails validation.
+ *
+ * Comfortably longer than any hand-off lead (_handoffLeadMs is 60-100ms) plus
+ * timer jitter, so a start that is merely a few ms late is never mistaken for a
+ * wedged one, and short enough that the recovery restart is a blip rather than
+ * a hole.
+ */
+const ARMED_START_VERIFY_MS = 350;
+
+/**
  * Poll cadence for a loop.mode 'until' Track's escape condition, boundary
  * 'immediate' (overlays-and-loop-modes-plan.md L3). This used to be chosen to
  * match EngineClock's tick (then also 500ms) on the grounds that polling faster
@@ -1001,6 +1026,10 @@ export class CustomPlaybackEngine {
     // never stopped being taken, which is what let restarts cascade unthrottled.
     const alreadyPlaying = sound.sound ? sound.sound.playing === true : sound.playing === true;
     let elapsedMs = 0;
+    // Native looping is wanted for every mode except a single-pass count - hoisted
+    // out of the clean-start branch below because the armed path's verification
+    // restart (_verifyArmedAudioStarted) has to reproduce the same loop setting.
+    const wantRepeat = isForever || loop.mode === 'until' || loopCount > 1;
 
     // This node was armed ahead of the seam (see _armHandoff): its audio is
     // already started or is about to start on the audio clock, and its document
@@ -1016,10 +1045,16 @@ export class CustomPlaybackEngine {
     if (armedStarted) this._lastCleanStartAt.set(node.id, Date.now());
 
     if (armedStarted) {
-      // Nothing to do: the audio and the document update both happened at arm
-      // time. An armed start that did NOT actually take (the update landed late
-      // and PlaylistSound#_onStart stopped it) falls through to the ordinary
-      // paths below instead, which is the intended degradation.
+      // Nothing to do *yet*: the audio and the document update both happened at
+      // arm time. An armed start that did NOT actually take (the update landed
+      // late and PlaylistSound#_onStart stopped it) falls through to the
+      // ordinary paths below instead, which is the intended degradation.
+      //
+      // "Started" here can only mean Sound#playing, which is also true for a
+      // sound still counting out its arm delay - the delay is the whole point,
+      // and at the seam the two are genuinely indistinguishable. So the check
+      // that it REALLY started is deferred, not skipped: see
+      // _verifyArmedAudioStarted, scheduled once the node is fully set up.
     } else if (alreadyPlaying) {
       // Adopt a track that's already audibly playing (e.g. carried over from the
       // previous context) instead of restarting it from position 0.
@@ -1058,7 +1093,6 @@ export class CustomPlaybackEngine {
       // track that had ever been stopped, i.e. every hand-off in a chain, so the
       // skip never actually fired (measured live: a steady ~30ms update on every
       // transition, half the total gap, until this was corrected).
-      const wantRepeat = isForever || loop.mode === 'until' || loopCount > 1;
       if ((sound.pausedTime ?? 0) !== 0 || sound.repeat !== wantRepeat) {
         const updateStart = Date.now();
         await sound.update({ pausedTime: 0, repeat: wantRepeat });
@@ -1126,6 +1160,7 @@ export class CustomPlaybackEngine {
     );
 
     this._warnIfFadeBreaksTheSeam(node, sound);
+    if (armedStarted) this._verifyArmedAudioStarted(node, sound, wantRepeat, runId);
     this._recordTrackTiming(node, sound, loop, elapsedMs, runId);
 
     // Warm the NEXT track's buffer while this one plays - see _preloadUpcoming.
@@ -1614,6 +1649,22 @@ export class CustomPlaybackEngine {
       return false;
     }
 
+    // A delayed start is only as reliable as the clock it waits on, and that
+    // clock is the AudioContext itself: Sound#play({delay}) awaits an
+    // AudioTimeout built from an AudioBufferSourceNode on this context, and a
+    // context that isn't running never fires its `onended`. The Sound then sits
+    // in STARTING forever - see ARMED_START_VERIFY_MS for the full damage. The
+    // ordinary clean start has no such dependency (no delay, no wait), so
+    // bailing here costs one seam's gaplessness and nothing else.
+    //
+    // Only bail on a state we can positively read as wrong: a Sound with no
+    // context at all is not evidence of a suspended one.
+    const contextState = rawSound.context?.state;
+    if (contextState && contextState !== 'running') {
+      this._noteArmBail(node.id, 'audio-suspended', `the AudioContext is '${contextState}', so the armed start's delay would never elapse. Starting '${plan.nodeId}' the ordinary way instead.`);
+      return false;
+    }
+
     const nextNode = this.graph.nodes.find((n) => n.id === plan.nodeId);
     const nextLoop = resolveLoop(nextNode);
     const repeat = nextLoop.mode !== 'count' || nextLoop.count > 1;
@@ -1636,6 +1687,66 @@ export class CustomPlaybackEngine {
 
     this.clock.schedule(`${node.id}:seam`, Math.max(0, seamAt - Date.now()), () => this._commitArmedHandoff(runId), { precise: true });
     return true;
+  }
+
+  /**
+   * Confirm, a short while after adopting an armed hand-off, that the audio it
+   * armed actually began - and restart it in place if it did not.
+   *
+   * The failure this exists for is total and silent (see ARMED_START_VERIFY_MS):
+   * the Sound is stuck in Foundry's STARTING state, which reports
+   * `playing === true` while never producing a sample, so every downstream
+   * check - the seam's own adoption test, the document's `playing` flag, the
+   * 'end' watcher - is satisfied by a track that will never play or end. The
+   * graph then holds that node forever.
+   *
+   * `Sound#startTime` is the discriminator, and the only one: it is assigned
+   * immediately after Foundry's internal `_play()` and cleared back to undefined
+   * on stop, so `playing && (startTime === undefined)` means precisely "still
+   * waiting out its delay". Any *other* shape - started normally, already ended,
+   * stopped, replaced by a newer node - falls through untouched.
+   *
+   * Recovery restarts the Sound rather than re-entering the node: `stop()`
+   * cancels the wedged delay deterministically (it calls `#delay.cancel()`,
+   * which lets the abandoned `#queuePlay` unwind without ever starting), and a
+   * plain undelayed `play()` cannot wedge the same way. The node keeps its
+   * token, its 'end' watcher (registered on the Sound instance, which survives a
+   * stop/play cycle) and its exit schedule - the cost is that those schedules
+   * are now ~ARMED_START_VERIFY_MS ahead of the audio, which is a far better
+   * outcome than permanent silence.
+   * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {object} sound - PlaylistSound document adopted from the armed hand-off.
+   * @param {boolean} wantRepeat - Native loop setting this node's loop mode calls for.
+   * @param {number} runId
+   * @private
+   */
+  _verifyArmedAudioStarted(node, sound, wantRepeat, runId) {
+    this.clock.schedule(`${node.id}:armcheck`, ARMED_START_VERIFY_MS, () => {
+      if (this._runId !== runId) return;
+      if (this._activeNodes.get(node.id)?.sound !== sound) return; // already advanced
+      const rawSound = sound.sound;
+      // `'startTime' in` before reading it: a Sound implementation that doesn't
+      // carry the field at all (something other than foundry.audio.Sound) would
+      // otherwise read as permanently un-started and be restarted on every
+      // single armed hand-off. Absent evidence, do nothing.
+      if (!rawSound || rawSound.playing !== true || !('startTime' in rawSound) || rawSound.startTime !== undefined) return;
+
+      log(2, `CustomPlaybackEngine: the armed audio for track '${node.id}' (sound '${node.soundId}') never actually started - it is still waiting out a delay that will never elapse. Restarting it now.`);
+      Promise.resolve(rawSound.stop())
+        .catch(() => {})
+        .then(() => {
+          if (this._runId !== runId) return;
+          if (this._activeNodes.get(node.id)?.sound !== sound) return;
+          try {
+            // No `delay` - that is the entire point. mixedVolume() for the same
+            // reason _armHandoff uses it: this starts the audio directly, so
+            // PlaylistSound#sync() is not there to apply the playlist's mix.
+            rawSound.play({ volume: mixedVolume(sound), loop: wantRepeat, offset: 0, fade: 0 });
+          } catch (error) {
+            log(1, `CustomPlaybackEngine: could not restart the wedged audio for track '${node.id}'.`, error);
+          }
+        });
+    });
   }
 
   /**

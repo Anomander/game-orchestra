@@ -23,6 +23,7 @@ import {
 } from '../scripts/hooks.mjs';
 import { CONST } from '../scripts/config.mjs';
 import { MoodWidget } from '../scripts/mood-widget.mjs';
+import { GameOrchestraConfig } from '../scripts/app.mjs';
 
 describe('hooks.mjs', () => {
   let mockController;
@@ -529,6 +530,64 @@ describe('hooks.mjs', () => {
 
       handleTokenConfigRender(app, html);
       expect(html.querySelector).toHaveBeenCalledWith('[data-application-part="identity"]');
+    });
+
+    /**
+     * Build just enough of a rendered token sheet for the injector: an identity
+     * part holding one .form-group that accepts insertAdjacentElement.
+     * @returns {{html: object, inserted: object[]}}
+     */
+    const mockSheetHtml = () => {
+      const inserted = [];
+      const nameField = { insertAdjacentElement: (_pos, el) => inserted.push(el) };
+      const identityTab = { querySelector: vi.fn().mockReturnValue(nameField) };
+      const html = { querySelector: vi.fn((sel) => (sel === '[data-application-part="identity"]' ? identityTab : null)) };
+      return { html, inserted };
+    };
+
+    /**
+     * Click the injected config button and report which document the window got.
+     * @param {object} app - Mock token sheet.
+     * @returns {object|undefined} The document handed to GameOrchestraConfig.
+     */
+    const openConfigFrom = (app) => {
+      const { html, inserted } = mockSheetHtml();
+      let captured;
+      const renderSpy = vi.spyOn(GameOrchestraConfig.prototype, 'render').mockImplementation(function () {
+        captured = this.document;
+        return this;
+      });
+      handleTokenConfigRender(app, html);
+      const find = (el) => (el.className === 'game-orchestra-token-config' ? el : el.children?.reduce((hit, c) => hit || find(c), null));
+      const button = inserted.reduce((hit, el) => hit || find(el), null);
+      button.listeners.click({ preventDefault: () => {} });
+      renderSpy.mockRestore();
+      return captured;
+    };
+
+    it('regression: opens the config on the real TokenDocument, never the sheet preview clone', () => {
+      game.user = { isGM: true };
+      const realToken = { documentName: 'Token', id: 'tok1', actorLink: false, getFlag: vi.fn() };
+      // TokenConfig#token is `this._preview ?? this.document` - a detached clone
+      // that swallows every flag write (hooks.mjs#handleTokenConfigRender).
+      const previewClone = { documentName: 'Token', id: 'tok1', actorLink: false, getFlag: vi.fn() };
+
+      const captured = openConfigFrom({ isPrototype: false, document: realToken, token: previewClone });
+
+      expect(captured).toBe(realToken);
+      expect(captured).not.toBe(previewClone);
+    });
+
+    it('regression: opens the config on the actor\'s real PrototypeToken, never the sheet preview clone', () => {
+      game.user = { isGM: true };
+      const realPrototype = { id: 'proto1', actorLink: true, getFlag: vi.fn() };
+      const previewClone = { id: 'proto1', actorLink: true, getFlag: vi.fn() };
+      const actor = { prototypeToken: realPrototype };
+
+      const captured = openConfigFrom({ isPrototype: true, actor, token: previewClone });
+
+      expect(captured).toBe(realPrototype);
+      expect(captured).not.toBe(previewClone);
     });
   });
 

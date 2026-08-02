@@ -229,6 +229,78 @@ place.
 
 ---
 
+## H13 — `Sound#play({delay})` is timed by the AudioContext, and wedges permanently if it stalls
+
+**Confirmed live.** Hand-off arming (`_armHandoff`) is the only place this module starts audio
+with a `delay`. Foundry implements that delay as `await this.wait(delay * 1000)` inside
+`Sound##queuePlay`, and `wait()` builds an `AudioTimeout` — an empty `AudioBufferSourceNode`
+played on the shared AudioContext, whose `onended` resolves the promise.
+
+**A context that is not running never fires it.** The awaited `wait()` never resolves, so
+`#queuePlay` never reaches `_play()` and the Sound stays in `STATES.STARTING` **forever**. That
+state is uniquely poisonous because it looks completely healthy from the outside:
+
+| Observation | Value while wedged |
+|---|---|
+| `Sound#playing` | `true` (STARTING counts as playing) |
+| `Sound#startTime` | `undefined` — *the only discriminator* |
+| Audio output | none, ever |
+| `'end'` event | never fires |
+| PlaylistSound document | `playing: true`, indefinitely |
+
+So the seam adopts it (`path=armed`), the end watcher waits on an event that cannot arrive, the
+token never leaves the node, and the world keeps a sound marked playing across sessions. It also
+breaks **core's own UI**: the sidebar's pause button writes
+`pausedTime: sound.sound.currentTime`, which for a STARTING sound is
+`context.currentTime - undefined` → `NaN` → `DataModelValidationError: pausedTime: must be a number`.
+
+Two defences, both required:
+
+1. **Don't arm into a stalled context** — `_armHandoff` bails (`[audio-suspended]`) when
+   `rawSound.context.state !== 'running'`. The ordinary clean start has no delay and no `wait()`,
+   so it is unaffected.
+2. **Verify afterwards** — `_verifyArmedAudioStarted` re-checks `ARMED_START_VERIFY_MS` after an
+   armed adoption, since the context can stall *between* the arm and the seam. `playing === true`
+   with `startTime === undefined` means wedged; recovery is `stop()` (which cancels the pending
+   delay) followed by an undelayed `play()`, in place, keeping the token and the watcher.
+
+`startTime` is the discriminator and nothing else is: at the seam, "still counting out its delay"
+and "playing" are otherwise identical. Check `'startTime' in sound` before trusting it — a Sound
+implementation without the field would otherwise read as permanently un-started.
+
+---
+
+## H14 — A placed token holds a *copy* of the prototype's flags, so the prototype must stay in the read chain
+
+`TokenDocument` data is materialised from `Actor#prototypeToken` **once, at creation time**.
+Editing the prototype afterwards changes nothing about tokens already on the canvas — Foundry
+does not propagate, and there is no error to notice.
+
+That matters here because the token sheet's music button writes to whichever document its sheet
+represents: `app.document` for a placed `TokenConfig`, `app.actor.prototypeToken` for a
+`PrototypeTokenConfig` (see [HR-I](#hr-i--never-configure-against-a-sheets-preview-clone-apptoken)).
+So a prototype-level assignment is real, persists, and re-reads correctly in its own window —
+and if the resolver only ever consults the *placed* token, it is never once used.
+
+Confirmed live: assigning playlist `B` to prototype token `B` logged a successful write
+(`category=PrototypeToken`), showed `B (Soundboard)` on reopen, and combat still fell through to
+the world-default playlist, with
+`PlaylistContext.fromDocument: No playlist override found on document 'B'` as the only trace.
+
+**`_getCombatantMusicSources()` therefore returns an ordered chain and the caller takes the first
+document carrying an override** — the prototype token is in that chain *even when a placed token
+exists*. See [architecture.md](architecture.md#where-candidates-come-from) for the exact order.
+
+Two consequences worth keeping in mind when changing that function:
+
+- The chain is **fallbacks, not competitors.** Push every hit and one combatant contributes two
+  contexts that then compete on priority.
+- A **linked** token's own flags stay out of the chain unless `useTokenMusic` is set. A linked
+  token inherits the prototype's flags at creation, so honouring them would make every linked
+  token silently shadow its actor — which is precisely what that flag exists to opt into.
+
+---
+
 # House rules
 
 Not hazard-numbered, but equally load-bearing. Sourced from the archived plan docs, where they
@@ -335,3 +407,51 @@ rebuilt graph restarts from Start (H9). Storing level settings in that same flag
 re-asserts volumes on already-playing sounds via `Sound#fade` — no stop, no restart, no token
 movement. Any future per-playlist setting that does not change *what* plays belongs in `mix` (or
 its own flag), never in `customPlayback`.
+
+---
+
+## HR-I — Never configure against a sheet's preview clone (`app.token`)
+
+Foundry's token sheets both expose `token` as `this._preview ?? <the real thing>`:
+
+- `TokenConfig extends PlaceableConfig`, which builds `_preview` on its **first** render;
+- `PrototypeTokenConfig` clones the `PrototypeToken` in `_prepareContext`.
+
+So `app.token` hands back a **detached preview clone** — meant for live canvas preview — from the
+very first render onwards. `hooks.mjs#handleTokenConfigRender` used it, and every per-token
+playlist assignment (dropdown *and* drag-and-drop) looked dead: `GameOrchestraConfig` wrote to the
+clone and then re-rendered from that same stale clone, so the select snapped back.
+
+It is not only cosmetic. `PlaceableConfig#_createPreview()` keeps the id (`object.clone()`) **only
+when the token is actually drawn on the canvas**; otherwise it does `this.document.clone(data)`,
+which drops `_id`. `Document#update()` on that clone posts an update for an `_id` that exists
+nowhere, so the flag is **silently never written** — no error, no console warning.
+
+Use the real, collection-backed documents: `app.document` for `TokenConfig`, and
+`app.actor.prototypeToken` for `PrototypeTokenConfig` (which is a plain `ApplicationV2`, not a
+`DocumentSheet` — it has no `document`). Branch on the sheet's own `isPrototype` property.
+
+`GameOrchestraConfig#updateObject` now logs instead of falling through silently when handed a
+document it can neither `update()` nor resolve to an Actor — that fallthrough is what made this
+class of bug invisible.
+
+---
+
+## HR-J — Flag update keys are dot paths; there is no bracket syntax
+
+`GameOrchestraConfig#updateObject` wrote the prototype-token branch as
+`prototypeToken.flags['game-orchestra'].music.combat.playlist`. Foundry expands update keys with
+`foundry.utils.expandObject` → `setProperty`, which **splits on `"."` and nothing else** — so that
+produced a literal key named `flags['game-orchestra']` on `prototypeToken`, which the Actor schema
+silently dropped while cleaning. `actor.update()` resolved successfully and wrote nothing.
+
+Confirmed live: every prototype-token playlist assignment (dropdown and drag-and-drop alike) was
+accepted, logged its own success, and came back empty on the next render.
+
+Write `prototypeToken.flags.game-orchestra.<path>`. A hyphen needs no escaping in a dot path.
+Deletion keys (`music.combat.-=playlist`) compose with it normally.
+
+Related: `getDocumentCategory()` now tests `instanceof foundry.data.PrototypeToken` before falling
+back to `constructor.name`. The name check alone reclassifies a subclassed prototype token as
+`null`, which routes every write into `updateObject`'s no-op branch — the same invisible failure
+as [HR-I](#hr-i--never-configure-against-a-sheets-preview-clone-apptoken).

@@ -133,13 +133,32 @@ scope entity used for position memory.
 | Source | Contexts contributed |
 |---|---|
 | Active scene | `area` and `combat` |
-| Each non-defeated combatant | `combat`, from token / actor / prototype token |
+| The combatant **whose turn it is**, if not defeated | `combat`, from token / actor / prototype token |
 | World default music setting | `combat` (only during combat) and `area` |
 
-`_getCombatantMusicSource()` decides which document speaks for a combatant:
+**A token/actor override is a *turn* theme, not a fight theme.** Only `combat.combatant` — the
+combatant currently taking its turn — is consulted; the rest of the tracker contributes nothing.
+When the turn passes to someone with no override of their own, resolution falls through to scene
+combat and then the world default, rather than leaving the previous combatant's theme in the pool.
+Collecting from every non-defeated combatant (which this used to do) kept the first configured
+combatant's context alive for the whole fight, and since token combat outranks scene combat
+(`+20` vs `-15`) it won every turn — the current-combatant-first rule below could never demote
+it, because unconfigured combatants contribute nothing for it to be promoted over.
 
-- **Linked token** → the *actor*, unless the token sets the `useTokenMusic` flag.
-- **Unlinked token** → the *token*, falling back to the actor's prototype token.
+`_getCombatantMusicSources()` returns every document that may speak for that combatant, most
+specific first. The caller takes the **first one that actually carries an override** — they are
+fallbacks, not competitors, so a combatant contributes at most one context:
+
+- **Linked token** → *actor* → *prototype token*. The token's own flags are skipped entirely
+  unless it sets `useTokenMusic` (a linked token inherits the prototype's flags at creation, so
+  honouring them would make every linked token silently override its actor).
+- **Unlinked token**, or linked with `useTokenMusic` → *token* → *prototype token* → *actor*.
+
+The prototype token stays in the chain **even when a placed token exists**. It is where the
+token sheet's config window writes whenever it was opened from an Actor's prototype token, and a
+placed token only ever holds a *copy* of the prototype's flags taken at creation time — so
+without it, a prototype-level assignment saves, re-reads in its own window, and is then never
+consulted (H14).
 
 ### Overlay axes
 
@@ -188,6 +207,9 @@ first would start already in whatever phase the previous fight ended on (e.g. `E
 2. **Combat categorically overrides area.** Not a priority contest: if *any* combat context
    survives filtering, every area context is dropped outright.
 3. **Sort** — the current combatant's own context wins first; otherwise by descending priority.
+   Since only the current combatant contributes a combat context at all, the first rule is a
+   safety net rather than the mechanism: it keeps a turn theme on top even if a scene section has
+   been given a hand-edited priority above the `+20` token baseline.
 
 ### Track resolution
 

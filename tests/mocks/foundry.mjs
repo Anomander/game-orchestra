@@ -262,6 +262,15 @@ export function setupFoundryMocks(overrides = {}) {
         remove: (...c) => c.forEach((x) => classes.delete(x)),
         contains: (c) => classes.has(c)
       },
+      // Recorded by type so a test can fire what was wired up - the token
+      // sheet's injected config button carries its click handler this way.
+      listeners: {},
+      addEventListener(type, handler) {
+        this.listeners[type] = handler;
+      },
+      removeEventListener(type) {
+        delete this.listeners[type];
+      },
       appendChild(child) {
         this.children.push(child);
         child.parentElement = this;
@@ -300,7 +309,16 @@ export function createMockSound(id, name, overrides = {}) {
     repeat: false,
     fade: vi.fn(() => Promise.resolve()),
     stop: vi.fn(),
-    volume: 1.0
+    volume: 1.0,
+    // Foundry assigns this immediately after playback actually begins and clears
+    // it back to undefined on stop, which makes it the one field that tells a
+    // sound still counting out a play({delay}) apart from one truly playing -
+    // both report playing === true. The engine's armed-start verification reads
+    // exactly this, so the property must EXIST here (undefined, not absent).
+    startTime: undefined,
+    // A running AudioContext by default: _armHandoff refuses to arm a delayed
+    // start against a suspended one, since the delay is timed by that context.
+    context: { state: 'running' }
   });
   // Models foundry.audio.Sound#play({delay}). The real implementation creates
   // its nodes immediately, marks itself STARTING (Sound#playing is true for
@@ -314,10 +332,12 @@ export function createMockSound(id, name, overrides = {}) {
     if (innerSound.playing) return Promise.resolve(innerSound); // already LOADED->STARTING/PLAYING
     innerSound.starting = true;
     innerSound.playing = true; // STARTING counts as playing, exactly as in Foundry
+    innerSound.startTime = undefined; // not assigned until the delay has elapsed
     pendingStart = setTimeout(() => {
       pendingStart = null;
       innerSound.starting = false;
       innerSound.started = true;
+      innerSound.startTime = 0;
     }, (options.delay ?? 0) * 1000);
     return Promise.resolve(innerSound);
   });
@@ -330,6 +350,7 @@ export function createMockSound(id, name, overrides = {}) {
     innerSound.starting = false;
     innerSound.started = false;
     innerSound.playing = false;
+    innerSound.startTime = undefined;
     return baseStop(...args);
   });
   const sound = {

@@ -391,8 +391,26 @@ export function handleTokenConfigRender(app, html, _context, _options) {
     if (!identityTab) return;
     const nameField = identityTab.querySelector('.form-group');
     if (!nameField) return;
-    const isPrototype = app.constructor.name.includes('Prototype');
-    const token = isPrototype ? app.actor?.prototypeToken : app.token;
+    // NEVER use `app.token` here. Both token sheets define it as
+    // `this._preview ?? <the real thing>` (TokenConfig extends PlaceableConfig,
+    // which builds `_preview` on first render; PrototypeTokenConfig clones the
+    // PrototypeToken in _prepareContext), so from the very first render it hands
+    // back a DETACHED CLONE meant only for live canvas preview - and this
+    // happened in practice: every playlist assignment (dropdown AND drag-drop)
+    // looked dead, because GameOrchestraConfig wrote to the clone and then
+    // re-rendered from that same stale clone.
+    //
+    // Writing to that clone is not merely cosmetic. PlaceableConfig#_createPreview
+    // only calls `object.clone()` (which keeps the id) when the token is actually
+    // drawn on the canvas; otherwise it does `this.document.clone(data)`, which
+    // DROPS `_id` - and `Document#update()` on that clone posts an update for an
+    // `_id` that exists nowhere, so the flag is silently never written.
+    //
+    // `app.document` (TokenConfig) and `app.actor.prototypeToken`
+    // (PrototypeTokenConfig, which is not a DocumentSheet and has no `document`)
+    // are the real, collection-backed documents.
+    const isPrototype = app.isPrototype ?? app.constructor.name.includes('Prototype');
+    const token = isPrototype ? app.actor?.prototypeToken : app.document;
     if (!token) return;
     const formGroup = document.createElement('div');
     formGroup.className = 'form-group';

@@ -1877,6 +1877,79 @@ describe('CustomPlaybackEngine', () => {
       logSpy.mockRestore();
     });
 
+    it('refuses to arm a delayed start against a suspended AudioContext', async () => {
+      // Sound#play({delay}) waits on an AudioTimeout driven by an
+      // AudioBufferSourceNode on that context. Suspended, it never fires: the
+      // Sound sits in STARTING (playing === true, no audio, no 'end' ever) and
+      // the graph stops on that node for good. Confirmed live.
+      setMockSetting('game-orchestra', 'enableDebug', true);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.useFakeTimers();
+      const { playlist, s2 } = buildArmChain();
+      s2.sound.context = { state: 'suspended' };
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+      await engine.start();
+
+      await vi.advanceTimersByTimeAsync(9990); // into the lead window
+
+      expect(s2.sound.play).not.toHaveBeenCalled();
+      const lines = warnSpy.mock.calls.map((c) => c.join(' '));
+      expect(lines.some((l) => l.includes('not arming') && l.includes('[audio-suspended]'))).toBe(true);
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    });
+
+    it('restarts armed audio that never actually started, instead of holding a silent token forever', async () => {
+      // The wedge: the context stalls AFTER the arm goes out, so play({delay})
+      // is accepted but its delay never elapses. Every downstream check is
+      // satisfied (Sound#playing is true for STARTING) while nothing is audible,
+      // the document stays playing:true, and no 'end' event can ever arrive.
+      setMockSetting('game-orchestra', 'enableDebug', true);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.useFakeTimers();
+      const { playlist, s2 } = buildArmChain();
+      // A play() that reports STARTING and stays there - exactly what a stalled
+      // AudioTimeout leaves behind.
+      s2.sound.play = vi.fn(() => {
+        s2.sound.playing = true;
+        s2.sound.startTime = undefined;
+        return Promise.resolve(s2.sound);
+      });
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+      await engine.start();
+
+      await vi.advanceTimersByTimeAsync(10000); // through the seam: adopted as path=armed
+      expect(s2.sound.play).toHaveBeenCalledTimes(1);
+      expect(s2.sound.play.mock.calls[0][0].delay).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(400); // past the verification window
+
+      expect(s2.sound.stop).toHaveBeenCalled();
+      expect(s2.sound.play).toHaveBeenCalledTimes(2);
+      expect(s2.sound.play.mock.calls[1][0].delay).toBeUndefined(); // no delay to wedge on
+      const lines = warnSpy.mock.calls.map((c) => c.join(' '));
+      expect(lines.some((l) => l.includes('never actually started'))).toBe(true);
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    });
+
+    it('leaves a healthy armed start alone', async () => {
+      // The verification must not fire on the ordinary case: a sound that is a
+      // few ms late is not a wedged one, and restarting it would put an audible
+      // hole in every single hand-off.
+      vi.useFakeTimers();
+      const { playlist, s2 } = buildArmChain();
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+      await engine.start();
+
+      await vi.advanceTimersByTimeAsync(10400); // seam, plus the whole verification window
+
+      expect(s2.sound.play).toHaveBeenCalledTimes(1);
+      expect(s2.sound.stop).not.toHaveBeenCalled();
+      expect(s2.sound.started).toBe(true);
+      vi.useRealTimers();
+    });
+
     it('says why it did not arm, rather than bailing silently', async () => {
       // Every bail path must name itself: an arming failure is inaudible in the
       // logs but audible in the room, and a silent one cost a debugging cycle.

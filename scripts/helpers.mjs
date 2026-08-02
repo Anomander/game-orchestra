@@ -218,6 +218,11 @@ export function buildPlaylistEntry(availablePlaylists, playlistId, trackId) {
 export function getDocumentCategory(doc) {
   if (!doc) return null;
   if (doc instanceof foundry.abstract.Document) return 'Document';
+  // instanceof first, constructor.name only as the fallback: the name check is
+  // the fragile one (a system or module subclassing PrototypeToken, or any build
+  // that mangles class names, silently reclassifies the document as null - which
+  // routes every write into GameOrchestraConfig#updateObject's no-op branch).
+  if (foundry.data?.PrototypeToken && doc instanceof foundry.data.PrototypeToken) return 'PrototypeToken';
   if (doc.constructor?.name === 'PrototypeToken') return 'PrototypeToken';
   if (doc.documentName === 'DefaultMusic') return 'DefaultMusic';
   return null;

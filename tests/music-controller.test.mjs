@@ -171,42 +171,64 @@ describe('MusicController', () => {
     });
   });
 
-  describe('_getCombatantMusicSource', () => {
-    it('returns null when both token and actor are null', () => {
-      expect(controller._getCombatantMusicSource(null, null)).toBeNull();
+  describe('_getCombatantMusicSources', () => {
+    it('returns nothing when both token and actor are null', () => {
+      expect(controller._getCombatantMusicSources(null, null)).toEqual([]);
     });
 
-    it('linked + useTokenMusic=true: returns token', () => {
+    it('linked + useTokenMusic=true: token first', () => {
       const token = { actorLink: true, getFlag: () => true };
       const actor = { id: 'act1' };
 
-      expect(controller._getCombatantMusicSource(token, actor)).toBe(token);
+      expect(controller._getCombatantMusicSources(token, actor)[0]).toBe(token);
     });
 
-    it('linked + useTokenMusic=false: returns actor', () => {
+    it('linked + useTokenMusic=false: actor first', () => {
       const token = { actorLink: true, getFlag: () => false };
       const actor = { id: 'act1' };
 
-      expect(controller._getCombatantMusicSource(token, actor)).toBe(actor);
+      expect(controller._getCombatantMusicSources(token, actor)[0]).toBe(actor);
     });
 
-    it('unlinked: returns token', () => {
+    it('linked + useTokenMusic=false: never consults the token itself', () => {
+      const token = { actorLink: true, getFlag: () => false };
+      const protoToken = { id: 'proto1' };
+      const actor = { id: 'act1', prototypeToken: protoToken };
+
+      expect(controller._getCombatantMusicSources(token, actor)).toEqual([actor, protoToken]);
+    });
+
+    it('linked but actorless: falls back to the token', () => {
+      const token = { actorLink: true, getFlag: () => false };
+
+      expect(controller._getCombatantMusicSources(token, null)).toEqual([token]);
+    });
+
+    it('unlinked: token first', () => {
       const token = { actorLink: false };
       const actor = { id: 'act1' };
 
-      expect(controller._getCombatantMusicSource(token, actor)).toBe(token);
+      expect(controller._getCombatantMusicSources(token, actor)[0]).toBe(token);
     });
 
-    it('unlinked + no token: returns prototypeToken', () => {
+    it('unlinked with a placed token: still offers the prototype token as a fallback', () => {
+      const token = { actorLink: false };
+      const protoToken = { id: 'proto1' };
+      const actor = { id: 'act1', prototypeToken: protoToken };
+
+      expect(controller._getCombatantMusicSources(token, actor)).toEqual([token, protoToken, actor]);
+    });
+
+    it('unlinked + no token: prototypeToken first', () => {
       const protoToken = { id: 'proto1' };
       const actor = { prototypeToken: protoToken };
 
-      expect(controller._getCombatantMusicSource(null, actor)).toBe(protoToken);
+      expect(controller._getCombatantMusicSources(null, actor)[0]).toBe(protoToken);
     });
 
-    it('unlinked + no token + no prototypeToken: returns actor', () => {
+    it('unlinked + no token + no prototypeToken: actor only', () => {
       const actor = { id: 'act1' };
-      expect(controller._getCombatantMusicSource(null, actor)).toBe(actor);
+      expect(controller._getCombatantMusicSources(null, actor)).toEqual([actor]);
     });
   });
 
@@ -1034,6 +1056,28 @@ describe('MusicController', () => {
       expect(contexts.map((c) => c.playlist)).toContain(defaultPlaylist);
     });
 
+    it('falls back to the prototype token when the placed token and actor carry no override', () => {
+      const themePlaylist = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? themePlaylist : null));
+
+      function PrototypeToken() {
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20 } } } };
+      }
+      const prototypeToken = new PrototypeToken();
+      // A linked, placed token whose own flags are empty - exactly what a token gets when the
+      // music was assigned on the Actor's prototype token after the token was already placed.
+      const token = new MockDocument({ name: 'B', id: 'tok1', actorLink: true, getFlag: vi.fn(() => null) });
+      const actor = new MockDocument({ name: 'B', id: 'act1', getFlag: vi.fn(() => null) });
+      actor.prototypeToken = prototypeToken;
+
+      const combatant = { token, actor, isDefeated: false };
+      game.combats = { active: { started: true, combatant, combatants: [combatant] } };
+
+      const contexts = controller.getAllCurrentPlaylists();
+      expect(contexts.map((c) => c.playlist)).toContain(themePlaylist);
+      expect(contexts.filter((c) => c.playlist === themePlaylist)).toHaveLength(1);
+    });
+
     it('excludes a defeated combatant from context resolution entirely', () => {
       const themePlaylist = createMockPlaylist('bossP', 'Boss Theme', []);
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? themePlaylist : null));
@@ -1042,19 +1086,45 @@ describe('MusicController', () => {
         this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20 } } } };
       }
       const defeatedToken = new PrototypeToken();
-      game.combats = {
-        active: {
-          started: true,
-          combatant: { token: defeatedToken },
-          combatants: [{ token: defeatedToken, isDefeated: true }]
-        }
-      };
+      const combatant = { token: defeatedToken, isDefeated: true };
+      game.combats = { active: { started: true, combatant, combatants: [combatant] } };
 
       const contexts = controller.getAllCurrentPlaylists();
       expect(contexts.map((c) => c.playlist)).not.toContain(themePlaylist);
     });
 
-    it('includes a non-defeated combatant alongside a defeated one', () => {
+    it('only the combatant whose turn it is contributes a context', () => {
+      const bossPlaylist = createMockPlaylist('bossP', 'Boss Theme', []);
+      const scenePlaylist = createMockPlaylist('sceneP', 'Scene Combat', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPlaylist : id === 'sceneP' ? scenePlaylist : null));
+
+      game.scenes.active = new MockDocument({
+        name: 'Scene 1',
+        id: 'scene1',
+        getFlag: vi.fn((mod, key) => (key === 'music.combat' ? { playlist: 'sceneP' } : null))
+      });
+
+      function PrototypeToken(playlistId) {
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: playlistId, priority: 20 } } } };
+      }
+      const bossToken = new PrototypeToken('bossP');
+      const plainToken = new PrototypeToken(null);
+      const boss = { token: bossToken, isDefeated: false };
+      const plain = { token: plainToken, isDefeated: false };
+
+      // The boss's turn: its own theme wins.
+      game.combats = { active: { started: true, combatant: boss, combatants: [boss, plain] } };
+      expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).toContain(bossPlaylist);
+
+      // The next combatant has no override of its own, so the boss theme must NOT carry over -
+      // resolution falls through to the scene's combat music.
+      game.combats.active.combatant = plain;
+      const contexts = controller.getAllCurrentPlaylists();
+      expect(contexts.map((c) => c.playlist)).not.toContain(bossPlaylist);
+      expect(contexts.map((c) => c.playlist)).toContain(scenePlaylist);
+    });
+
+    it('uses the live current combatant, ignoring a defeated one elsewhere in the tracker', () => {
       const bossPlaylist = createMockPlaylist('bossP', 'Boss Theme', []);
       const allyPlaylist = createMockPlaylist('allyP', 'Ally Theme', []);
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPlaylist : id === 'allyP' ? allyPlaylist : null));

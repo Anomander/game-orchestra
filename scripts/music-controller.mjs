@@ -460,13 +460,23 @@ export class MusicController {
       const combatCtx = PlaylistContext.fromDocument(scene, 'combat', scene);
       if (combatCtx) contexts.push(combatCtx);
     }
-    if (combat?.combatant) {
-      for (const combatant of combat.combatants) {
-        if (combatant.isDefeated) continue;
-        const musicSource = this._getCombatantMusicSource(combatant.token, combatant.actor);
-        if (musicSource) {
-          const ctx = PlaylistContext.fromDocument(musicSource, 'combat', combat);
-          if (ctx) contexts.push(ctx);
+    // ONLY the combatant whose turn it is. A token/actor override is a TURN theme, not a fight
+    // theme: when the turn passes to someone with no override of their own, resolution has to
+    // fall back through scene combat and the world default rather than staying on the previous
+    // combatant. Iterating every non-defeated combatant here - which is what this used to do -
+    // kept the first configured combatant's context in the pool for the entire fight, and since
+    // token combat outranks scene combat (+20 vs -15) it simply won every turn. The
+    // current-combatant-first rule in sortPlaylists() could never demote it, because unconfigured
+    // combatants contribute nothing for it to be promoted over.
+    const combatant = combat?.combatant;
+    if (combatant && !combatant.isDefeated) {
+      // First source that carries an override wins - see _getCombatantMusicSources(). Pushing
+      // every hit instead would let one combatant contribute two competing contexts.
+      for (const musicSource of this._getCombatantMusicSources(combatant.token, combatant.actor)) {
+        const ctx = PlaylistContext.fromDocument(musicSource, 'combat', combat);
+        if (ctx) {
+          contexts.push(ctx);
+          break;
         }
       }
     }
@@ -530,27 +540,42 @@ export class MusicController {
   }
 
   /**
-   * Internal helper to find music source for a combatant
+   * Every document that may speak for a combatant, most specific first. The caller takes the
+   * FIRST one that actually carries an override - these are fallbacks, not competitors, so a
+   * combatant contributes at most one context no matter how many of them are configured.
+   *
+   * The prototype token has to be in this chain even when the combatant has a placed token,
+   * and that is not a hypothetical: it is where the token sheet's own config window writes
+   * whenever it was opened from an Actor's prototype token (app.isPrototype), and a placed
+   * token only ever gets a COPY of the prototype's flags at creation time. Returning the
+   * placed token unconditionally - which is what this used to do - meant a prototype-level
+   * assignment saved correctly, re-read correctly in its own window, and then was never once
+   * consulted during combat. Confirmed live: assigning to prototype token 'B' left combat
+   * falling through to the world-default playlist with
+   * "No playlist override found on document 'B'".
+   *
+   * For a LINKED token the actor still outranks it (that is the whole point of the
+   * `useTokenMusic` flag), but the prototype is a legitimate actor-level source in its own
+   * right - no UI in this module writes actor flags directly, so without it a linked
+   * combatant has no configurable actor-level music at all.
    * @param {TokenDocument} token Token document
    * @param {Actor} actor Actor document
-   * @returns {Document|null} Resolving document for combat music
+   * @returns {Document[]} Ordered, de-duplicated candidate documents (may be empty)
    * @private
    */
-  _getCombatantMusicSource(token, actor) {
-    if (!token && !actor) return null;
+  _getCombatantMusicSources(token, actor) {
+    if (!token && !actor) return [];
     const isLinked = token?.actorLink ?? false;
     const useTokenMusic = token?.getFlag?.(CONST.moduleId, 'useTokenMusic') ?? false;
+    const proto = actor?.prototypeToken ?? null;
 
-    if (isLinked) {
-      if (useTokenMusic && token) return token;
-      if (actor) return actor;
-      if (token) return token;
-    } else {
-      if (token) return token;
-      if (actor?.prototypeToken) return actor.prototypeToken;
-      if (actor) return actor;
-    }
-    return null;
+    // A linked token's own flags are deliberately skipped unless it opts in - a linked token
+    // inherits the prototype's flags at creation, so honouring them would make every linked
+    // token silently override its actor.
+    const ordered = (isLinked && !useTokenMusic)
+      ? (actor ? [actor, proto] : [token])
+      : [token, proto, actor];
+    return [...new Set(ordered.filter(Boolean))];
   }
 
   /**

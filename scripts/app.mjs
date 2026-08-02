@@ -557,16 +557,31 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
       acc[`${this.updateDataPrefix}.${key}`] = value;
       return acc;
     }, {});
+    // Names the branch taken and the exact keys written. Every silent-write bug
+    // this method has had (a preview clone, a bracketed flag path) was invisible
+    // precisely because the caller's own "success" log fired regardless.
+    log(3, () => `GameOrchestraConfig.updateObject: category=${getDocumentCategory(this.document)} keys=${Object.keys(expandedData).join(', ')}`);
     if (this.isDocument) {
       const result = await this.document.update(expandedData);
       this.render(false);
       return result;
     }
-    if (this.document.constructor.name === 'PrototypeToken') {
+    if (getDocumentCategory(this.document) === 'PrototypeToken') {
       const actor = this.document.parent;
-      if (!actor) return;
+      if (!actor) {
+        log(1, 'GameOrchestraConfig.updateObject: PrototypeToken has no parent Actor; nothing was saved');
+        return;
+      }
+      // Plain dot notation, NOT `flags['game-orchestra']`. Foundry expands update
+      // keys with foundry.utils.expandObject -> setProperty, which splits on "."
+      // and has no bracket syntax at all: the bracketed form produced a literal
+      // `flags['game-orchestra']` key on prototypeToken, which the Actor schema
+      // then dropped during cleaning. The update resolved successfully and wrote
+      // NOTHING - confirmed live, and the reason every prototype-token playlist
+      // assignment looked accepted and then came back empty. The module id needs
+      // no escaping here; a hyphen is fine in a dot path.
       const prototypeData = Object.entries(data).reduce((acc, [key, value]) => {
-        acc[`prototypeToken.flags['game-orchestra'].${key}`] = value;
+        acc[`prototypeToken.flags.${CONST.moduleId}.${key}`] = value;
         return acc;
       }, {});
       const result = await actor.update(prototypeData);
@@ -574,6 +589,11 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
       this.render(false);
       return result;
     }
+    // Falling through used to be a silent no-op - every dropdown pick and every
+    // drop looked accepted and saved nothing. If this fires, `this.document` is
+    // neither a live Document nor a PrototypeToken (the classic cause: something
+    // handed this window a detached preview clone - see hooks.mjs#handleTokenConfigRender).
+    log(1, 'GameOrchestraConfig.updateObject: unsupported document type; nothing was saved:', this.document?.constructor?.name);
   }
 
   /**

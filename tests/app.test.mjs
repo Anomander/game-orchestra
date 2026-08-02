@@ -206,6 +206,48 @@ describe('GameOrchestraConfig', () => {
     });
   });
 
+  describe('updateObject (PrototypeToken)', () => {
+    let actor;
+    let protoApp;
+
+    beforeEach(() => {
+      /** Stands in for foundry's PrototypeToken DataModel - matched by class name. */
+      class PrototypeToken {
+        constructor(parent, flags) {
+          this.parent = parent;
+          this.flags = flags;
+        }
+      }
+      actor = { update: vi.fn().mockResolvedValue(), documentName: 'Actor' };
+      actor.prototypeToken = new PrototypeToken(actor, { 'game-orchestra': {} });
+      protoApp = new GameOrchestraConfig(actor.prototypeToken);
+      protoApp.render = vi.fn();
+    });
+
+    it('regression: writes plain dot-notation keys, never the bracketed flags["game-orchestra"] form', async () => {
+      await protoApp.updateObject({ 'music.combat.playlist': 'pl-boss' });
+
+      expect(actor.update).toHaveBeenCalledWith({ 'prototypeToken.flags.game-orchestra.music.combat.playlist': 'pl-boss' });
+      const [written] = actor.update.mock.calls[0];
+      expect(Object.keys(written).some((k) => k.includes('['))).toBe(false);
+    });
+
+    it('re-points at the real prototypeToken and re-renders after a successful write', async () => {
+      await protoApp.updateObject({ 'music.combat.playlist': 'pl-boss' });
+
+      expect(protoApp.document).toBe(actor.prototypeToken);
+      expect(protoApp.render).toHaveBeenCalled();
+    });
+
+    it('does not silently swallow a parentless PrototypeToken', async () => {
+      protoApp.document.parent = null;
+
+      await protoApp.updateObject({ 'music.combat.playlist': 'pl-boss' });
+
+      expect(actor.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('_onChangeInput', () => {
     it('dispatches phase-grid select changes based on data-change-action', () => {
       const spy = vi.spyOn(GameOrchestraConfig, 'handleUpdatePhaseEntry').mockImplementation(() => {});
