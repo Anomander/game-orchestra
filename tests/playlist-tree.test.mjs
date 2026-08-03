@@ -214,6 +214,188 @@ describe('PlaylistTreeApp', () => {
     });
   });
 
+  describe('beaten-by explanation', () => {
+    // The answer a GM actually needs when the wrong thing is playing - and the thing
+    // a raw priority number never told them (docs/wiki/ux.md UX-7).
+    beforeEach(() => {
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      setMockSetting('game-orchestra', 'configuredMoods', [{ id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }]);
+      setMockSetting('game-orchestra', 'defaultMusic', {
+        documentName: 'DefaultMusic',
+        data: { 'game-orchestra': { music: { area: { playlist: 'pl-area' } } } }
+      });
+      game.combats = { active: null };
+    });
+
+    it('labels an eligible global row that lost to the scene', () => {
+      game.gameOrchestra.musicController.currentContext = { contextEntity: scene1, isOverlay: false, overlayAxis: null };
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.beatenBy).toBeTruthy();
+    });
+
+    it('does not label the winner itself', () => {
+      game.gameOrchestra.musicController.currentContext = { contextEntity: { documentName: 'DefaultMusic' }, isOverlay: false, overlayAxis: null };
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.beatenBy).toBeNull();
+    });
+
+    it('says nothing at all when no music is playing', () => {
+      game.gameOrchestra.musicController.currentContext = null;
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.beatenBy).toBeNull();
+    });
+
+    it('does not label an area row while combat is live - it did not lose, it does not apply', () => {
+      game.combats = { active: { started: true } };
+      game.gameOrchestra.musicController.currentContext = { contextEntity: scene1, isOverlay: false, overlayAxis: null };
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.beatenBy).toBeNull();
+    });
+
+    it('does not label a row with no playlist configured', () => {
+      setMockSetting('game-orchestra', 'defaultMusic', { documentName: 'DefaultMusic', data: { 'game-orchestra': { music: {} } } });
+      game.gameOrchestra.musicController.currentContext = { contextEntity: scene1, isOverlay: false, overlayAxis: null };
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.beatenBy).toBeNull();
+    });
+  });
+
+  describe('priority placeholders', () => {
+    it('shows the scene area baseline, matching what resolution would use', () => {
+      const ctx = app._prepareContext({});
+      expect(ctx.sceneDefaults.area.priorityPlaceholder).toBe(CONST.playlistSections.Scene.area.priority);
+    });
+
+    it('shows the scene combat baseline', () => {
+      const ctx = app._prepareContext({});
+      expect(ctx.sceneDefaults.combat.priorityPlaceholder).toBe(CONST.playlistSections.Scene.combat.priority);
+    });
+
+    it('adds the overlay offset for an overlay row', () => {
+      setMockSetting('game-orchestra', 'configuredMoods', [{ id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }]);
+      const ctx = app._prepareContext({});
+      expect(ctx.sceneMoods[0].area.priorityPlaceholder).toBe(CONST.playlistSections.Scene.area.priority + 10);
+    });
+
+    it('leaves the world default at 0, with no scene baseline leaking in', () => {
+      const ctx = app._prepareContext({});
+      expect(ctx.globalDefaults.area.priorityPlaceholder).toBe(0);
+    });
+  });
+
+  describe('scoped mode (opened from a Scene sheet)', () => {
+    // docs/wiki/ux.md UX-3: a scope-specific entry point opens the SAME component
+    // narrowed, never a differently-shaped form. This replaced GameOrchestraConfig's
+    // tabbed modal for scenes (D1).
+    it('pins the selected scene to the scoped one, ignoring the active scene', () => {
+      const scoped = new PlaylistTreeApp({ scopedSceneId: 'sc1' });
+      expect(scoped.selectedSceneId).toBe('sc1');
+      expect(scoped.scopedSceneId).toBe('sc1');
+    });
+
+    it('flags the context as scoped so the picker and global sections hide', () => {
+      const scoped = new PlaylistTreeApp({ scopedSceneId: 'sc1' });
+      expect(scoped._prepareContext({}).isScoped).toBe(true);
+    });
+
+    it('is not scoped by default', () => {
+      expect(app._prepareContext({}).isScoped).toBe(false);
+    });
+
+    it('still builds the same scene rows when scoped - it is a filter, not a different form', () => {
+      const scoped = new PlaylistTreeApp({ scopedSceneId: 'sc1' });
+      const ctx = scoped._prepareContext({});
+      expect(ctx.sceneMoods.length).toBeGreaterThan(0);
+      expect(ctx.scenePhases.length).toBeGreaterThan(0);
+      expect(ctx.sceneDefaults).toBeDefined();
+    });
+
+    it('openScoped creates a scoped window when none is open', () => {
+      PlaylistTreeApp.openScoped(scene1);
+      expect(game.gameOrchestra.playlistTree.scopedSceneId).toBe('sc1');
+    });
+
+    it('openScoped re-points an already-open hub instead of hijacking it into scoped mode', () => {
+      // The GM asked to see this scene, not to have their whole map replaced.
+      const open = new PlaylistTreeApp();
+      open.rendered = true;
+      open.render = vi.fn();
+      open.selectedSceneId = 'global';
+      game.gameOrchestra.playlistTree = open;
+
+      PlaylistTreeApp.openScoped(scene1);
+
+      expect(open.selectedSceneId).toBe('sc1');
+      expect(open.scopedSceneId).toBeNull();
+      expect(open.render).toHaveBeenCalledWith(true);
+    });
+
+    it('ignores a scene with no id rather than opening an empty window', () => {
+      game.gameOrchestra.playlistTree = null;
+      PlaylistTreeApp.openScoped(null);
+      expect(game.gameOrchestra.playlistTree).toBeNull();
+    });
+  });
+
+  describe('priority editing', () => {
+    // Priority used to be reachable only from GameOrchestraConfig, which in turn
+    // never opens for the world default - so a priority conflict between a scene
+    // and the global fallback could not be resolved from any single window
+    // (docs/wiki/ux.md D2).
+    it('writes a scene default priority as a number, not the raw string', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '25', dataset: { contextType: 'area' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
+
+      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority', 25);
+    });
+
+    it('writes a scene overlay priority under the overlay path', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '-5', dataset: { contextType: 'combat', phaseId: 'enrage' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlayPriority(new Event('change'), target);
+
+      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.combat.overlays.enrage.priority', -5);
+    });
+
+    it('keeps an explicit 0 rather than treating it as blank', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '0', dataset: { contextType: 'area' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
+
+      // 0 pins the entry at zero; blank would inherit the section baseline instead.
+      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority', 0);
+      expect(scene1.unsetFlag).not.toHaveBeenCalledWith('game-orchestra', 'music.area.priority');
+    });
+
+    it('unsets the flag when the field is cleared, so the entry inherits again', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '', dataset: { contextType: 'area' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
+
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority');
+    });
+
+    it('writes a global default priority into the defaultMusic setting', async () => {
+      game.gameOrchestra.playlistTree = app;
+      setMockSetting('game-orchestra', 'defaultMusic', { documentName: 'DefaultMusic', data: { 'game-orchestra': { music: {} } } });
+
+      const target = { value: '7', dataset: { contextType: 'combat' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateGlobalDefaultPriority(new Event('change'), target);
+
+      const written = game.settings.set.mock.calls.find((c) => c[1] === 'defaultMusic')[2];
+      expect(written.data['game-orchestra'].music.combat.priority).toBe(7);
+    });
+  });
+
   describe('handleUpdateGlobalOverlay (combat -> phase axis) and handleClearGlobalOverlay', () => {
     it('updates defaultMusic setting with a global phase override', async () => {
       game.gameOrchestra.playlistTree = app;

@@ -4,7 +4,7 @@
 {{#if isTokenPhaseGrid}}
   <div class="game-orchestra-mood-grid flexcol">
     <div class="tree-node token-moods-node {{#if phasesResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="tokenPhases" data-default-collapsed="{{collapsed.phases}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="tokenPhases" data-default-collapsed="{{collapsed.phases}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.phases}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-skull"></i>
@@ -18,7 +18,7 @@
       <div class="tree-node-body mood-grid">
         {{#each phaseCards}}
         <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
             <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
             <i class="{{this.icon}}"></i>
             <span class="mood-label">{{localize this.label}}</span>
@@ -66,7 +66,7 @@
     </div>
 
     <div class="tree-node token-default-node {{#if defaultResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="tokenDefault" data-default-collapsed="{{collapsed.default}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="tokenDefault" data-default-collapsed="{{collapsed.default}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.default}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-image"></i>

@@ -1,4 +1,15 @@
 <div class="game-orchestra-mood-config-container">
+  {{! Moods and phases are one mechanism on two axes (config.mjs#overlayAxes), so they are one
+      window with two tabs rather than two windows - docs/wiki/ux.md UX-1. Core's `sheet-tabs tabs`
+      classes are reused verbatim, matching the per-section overlay strip in music-config.hbs. }}
+  <nav class="sheet-tabs tabs overlay-axis-tabs">
+    {{#each tabs}}
+    <a class="item {{#if this.active}}active{{/if}}" data-action="selectAxis" data-axis="{{this.axis}}">
+      <i class="{{this.icon}}"></i> {{localize this.label}}
+    </a>
+    {{/each}}
+  </nav>
+
   <p class="hint" style="margin-bottom: 12px; color: var(--color-text-dark, #aaa);">{{localize hintKey}}</p>
 
   <div class="mood-list">

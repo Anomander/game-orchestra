@@ -1,38 +1,25 @@
-import { MoodConfigApp, PhaseConfigApp } from './mood-config.mjs';
 import { MoodWidget } from './mood-widget.mjs';
 import { PlaylistTreeApp } from './playlist-tree.mjs';
 import { CONST } from './config.mjs';
-import { log, setDebugEnabled } from './helpers.mjs';
+import { setDebugEnabled } from './helpers.mjs';
+import { setSuppression } from './transport.mjs';
 import { reassertDuck } from './playlist-mix-apply.mjs';
 
 /**
  * Register module settings and configuration menu
  */
 export function registerSettings() {
+  // ONE menu entry, deliberately (docs/wiki/ux.md UX-4): Foundry's settings tab
+  // holds settings, not an app launcher. The mood and phase list editors used to
+  // own two more entries here; they are now the two tabs of a single Overlays
+  // window reached from the hub, which is where a GM is already looking at the
+  // moods and phases those definitions feed.
   game.settings.registerMenu(CONST.moduleId, 'playlistTreeMenu', {
     name: 'GameOrchestra.PlaylistTree.Name',
     label: 'GameOrchestra.PlaylistTree.Label',
     hint: 'GameOrchestra.PlaylistTree.Hint',
-    icon: 'fas fa-sitemap',
+    icon: 'fas fa-music',
     type: PlaylistTreeApp,
-    restricted: true
-  });
-
-  game.settings.registerMenu(CONST.moduleId, 'moodConfigMenu', {
-    name: 'GameOrchestra.Settings.MoodConfig.Name',
-    label: 'GameOrchestra.Settings.MoodConfig.Label',
-    hint: 'GameOrchestra.Settings.MoodConfig.Hint',
-    icon: 'fas fa-sliders-h',
-    type: MoodConfigApp,
-    restricted: true
-  });
-
-  game.settings.registerMenu(CONST.moduleId, 'phaseConfigMenu', {
-    name: 'GameOrchestra.Settings.PhaseConfig.Name',
-    label: 'GameOrchestra.Settings.PhaseConfig.Label',
-    hint: 'GameOrchestra.Settings.PhaseConfig.Hint',
-    icon: 'fas fa-skull',
-    type: PhaseConfigApp,
     restricted: true
   });
 
@@ -272,31 +259,16 @@ export function registerKeybindings() {
 }
 
 /**
- * Toggle area music suppression
+ * Toggle area music suppression - the keybinding's route into the shared
+ * transport action every other host also dispatches through (transport.mjs).
  */
 async function toggleAreaMusic() {
-  const current = game.settings.get(CONST.moduleId, CONST.settings.suppressArea);
-  const target = !current;
-  try {
-    await game.settings.set(CONST.moduleId, CONST.settings.suppressArea, target);
-    log(3, `Successfully toggled area music suppression to: ${target}`);
-  } catch (error) {
-    log(1, `Failed to toggle area music suppression to ${target}:`, error);
-  }
-  ui.controls.initialize();
+  return setSuppression(CONST.settings.suppressArea);
 }
 
 /**
  * Toggle combat music suppression
  */
 async function toggleCombatMusic() {
-  const current = game.settings.get(CONST.moduleId, CONST.settings.suppressCombat);
-  const target = !current;
-  try {
-    await game.settings.set(CONST.moduleId, CONST.settings.suppressCombat, target);
-    log(3, `Successfully toggled combat music suppression to: ${target}`);
-  } catch (error) {
-    log(1, `Failed to toggle combat music suppression to ${target}:`, error);
-  }
-  ui.controls.initialize();
+  return setSuppression(CONST.settings.suppressCombat);
 }

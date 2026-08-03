@@ -1,6 +1,7 @@
 import { CONST } from './config.mjs';
 import { log } from './helpers.mjs';
 import { PlaylistTreeApp } from './playlist-tree.mjs';
+import { suppressionState, setSuppression, resolutionPills } from './transport.mjs';
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -24,6 +25,7 @@ export class MoodWidget extends HandlebarsApplicationMixin(ApplicationV2) {
     actions: {
       setMood: MoodWidget.handleSetMood,
       setPhase: MoodWidget.handleSetPhase,
+      toggleSuppression: MoodWidget.handleToggleSuppression,
       refreshMood: MoodWidget.handleRefreshMood,
       toggleDock: MoodWidget.handleToggleDock,
       toggleCompact: MoodWidget.handleToggleCompact,
@@ -100,6 +102,17 @@ export class MoodWidget extends HandlebarsApplicationMixin(ApplicationV2) {
     const activeMoodObj = configuredMoods.find((m) => m.id === activeMood) || null;
     const activePhaseObj = configuredPhases.find((p) => p.id === activePhase) || null;
 
+    // The transport carries suppression and "what is winning" as well as the axis
+    // strip - these are the three things a GM needs mid-session, and they used to be
+    // spread across this widget, the scene-control bar and the 820px tree
+    // (docs/wiki/ux.md D5/UX-6). Both come from transport.mjs so the bar and this
+    // widget cannot disagree.
+    const suppression = suppressionState().map((control) => ({
+      ...control,
+      title: game.i18n.localize(control.titleKey)
+    }));
+    const pills = resolutionPills(game.scenes?.active || null);
+
     return {
       inCombat,
       activeMood,
@@ -108,6 +121,9 @@ export class MoodWidget extends HandlebarsApplicationMixin(ApplicationV2) {
       activePhase,
       phases,
       activePhaseObj,
+      suppression,
+      activeResolution: pills.active,
+      layerResolution: pills.layer,
       isDocked: !!pos.isDocked
     };
   }
@@ -267,6 +283,22 @@ export class MoodWidget extends HandlebarsApplicationMixin(ApplicationV2) {
     } catch (error) {
       log(1, 'Error setting active phase:', error);
     }
+  }
+
+  /**
+   * Toggle one suppression setting from the widget. Dispatches into the same
+   * transport action the scene-control bar and the keybindings use, which is also
+   * what keeps the bar's own toggle state in step (transport.mjs#setSuppression).
+   */
+  static async handleToggleSuppression(event, target) {
+    event?.preventDefault?.();
+    if (!game.user.isGM) return;
+    const button = target.closest('[data-setting]') || target;
+    const setting = button.dataset?.setting;
+    if (!setting) return;
+    await setSuppression(setting);
+    const widget = game.gameOrchestra?.moodWidget || (this instanceof MoodWidget ? this : null);
+    widget?.render(false);
   }
 
   /**

@@ -5,6 +5,8 @@ import { GameOrchestraConfig } from './app.mjs';
 import { CustomPlaylistEditor } from './custom-playlist-editor.mjs';
 import { PlaylistMixerApp, refreshMixerViews } from './playlist-mixer.mjs';
 import { handleUpdatePlaylistMix, handleUpdatePlaylistSoundMix } from './playlist-mix-apply.mjs';
+import { suppressionState, setSuppression } from './transport.mjs';
+import { PlaylistTreeApp } from './playlist-tree.mjs';
 
 const _loc = (key) => game.i18n.localize(key);
 
@@ -16,30 +18,21 @@ export function getSceneControlButtons(controls) {
   try {
     if (!game.user.isGM) return;
     if (controls.sounds && controls.sounds.tools) {
-      controls.sounds.tools['suppress-area-music'] = {
-        name: 'suppress-area-music',
-        order: 10,
-        title: 'GameOrchestra.Controls.SuppressAreaMusic',
-        icon: 'fas fa-dungeon',
-        toggle: true,
-        visible: true,
-        active: game.settings.get(CONST.moduleId, CONST.settings.suppressArea),
-        onChange: (_event, active) => {
-          game.settings.set(CONST.moduleId, CONST.settings.suppressArea, active);
-        }
-      };
-      controls.sounds.tools['suppress-combat-music'] = {
-        name: 'suppress-combat-music',
-        order: 11,
-        title: 'GameOrchestra.Controls.SuppressCombatMusic',
-        icon: 'fas fa-fist-raised',
-        toggle: true,
-        visible: true,
-        active: game.settings.get(CONST.moduleId, CONST.settings.suppressCombat),
-        onChange: (_event, active) => {
-          game.settings.set(CONST.moduleId, CONST.settings.suppressCombat, active);
-        }
-      };
+      // Built from the shared transport definition rather than spelled out here, so
+      // this bar and the Mood Widget can never disagree about which toggles exist or
+      // what flipping one does (docs/wiki/ux.md UX-2, transport.mjs).
+      for (const control of suppressionState()) {
+        controls.sounds.tools[control.key] = {
+          name: control.key,
+          order: control.order,
+          title: control.titleKey,
+          icon: control.icon,
+          toggle: true,
+          visible: true,
+          active: control.active,
+          onChange: (_event, active) => setSuppression(control.setting, active)
+        };
+      }
       controls.sounds.tools['mood-widget'] = {
         name: 'mood-widget',
         order: 12,
@@ -92,7 +85,10 @@ export function handleSceneConfigRender(app, html) {
     existingFormGroup.insertAdjacentElement('afterend', newFormGroup);
     button.addEventListener('click', (event) => {
       event.preventDefault();
-      new GameOrchestraConfig(app.document).render(true);
+      // Opens the hub narrowed to this scene rather than a second window with a
+      // second layout (docs/wiki/ux.md UX-3/D1). Same cards, same immediate writes,
+      // same drop targets a GM already knows from the unscoped hub.
+      PlaylistTreeApp.openScoped(app.document);
     });
   } catch (error) {
     log(1, 'Error adding scene config button:', error);

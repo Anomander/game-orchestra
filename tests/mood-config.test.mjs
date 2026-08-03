@@ -3,7 +3,7 @@ import { setupFoundryMocks } from './mocks/foundry.mjs';
 
 setupFoundryMocks();
 
-import { MoodConfigApp, PhaseConfigApp } from '../scripts/mood-config.mjs';
+import { MoodConfigApp, PhaseConfigApp, OverlayConfigApp } from '../scripts/mood-config.mjs';
 import { MoodWidget } from '../scripts/mood-widget.mjs';
 import { registerSettings } from '../scripts/settings.mjs';
 import { CONST } from '../scripts/config.mjs';
@@ -234,6 +234,116 @@ describe('PhaseConfigApp', () => {
 
     expect(mockApp.items).toHaveLength(1);
     expect(mockApp.render).not.toHaveBeenCalled();
+  });
+});
+
+describe('OverlayConfigApp - one window, two tabs', () => {
+  beforeEach(() => {
+    setupFoundryMocks();
+  });
+
+  describe('axisOf', () => {
+    it("prefers the live instance's active tab over the class's default axis", () => {
+      // A PhaseConfigApp instance whose user has clicked over to the Moods tab
+      // must edit moods, not phases - the class only chose the *initial* tab.
+      expect(OverlayConfigApp.axisOf({ constructor: PhaseConfigApp, activeAxis: 'mood' })).toBe('mood');
+    });
+
+    it('falls back to the class axis when there is no instance state', () => {
+      expect(OverlayConfigApp.axisOf({ constructor: PhaseConfigApp })).toBe('phase');
+      expect(OverlayConfigApp.axisOf({ constructor: MoodConfigApp })).toBe('mood');
+    });
+
+    it('falls back to mood for an unrecognized axis rather than throwing', () => {
+      expect(OverlayConfigApp.axisOf({ activeAxis: 'nonsense' })).toBe('mood');
+      expect(OverlayConfigApp.axisOf(undefined)).toBe('mood');
+    });
+  });
+
+  describe('handleSelectAxis', () => {
+    it('switches the active tab and re-renders', () => {
+      const mockApp = { constructor: MoodConfigApp, activeAxis: 'mood', render: vi.fn(), _harvestActiveAxis: vi.fn() };
+      const event = { preventDefault: vi.fn() };
+
+      OverlayConfigApp.handleSelectAxis.call(mockApp, event, { dataset: { axis: 'phase' } });
+
+      expect(mockApp.activeAxis).toBe('phase');
+      expect(mockApp.render).toHaveBeenCalledWith(false);
+    });
+
+    it('harvests the outgoing tab before switching, so typed edits are not lost', () => {
+      const mockApp = { constructor: MoodConfigApp, activeAxis: 'mood', render: vi.fn(), _harvestActiveAxis: vi.fn() };
+
+      OverlayConfigApp.handleSelectAxis.call(mockApp, { preventDefault: vi.fn() }, { dataset: { axis: 'phase' } });
+
+      expect(mockApp._harvestActiveAxis).toHaveBeenCalled();
+    });
+
+    it('is a no-op when the clicked tab is already active', () => {
+      const mockApp = { constructor: MoodConfigApp, activeAxis: 'mood', render: vi.fn(), _harvestActiveAxis: vi.fn() };
+
+      OverlayConfigApp.handleSelectAxis.call(mockApp, { preventDefault: vi.fn() }, { dataset: { axis: 'mood' } });
+
+      expect(mockApp.render).not.toHaveBeenCalled();
+      expect(mockApp._harvestActiveAxis).not.toHaveBeenCalled();
+    });
+
+    it('ignores an unknown axis', () => {
+      const mockApp = { constructor: MoodConfigApp, activeAxis: 'mood', render: vi.fn(), _harvestActiveAxis: vi.fn() };
+
+      OverlayConfigApp.handleSelectAxis.call(mockApp, { preventDefault: vi.fn() }, { dataset: { axis: 'colour' } });
+
+      expect(mockApp.activeAxis).toBe('mood');
+      expect(mockApp.render).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('formHandler saving both tabs', () => {
+    it('also writes the tab that is not visible, whose edits live only in itemsByAxis', async () => {
+      const mockApp = {
+        constructor: MoodConfigApp,
+        activeAxis: 'mood',
+        itemsByAxis: { mood: [], phase: [{ id: 'p9', label: 'Ninth', icon: 'fas fa-fire', color: '#f44336' }] },
+        close: vi.fn()
+      };
+      const formData = { object: { 'items.0.id': 'calm', 'items.0.label': 'Calm', 'items.0.icon': 'fas fa-leaf', 'items.0.color': '#4caf50' } };
+
+      await MoodConfigApp.formHandler.call(mockApp, new Event('submit'), null, formData);
+
+      expect(game.settings.set).toHaveBeenCalledWith(CONST.moduleId, CONST.settings.configuredMoods, [
+        { id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }
+      ]);
+      expect(game.settings.set).toHaveBeenCalledWith(CONST.moduleId, CONST.settings.configuredPhases, [
+        { id: 'p9', label: 'Ninth', icon: 'fas fa-fire', color: '#f44336' }
+      ]);
+    });
+
+    it('leaves the other tab alone when it matches what is already stored', async () => {
+      setMockSetting('game-orchestra', 'configuredPhases', CONST.defaultPhases);
+      const mockApp = {
+        constructor: MoodConfigApp,
+        activeAxis: 'mood',
+        itemsByAxis: { mood: [], phase: foundry.utils.deepClone(CONST.defaultPhases) },
+        close: vi.fn()
+      };
+      const formData = { object: { 'items.0.id': 'calm', 'items.0.label': 'Calm' } };
+
+      await MoodConfigApp.formHandler.call(mockApp, new Event('submit'), null, formData);
+
+      const phaseWrites = game.settings.set.mock.calls.filter((c) => c[1] === CONST.settings.configuredPhases);
+      expect(phaseWrites).toEqual([]);
+    });
+
+    it('writes only the active axis when driven with a bare single-axis context', async () => {
+      const mockApp = { constructor: PhaseConfigApp, close: vi.fn() };
+      const formData = { object: { 'items.0.id': 'p2', 'items.0.label': 'Phase Two' } };
+
+      await PhaseConfigApp.formHandler.call(mockApp, new Event('submit'), null, formData);
+
+      const settingsWritten = game.settings.set.mock.calls.map((c) => c[1]);
+      expect(settingsWritten).toContain(CONST.settings.configuredPhases);
+      expect(settingsWritten).not.toContain(CONST.settings.configuredMoods);
+    });
   });
 });
 

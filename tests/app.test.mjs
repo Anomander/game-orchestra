@@ -330,7 +330,7 @@ describe('GameOrchestraConfig', () => {
   describe('handleToggleSection', () => {
     it('toggles a section key between expanded/collapsed and re-renders', () => {
       const renderSpy = vi.spyOn(app, 'render').mockImplementation(() => {});
-      const target = { dataset: { section: 'tokenPhases', defaultCollapsed: 'false' }, closest: () => null };
+      const target = { dataset: { collapseKey: 'tokenPhases', defaultCollapsed: 'false' }, closest: () => null };
 
       GameOrchestraConfig.handleToggleSection.call(app, { preventDefault: vi.fn() }, target);
       expect(app.collapsedSections.has('tokenPhases')).toBe(true);
@@ -338,6 +338,20 @@ describe('GameOrchestraConfig', () => {
       GameOrchestraConfig.handleToggleSection.call(app, { preventDefault: vi.fn() }, target);
       expect(app.expandedSections.has('tokenPhases')).toBe(true);
       expect(renderSpy).toHaveBeenCalled();
+    });
+
+    it('reads data-collapse-key, never data-section', () => {
+      // data-section on this template means the MUSIC section ('area'/'combat') and
+      // sits on the context boxes. Sharing the attribute meant a closest() lookup
+      // could walk out of a card header into a binding box and return 'combat' as a
+      // collapse key.
+      const renderSpy = vi.spyOn(app, 'render').mockImplementation(() => {});
+      const target = { dataset: { section: 'combat', defaultCollapsed: 'false' }, closest: () => null };
+
+      GameOrchestraConfig.handleToggleSection.call(app, { preventDefault: vi.fn() }, target);
+
+      expect(app.collapsedSections.has('combat')).toBe(false);
+      expect(renderSpy).not.toHaveBeenCalled();
     });
   });
 

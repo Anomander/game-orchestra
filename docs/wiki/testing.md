@@ -1,7 +1,10 @@
 # Testing
 
-Vitest, node environment, no jsdom. **1413 tests across 33 files, ~2s.** CI runs `npm test` on
+Vitest, node environment, no jsdom. **1591 tests across 38 files, ~3s.** CI runs `npm test` on
 push and PR to `main` (Node 20).
+
+This page covers the unit tier. Audio is verified separately, against a real pinned Foundry - see
+[integration-testing.md](integration-testing.md).
 
 ```bash
 npm test              # full run
@@ -169,6 +172,8 @@ already shipped:
 | `engine-clock.test.mjs` / `graph-drop.test.mjs` | 10 each | Scheduler / drop matrix |
 | `audio-end-watcher.test.mjs`, `custom-playlist-connection-render.test.mjs`, `custom-playlist-editor-template.test.mjs` | 9 each | — |
 | `native-mode-graph.test.mjs` | 8 | — |
+| `itest-analysis.test.mjs` | 17 | The audio harness's timeline analysis, against synthetic frames |
+| `itest-goertzel.test.mjs` | 13 | The audio harness's amplitude detector and fixture generator, numerically |
 | `lang.test.mjs`, `config.test.mjs`, `game-orchestra.test.mjs`, `settings.test.mjs`, `module-manifest.test.mjs` | 2–4 | Structural guards |
 
 ---
@@ -181,9 +186,11 @@ Deliberate gaps — don't assume a green suite proves these:
   verified once by hand against a headless DOM (`docs/graph-editor-panel-plan.md`, and the bridge's
   own header comment). Changes to Drawflow interop need manual verification in Foundry.
 - **Real audio.** No `AudioContext`. Timing, fades, and `'end'` semantics are modeled, not
-  exercised.
+  exercised **here** - that is what the [audio integration tier](integration-testing.md) is for.
 - **Foundry version compatibility.** `hooks.mjs` flags one specific unknown: the
   `renderPlaylistConfig` hook name and the `select[name="mode"]` anchor have **not** been verified
-  against a live Foundry v14 build.
-- **Multi-client sync / GM handoff.** Only `isHeadGM()` gating is unit-tested.
+  against a live Foundry v14 build. The [integration tier](integration-testing.md) runs against
+  the version in `module.json`'s `compatibility.verified`.
+- **Multi-client sync / GM handoff.** Only `isHeadGM()` gating is unit-tested. The two-client
+  specs in `itest/specs/mixer-multiclient.spec.mjs` cover the mixer's everywhere-rule.
 - **CSS.** Only load order is tested.

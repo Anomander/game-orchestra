@@ -1,0 +1,72 @@
+# Pinned Foundry instance for the audio integration tier.
+#
+# Version pinning is the point of this file. `module.json` declares `compatibility.verified`, and
+# that string is the single source of truth: `itest/scripts/up.sh` reads it and exports
+# FOUNDRY_VERSION, so bumping the manifest is what moves the integration target. A hard-coded
+# version here would let the two drift, and the suite would keep certifying a version the module
+# no longer claims to support.
+#
+# Foundry is licensed software and cannot be redistributed, so the image downloads it at start
+# using credentials supplied through the environment. Nothing licensed is ever committed here.
+
+services:
+  foundry:
+    image: felddy/foundryvtt:${FOUNDRY_VERSION:-14}
+    hostname: foundry
+    init: true
+    restart: "no"
+    # Run as root, at the Docker level rather than through the image's FOUNDRY_UID (deprecated in
+    # v14 images and silently ignored).
+    #
+    # Docker creates the parent directories of the nested bind mounts below - /data/Data/modules
+    # and /data/Data/gameorchestra-itest - as root:root before the entrypoint runs. Foundry's
+    # image user (`node`) then cannot create their siblings, and dies on
+    # `EACCES: mkdir '/data/Data/systems'` before it ever serves a request. Chowning from the
+    # entrypoint cannot help: the daemon makes those directories, not the container.
+    #
+    # This container exists for the length of a test run and is torn down with `down -v`, so root
+    # is the right trade here. Do not copy it into anything that outlives a CI job.
+    user: "0:0"
+    volumes:
+      # Persistent user data. Keeping it a named volume rather than a bind mount means the
+      # bootstrapped world survives between local runs (world creation is the slow part) while CI
+      # starts from empty every time.
+      - foundry-data:/data
+      # The module under test, live from the working tree - no packaging step, which matches how
+      # the module actually ships (no bundler, native ESM straight to the browser).
+      - ../..:/data/Data/modules/game-orchestra:ro
+      # The generated tone bank, addressable inside the world as `gameorchestra-itest/*.wav`.
+      - ../fixtures/out:/data/Data/gameorchestra-itest:ro
+      # The downloaded Foundry release, kept on the host so it survives `down -v`. Without this the
+      # cache lives inside the named volume, and every teardown throws away a 140 MB download that
+      # can only be re-fetched with licence credentials - which turns a routine reset into a
+      # blocked one for anyone who does not have them to hand.
+      - ../.cache:/data/container_cache
+    environment:
+      # Supply ONE of these pairs. In CI they come from repository secrets; forks have neither,
+      # which is why the workflow skips rather than fails for them.
+      - FOUNDRY_USERNAME=${FOUNDRY_USERNAME:-}
+      - FOUNDRY_PASSWORD=${FOUNDRY_PASSWORD:-}
+      - FOUNDRY_RELEASE_URL=${FOUNDRY_RELEASE_URL:-}
+      # A known admin key, so bootstrap can drive /setup without an interactive first-run.
+      - FOUNDRY_ADMIN_KEY=${FOUNDRY_ADMIN_KEY:-itest-admin}
+      - FOUNDRY_MINIFY_STATIC_FILES=true
+      - FOUNDRY_TELEMETRY=false
+      # Deliberately false: this lets the entrypoint (re)write admin.txt from FOUNDRY_ADMIN_KEY on
+      # every start, so the admin password is always the one bootstrap authenticates with. With it
+      # true, a volume created by an earlier run keeps its old key and admin auth fails with a
+      # bounce back to /auth that looks like nothing at all.
+      - CONTAINER_PRESERVE_CONFIG=false
+    ports:
+      - "${FOUNDRY_PORT:-30000}:30000"
+    healthcheck:
+      # The container is "up" long before Foundry answers HTTP; without this the first spec races
+      # the server and fails on a navigation timeout that looks like a module bug.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:30000/api/status', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+volumes:
+  foundry-data:

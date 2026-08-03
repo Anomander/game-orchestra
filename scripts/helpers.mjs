@@ -157,6 +157,30 @@ export function getAvailablePlaylists() {
  * @param {'area'|'combat'} type
  * @returns {object|null|undefined}
  */
+/**
+ * The inherent standing of a scope's section, before any stored override.
+ *
+ * This is the hierarchy the module actually promises - a token's theme outranks the
+ * scene it stands in, which outranks the world default - expressed as the numbers in
+ * `config.mjs#playlistSections`. The world default has no entry there and sits at 0,
+ * below both scene baselines, which is exactly what "fallback" means.
+ *
+ * Applied at resolution time by `PlaylistContext._extractSectionConfig`. Nothing
+ * writes it into a flag; a stored `priority` is a deliberate *override* of this, and
+ * the two must not be conflated (see that method's comment).
+ * @param {Document|object} document - Source document or data model
+ * @param {'area'|'combat'} type
+ * @returns {number}
+ */
+export function sectionBaselinePriority(document, type) {
+  const category = getDocumentCategory(document);
+  if (category === 'DefaultMusic') return 0;
+  const documentName = category === 'PrototypeToken' ? 'Token' : document?.documentName;
+  // Actors speak for their prototype token, so they share the Token baseline.
+  const key = documentName === 'Actor' ? 'Token' : documentName;
+  return CONST.playlistSections?.[key]?.[type]?.priority ?? 0;
+}
+
 export function readMusicSection(document, type) {
   const category = getDocumentCategory(document);
   if (category === 'Document') return document.getFlag(CONST.moduleId, `music.${type}`) || null;
@@ -383,12 +407,21 @@ export class PlaylistContext {
    * @returns {{playlistId: string|null, trackId: string|null, priority: number, isOverlay: boolean}}
    * @private
    */
-  static _extractSectionConfig(section, overlayId) {
-    if (!section) return { playlistId: null, trackId: null, priority: 0, isOverlay: false };
+  static _extractSectionConfig(section, overlayId, baseline = 0) {
+    if (!section) return { playlistId: null, trackId: null, priority: baseline, isOverlay: false };
     const overlay = (overlayId && section.overlays?.[overlayId]?.playlist) ? section.overlays[overlayId] : null;
     const isOverlay = !!overlay;
     const config = overlay || section;
-    const defaultPriority = section.priority ?? 0;
+    // `baseline` is the scope's inherent standing - scene area -20, scene combat -15,
+    // token combat +20 (config.mjs#playlistSections), 0 for the world default. It is
+    // applied HERE, at resolution time, rather than being written into a flag when a
+    // binding happens to be created by drag-and-drop.
+    //
+    // It used to be the latter, and only the drop path did it: a binding made through
+    // the tree's dropdown stored no priority and therefore resolved at 0, while a
+    // visually identical one made by dragging stored -20. Two bindings that looked
+    // the same resolved differently, and nothing on screen explained it.
+    const defaultPriority = section.priority ?? baseline;
     const overlayOffset = isOverlay ? 10 : 0;
     const basePriority = defaultPriority + overlayOffset;
     const priority = config.priority ?? basePriority;
@@ -427,7 +460,7 @@ export class PlaylistContext {
       return null;
     }
 
-    const { playlistId, trackId, priority, isOverlay } = this._extractSectionConfig(section, overlayId);
+    const { playlistId, trackId, priority, isOverlay } = this._extractSectionConfig(section, overlayId, sectionBaselinePriority(document, type));
     const playlist = playlistId ? game.playlists.get(playlistId) : null;
 
     if (!playlist) {

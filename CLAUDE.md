@@ -13,9 +13,10 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **1413 tests, 33 files, all passing.** ~2s. |
+| `npm test` | Full vitest suite. Baseline: **1591 tests, 38 files, all passing.** ~3s. |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
+| `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~6 min, 12 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
 
 There is **no build step, no bundler, no TypeScript, and no linter.** `scripts/*.mjs` ships
 verbatim to the browser as native ESM. `node --check <file>` is the fastest syntax check.
@@ -77,9 +78,11 @@ code it guards, update the comment to match.
 | [graph-engine.md](docs/wiki/graph-engine.md) | Touching the token-walk engine, node types, or concurrency |
 | [editor.md](docs/wiki/editor.md) | Touching the Drawflow graph editor or any ApplicationV2 window |
 | [mixer.md](docs/wiki/mixer.md) | Touching volume, mute, fades, the crossfade chain, or the `game-orchestra.mix` flag |
+| [ux.md](docs/wiki/ux.md) | **Adding, moving, or renaming any UI surface** — the five jobs + UX-1–UX-9 principles |
 | [node-anatomy.md](docs/wiki/node-anatomy.md) | **Adding a node type**, or putting anything new on a node |
 | [module-map.md](docs/wiki/module-map.md) | Locating code — file-by-file index with purity notes |
 | [testing.md](docs/wiki/testing.md) | Writing or fixing tests |
+| [integration-testing.md](docs/wiki/integration-testing.md) | **Touching anything under `itest/`**, or before trusting a green suite about playback |
 | [playbook.md](docs/wiki/playbook.md) | Step-by-step recipes for common change types |
 
 ---

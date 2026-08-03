@@ -23,6 +23,22 @@
     {{/if}}
   </div>
 
+  {{! What is actually winning, and any additive layer over it. The same sentence the
+      hub shows, from the same builder (transport.mjs) - UX-7: a surface that shows a
+      binding shows whether it is the one being heard. }}
+  {{#if activeResolution}}
+  <div class="mood-widget-resolution" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">
+    <span class="active-dot">●</span>
+    <span class="active-text">{{activeResolution.label}}</span>
+  </div>
+  {{/if}}
+  {{#if layerResolution}}
+  <div class="mood-widget-resolution layer" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.LayerTooltip'}}">
+    <span class="active-dot"><i class="fas fa-layer-group"></i></span>
+    <span class="active-text">{{layerResolution.label}}</span>
+  </div>
+  {{/if}}
+
   {{#if inCombat}}
   <div class="mood-widget-axis mood-widget-axis-primary">
     <div class="mood-widget-pills">
@@ -46,4 +62,18 @@
     </div>
   </div>
   {{/if}}
+
+  {{! Suppression lives here as well as on the scene-control bar, because this is the
+      surface that is actually open during play (UX-6). Both render the same
+      transport.mjs descriptors and dispatch the same action - never a second copy of
+      the behaviour (UX-2). }}
+  <div class="mood-widget-suppression">
+    {{#each suppression}}
+    <button type="button" class="suppression-toggle {{#if this.active}}active{{/if}}"
+            data-action="toggleSuppression" data-setting="{{this.setting}}"
+            data-tooltip="{{this.title}}" aria-pressed="{{this.active}}">
+      <i class="{{this.icon}}"></i>
+    </button>
+    {{/each}}
+  </div>
 </div>

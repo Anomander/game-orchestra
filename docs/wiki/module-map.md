@@ -12,16 +12,16 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | File | ~LoC | Purpose |
 |---|---|---|
 | `scripts/game-orchestra.mjs` | 63 | Entry point. Builds `game.gameOrchestra`, registers settings/keybindings, preloads templates, wires every hook. |
-| `scripts/hooks.mjs` | 384 | All hook handlers. Button injection into Scene/Token/Playlist config; combat/scene/flag change → `playCurrentTrack()`; phase reset on `deleteCombat` (O9). |
+| `scripts/hooks.mjs` | 375 | All hook handlers. Button injection into Scene/Token/Playlist config (Scene opens the **scoped hub**); scene-control suppression toggles built from `transport.mjs`; combat/scene/flag change → `playCurrentTrack()`; phase reset on `deleteCombat` (O9). |
 | `scripts/config.mjs` | 49 | `CONST`: module id, setting keys, default moods/phases, baseline section priorities, `sectionAxis`/`overlayAxes` (O1/O3). **Pure.** |
-| `scripts/settings.mjs` | 277 | Setting + keybinding registration, `onChange` handlers, suppression toggles. `activePhase`/`configuredPhases` mirror `activeMood`/`configuredMoods` exactly. |
+| `scripts/settings.mjs` | 290 | Setting + keybinding registration, `onChange` handlers, suppression toggles. **Exactly one `registerMenu` entry** (docs/wiki/ux.md UX-4). `activePhase`/`configuredPhases` mirror `activeMood`/`configuredMoods` exactly. |
 
 ## Playback core
 
 | File | ~LoC | Purpose |
 |---|---|---|
 | `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layer (`_layerEngine`, a second root engine beside `_customEngine`). |
-| `scripts/helpers.mjs` | 525 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `log`. The Foundry-touching side of several pure modules. |
+| `scripts/helpers.mjs` | 525 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `sectionBaselinePriority()` (the scope hierarchy, applied at resolution time — never written to a flag), `log`. The Foundry-touching side of several pure modules. |
 
 ## Graph engine
 
@@ -62,14 +62,24 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/playlist-mix.mjs` | 254 | The mix model: `effectiveVolume()`, `clampVolume()`, `normalizeMix()`, `resolveCrossfadeMs()` (the three-link chain), `applyGroupGain()`, `coerceDuckFactor()`. **Pure.** |
 | `scripts/playlist-mix-apply.mjs` | 245 | Applies a mix to live audio, holds session solo state, and reads the `activeDuck` world setting (`duckFactorFor`, `reassertDuck`). **Runs on every client** — the one part of the module that is not head-GM-only. |
 
+## Shared UI cores
+
+Host-agnostic modules owning *behaviour* that more than one surface needs, so no surface carries a
+second copy of it (docs/wiki/ux.md UX-2). `playlist-mixer-controller.mjs` above is the third.
+
+| File | ~LoC | Purpose |
+|---|---|---|
+| `scripts/binding-store.mjs` | 210 | **The write half of J1 (Bind).** `BindingStore` = `{get, apply(plan)}` over one backend — `documentFlagStore` (Scene/Token flags), `updateObjectStore` (the Token/PrototypeToken `updateObject` path), `globalSettingStore` (`defaultMusic`). Operations on top: `applyBindingPlaylist` / `applyBindingTrack` / `applyBindingPriority` / `clearBindingOverlay`. **Writes are whole plans, never per-path** — see the typedef. Ops are pure given a store. |
+| `scripts/transport.mjs` | 155 | **J5 (Perform).** `SUPPRESSION_CONTROLS` + `suppressionState()` + `setSuppression()` (shared by the Mood Widget, the scene-control bar and the keybindings), `describeResolution()` and `isBindingEligible()` — both **pure**, emitting i18n keys — plus `resolutionPills()` for the two status pills the hub and the widget both show. |
+
 ## Other UI
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/app.mjs` | 664 | `GameOrchestraConfig` — per-scene/token music config. Token documents render a phase-only grid (`isTokenPhaseGrid`); Scene renders mood tabs for area and phase tabs for combat. |
-| `scripts/playlist-tree.mjs` | 748 | `PlaylistTreeApp` — every scene's assignments in one tree, mood and phase rows both. |
+| `scripts/app.mjs` | 660 | `GameOrchestraConfig` — **token/prototype-token** music config, and the only home for `exclusive`/`duck`. Renders a phase card grid (`isTokenPhaseGrid`); writes through `binding-store.mjs`. Non-modal. Scenes now open the scoped hub instead (`hooks.mjs`); the Scene tabbed layout in `music-config.hbs` is vestigial. |
+| `scripts/playlist-tree.mjs` | 820 | `PlaylistTreeApp` — the hub: every scene's assignments in one tree, mood and phase rows both, plus per-entry **priority**. `_ENTRY_SPECS` × `_handleEntryAction` generate all sixteen update/clear handlers from three axes (scope, field, overlay-scoped). |
 | `scripts/mood-widget.mjs` | 351 | `MoodWidget` — dockable switcher: moods when idle, phases during combat, showing only the active axis. |
-| `scripts/mood-config.mjs` | 252 | `OverlayConfigApp` base class + `MoodConfigApp`/`PhaseConfigApp` subclasses — one small app, two axes, structurally identical. Refuses to delete the axis's currently active entry. |
+| `scripts/mood-config.mjs` | 330 | `OverlayConfigApp` — the world's overlay dictionary as **one window with a Moods tab and a Phases tab**. `MoodConfigApp`/`PhaseConfigApp` remain as doors sharing its `id`, choosing only the opening tab. Holds both lists in `itemsByAxis`; one Save commits both. Refuses to delete the axis's currently active entry. |
 | `scripts/app-mixins.mjs` | 113 | Shared ApplicationV2 plumbing + `dispatchChangeAction()`. |
 
 ## Assets
@@ -82,6 +92,28 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/vendor/drawflow.min.*` | Vendored UMD build + CSS. Read `scripts/vendor/README.md` before touching. |
 | `module.json` | Manifest. Script/style **order is load-bearing** and test-guarded. |
 
+## Integration tier (`itest/`)
+
+Separate package, separate `node_modules` — Playwright plus a browser is ~400 MB and must not
+weigh on `npm test`. Full design in [integration-testing.md](integration-testing.md).
+
+| Path | Purity | Notes |
+|---|---|---|
+| `itest/harness/tones.mjs` | **pure** | The fixture tone table, audibility floor, harmonic guard. Solved, not chosen — see the file header. |
+| `itest/harness/goertzel.mjs` | **pure** | Amplitude detector. **Shared with the worklet by source concatenation**, so no imports and no `export class`. |
+| `itest/harness/analysis.mjs` | **pure** | Segments, entry order, crossfade, level ratios, ASCII timeline. |
+| `itest/fixtures/generate.mjs` | node | Renders the tone bank to WAV. Fixtures are generated, never committed. |
+| `itest/harness/worklet-source.mjs` | node | Assembles the worklet source and validates the `export` strip. |
+| `itest/harness/probe-init.js` | browser | Patches `AudioNode.prototype.connect` before any page script. Classic script, no imports. |
+| `itest/harness/probe-worklet.js` | worklet | The processor. **Not standalone** — `goertzel.mjs` is prepended. |
+| `itest/harness/session.mjs` | Playwright | `gm`/`player` fixtures, probe health, `record*`. |
+| `itest/harness/foundry-api.mjs` | Playwright | World provisioning via Foundry's document API — never via the module's UI. |
+| `itest/harness/expect-audio.mjs` | Playwright | The assertions specs call. |
+| `itest/specs/*.spec.mjs` | Playwright | Scenarios: combat transitions, graph playback, ducking, two-client mixer. |
+
+The first four are exercised by the **main** vitest suite (`tests/itest-{analysis,goertzel}.test.mjs`).
+Keep them pure — that is the only reason the harness's own correctness is knowable.
+
 ## Docs
 
 | Path | Status |
@@ -93,6 +125,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `docs/graph-editor-panel-plan.md` | **Archived plan.** Cited as `D2`, `D8`, `HR-A`–`HR-D`. Do not move or rename. |
 | `docs/custom-playlist-plan.md` | **Missing.** Cited by ~16 comments. Reconstructed in [invariants.md](invariants.md). |
 | `docs/playlist-mixer-plan.md` | **Archived plan.** The mixer's design; implemented. |
+| `itest/README.md` | Quickstart for the audio tier; the reasoning lives in the wiki page. |
 
 ---
 

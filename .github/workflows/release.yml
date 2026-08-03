@@ -9,7 +9,29 @@ env:
   REPO_URL: https://github.com/${{ github.repository }}
 
 jobs:
+  # The audio integration tier, run against the tagged source before anything is published.
+  #
+  # A release is the one moment where "the unit suite is green" is not enough: publishing pushes
+  # the version to the Foundry Package API, which lists it publicly for every user's updater. That
+  # is not a commit you can quietly amend. So the tier runs first, and `build` waits for it.
+  #
+  # `require_credentials: true` makes a missing licence secret a hard failure rather than a skip -
+  # a gate that silently passes when it cannot run certifies nothing. To ship without it (the
+  # Foundry download being unavailable, say), set the `SKIP_AUDIO_GATE` repository variable to
+  # 'true'; that is deliberately a visible, auditable action rather than a quiet fallback.
+  audio:
+    if: vars.SKIP_AUDIO_GATE != 'true'
+    uses: ./.github/workflows/integration.yml
+    secrets: inherit
+    with:
+      require_credentials: true
+
   build:
+    needs: audio
+    # `needs` alone would skip the release when the gate is skipped, which is right for a missing
+    # gate but wrong for a deliberate override - hence `always()` plus an explicit check that the
+    # gate either passed or was intentionally turned off.
+    if: always() && (needs.audio.result == 'success' || vars.SKIP_AUDIO_GATE == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,6 +110,27 @@ jobs:
             -x "*.lock" \
             -x "package*.json" \
             -x "node_modules/*"
+
+      # The audio gate tests the working tree; the release ships a zip built from the explicit
+      # file list above. Those are not the same thing: a file added to module.json but forgotten
+      # in that list passes every test and ships a module that 404s on load. Verify that every
+      # path the manifest declares is actually inside the archive.
+      - name: Verify the zip contains everything module.json declares
+        run: |
+          MISSING=0
+          CONTENTS=$(unzip -Z1 "${{ env.ZIP_NAME }}")
+          for path in $(jq -r '[.esmodules[]?, .scripts[]?, .styles[]?, (.languages[]?.path)] | .[]' module.json); do
+            if ! grep -qxF "$path" <<< "$CONTENTS"; then
+              echo "::error::module.json declares '$path', but it is not in ${{ env.ZIP_NAME }}"
+              MISSING=1
+            fi
+          done
+          if [[ "$MISSING" == "1" ]]; then
+            echo "Archive contents were:"
+            echo "$CONTENTS"
+            exit 1
+          fi
+          echo "All manifest-declared paths are present in the archive."
 
       # Fetch existing release body if it exists
       - name: Fetch Release Body

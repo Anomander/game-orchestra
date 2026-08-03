@@ -1,0 +1,20 @@
+{
+  "name": "game-orchestra-itest",
+  "private": true,
+  "type": "module",
+  "description": "Audio integration tier. Deliberately a separate package: Playwright and its browser download are ~400 MB, and the module's own suite must stay a two-second `npm test` with two dev dependencies.",
+  "scripts": {
+    "fixtures": "node fixtures/generate.mjs",
+    "up": "bash scripts/up.sh",
+    "down": "docker compose -f docker/docker-compose.yml down -v",
+    "bootstrap": "node harness/bootstrap-world.mjs",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report report",
+    "ci": "npm run fixtures && npm run up && npm run bootstrap && npm test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0"
+  }
+}

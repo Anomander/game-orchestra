@@ -1,6 +1,7 @@
 <div class="game-orchestra-playlist-tree standard-form flexcol">
   <!-- Top Bar: Scene Selector & Active Resolution Status -->
   <div class="tree-header-bar flexrow">
+    {{#unless isScoped}}
     <div class="form-group flexrow">
       <label><i class="fas fa-map-marker-alt"></i> {{localize "GameOrchestra.PlaylistTree.Scene"}}:</label>
       <select class="scene-picker-select" data-change-action="selectScene">
@@ -12,6 +13,7 @@
         {{/each}}
       </select>
     </div>
+    {{/unless}}
     {{#if activeResolutionInfo}}
     <div class="active-resolution-pill" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">
       <span class="active-dot">●</span>
@@ -91,6 +93,20 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
+                {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{#if area.beatenBy}}
+                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
+                {{/if}}
+                <details class="advanced-disclosure">
+                  <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                  <div class="priority-row flexrow">
+                    <label>{{localize "GameOrchestra.Priority"}}</label>
+                    <input type="number" class="priority-input" data-change-action="updateSceneOverlayPriority" data-mood-id="{{this.moodId}}" data-context-type="area"
+                           value="{{area.priority}}" placeholder="{{area.priorityPlaceholder}}"
+                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  </div>
+                </details>
                 {{/if}}
               </div>
             </div>
@@ -163,6 +179,20 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
+                {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{#if combat.beatenBy}}
+                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
+                {{/if}}
+                <details class="advanced-disclosure">
+                  <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                  <div class="priority-row flexrow">
+                    <label>{{localize "GameOrchestra.Priority"}}</label>
+                    <input type="number" class="priority-input" data-change-action="updateSceneOverlayPriority" data-phase-id="{{this.phaseId}}" data-context-type="combat"
+                           value="{{combat.priority}}" placeholder="{{combat.priorityPlaceholder}}"
+                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  </div>
+                </details>
                 {{/if}}
               </div>
             </div>
@@ -227,6 +257,20 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
+              {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{#if sceneDefaults.area.beatenBy}}
+              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.area.beatenBy}}</p>
+              {{/if}}
+              <details class="advanced-disclosure">
+                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                <div class="priority-row flexrow">
+                  <label>{{localize "GameOrchestra.Priority"}}</label>
+                  <input type="number" class="priority-input" data-change-action="updateSceneDefaultPriority" data-context-type="area"
+                         value="{{sceneDefaults.area.priority}}" placeholder="{{sceneDefaults.area.priorityPlaceholder}}"
+                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                </div>
+              </details>
               {{/if}}
             </div>
           </div>
@@ -267,6 +311,20 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
+              {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{#if sceneDefaults.combat.beatenBy}}
+              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.combat.beatenBy}}</p>
+              {{/if}}
+              <details class="advanced-disclosure">
+                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                <div class="priority-row flexrow">
+                  <label>{{localize "GameOrchestra.Priority"}}</label>
+                  <input type="number" class="priority-input" data-change-action="updateSceneDefaultPriority" data-context-type="combat"
+                         value="{{sceneDefaults.combat.priority}}" placeholder="{{sceneDefaults.combat.priorityPlaceholder}}"
+                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                </div>
+              </details>
               {{/if}}
             </div>
           </div>
@@ -276,6 +334,8 @@
     </div>
     {{/if}}
 
+    {{! Hidden when scoped to one scene: the world defaults are not this document's business. }}
+    {{#unless isScoped}}
     <!-- 4 & 5. Global Overrides - Area (moods) / Combat (phases), side by side -->
     <div class="tree-columns flexrow">
     <div class="tree-column area-column">
@@ -338,6 +398,20 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
+                {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{#if area.beatenBy}}
+                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
+                {{/if}}
+                <details class="advanced-disclosure">
+                  <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                  <div class="priority-row flexrow">
+                    <label>{{localize "GameOrchestra.Priority"}}</label>
+                    <input type="number" class="priority-input" data-change-action="updateGlobalOverlayPriority" data-mood-id="{{this.moodId}}" data-context-type="area"
+                           value="{{area.priority}}" placeholder="{{area.priorityPlaceholder}}"
+                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  </div>
+                </details>
                 {{/if}}
               </div>
             </div>
@@ -410,6 +484,20 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
+                {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{#if combat.beatenBy}}
+                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
+                {{/if}}
+                <details class="advanced-disclosure">
+                  <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                  <div class="priority-row flexrow">
+                    <label>{{localize "GameOrchestra.Priority"}}</label>
+                    <input type="number" class="priority-input" data-change-action="updateGlobalOverlayPriority" data-phase-id="{{this.phaseId}}" data-context-type="combat"
+                           value="{{combat.priority}}" placeholder="{{combat.priorityPlaceholder}}"
+                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  </div>
+                </details>
                 {{/if}}
               </div>
             </div>
@@ -474,6 +562,20 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
+              {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{#if globalDefaults.area.beatenBy}}
+              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.area.beatenBy}}</p>
+              {{/if}}
+              <details class="advanced-disclosure">
+                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                <div class="priority-row flexrow">
+                  <label>{{localize "GameOrchestra.Priority"}}</label>
+                  <input type="number" class="priority-input" data-change-action="updateGlobalDefaultPriority" data-context-type="area"
+                         value="{{globalDefaults.area.priority}}" placeholder="{{globalDefaults.area.priorityPlaceholder}}"
+                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                </div>
+              </details>
               {{/if}}
             </div>
           </div>
@@ -514,6 +616,20 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
+              {{! Beaten-by is the answer a GM actually needs; the priority number is the
+                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{#if globalDefaults.combat.beatenBy}}
+              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.combat.beatenBy}}</p>
+              {{/if}}
+              <details class="advanced-disclosure">
+                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
+                <div class="priority-row flexrow">
+                  <label>{{localize "GameOrchestra.Priority"}}</label>
+                  <input type="number" class="priority-input" data-change-action="updateGlobalDefaultPriority" data-context-type="combat"
+                         value="{{globalDefaults.combat.priority}}" placeholder="{{globalDefaults.combat.priorityPlaceholder}}"
+                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                </div>
+              </details>
               {{/if}}
             </div>
           </div>
@@ -522,6 +638,7 @@
       {{/unless}}
     </div>
 
+    {{/unless}}
   </div>
 
   <!-- Footer Bar: Launch Mood/Phase Configurators -->

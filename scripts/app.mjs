@@ -2,6 +2,7 @@ import { CONST } from './config.mjs';
 import { getDocumentCategory, getProperty, log, getAvailablePlaylists, buildPlaylistEntry, resolveInitialTrack } from './helpers.mjs';
 import { GameOrchestraAppMixin } from './app-mixins.mjs';
 import { coerceDuckFactor } from './playlist-mix.mjs';
+import { updateObjectStore, bindingPath, applyBindingPlaylist, applyBindingTrack, clearBindingOverlay } from './binding-store.mjs';
 
 const _loc = (key) => game.i18n.localize(key);
 
@@ -16,7 +17,10 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     id: 'game-orchestra-config',
     tag: 'form',
     window: { title: 'GameOrchestra.ConfigTitle', icon: 'fas fa-music', resizable: true, minimizable: true },
-    modal: true,
+    // NOT modal (docs/wiki/ux.md D3). Assigning a playlist is precisely the task
+    // where a GM wants to see - and drag from - the Playlists sidebar, which this
+    // window supports via dragDrop below and a modal would block outright. The hub
+    // has always been non-modal; this window disagreeing was the tell.
     classes: ['game-orchestra-config'],
     form: {
       handler: GameOrchestraConfig.formHandler,
@@ -131,19 +135,24 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
   }
 
   /**
-   * Apply a playlist selection to a grid entry, auto-resolving the initial
-   * track for Soundboard playlists or carrying over an existing track selection
-   * @param {string} path - Relative path under music., e.g. 'music.combat' or 'music.combat.overlays.p2'
-   * @param {string} playlistId - Selected playlist ID
-   * @private
+   * This window's data as a plain object, for {@link updateObjectStore} to read
+   * through. Kept separate from `updateObject` (the write side) so the store has
+   * a symmetric pair and no knowledge of which of the three document shapes it is
+   * actually talking to.
+   * @returns {object}
    */
-  async _applyGridEntry(path, playlistId) {
-    const docData = getProperty(this.document, this.updateDataPrefix) || {};
-    const existingTrackId = getProperty(docData, `${path}.initialTrack`) || null;
-    const initialTrackId = resolveInitialTrack(playlistId, existingTrackId);
-    const data = { [`${path}.playlist`]: playlistId };
-    if (initialTrackId) data[`${path}.initialTrack`] = initialTrackId;
-    await this.updateObject(data);
+  readData() {
+    return getProperty(this.document, this.updateDataPrefix) || {};
+  }
+
+  /**
+   * The BindingStore for this window's document. Every binding write below goes
+   * through it, so a Token's flags, a Scene's flags and the world default all get
+   * the same assign/clear semantics (docs/wiki/ux.md UX-2, binding-store.mjs).
+   * @returns {import('./binding-store.mjs').BindingStore}
+   */
+  get bindingStore() {
+    return updateObjectStore(this);
   }
 
   /**
@@ -154,8 +163,8 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const phaseId = select.dataset.phaseId;
     const playlistId = select.value || null;
     try {
-      if (playlistId) await this._applyGridEntry(`music.combat.overlays.${phaseId}`, playlistId);
-      else await this.updateObject({ [`music.combat.overlays.-=${phaseId}`]: null });
+      if (playlistId) await applyBindingPlaylist(this.bindingStore, bindingPath('combat', phaseId), playlistId);
+      else await clearBindingOverlay(this.bindingStore, 'combat', phaseId);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token phase override:', error);
@@ -169,10 +178,8 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const select = target.closest('select') || target;
     const phaseId = select.dataset.phaseId;
     const trackId = select.value || null;
-    const path = `music.combat.overlays.${phaseId}`;
     try {
-      if (trackId) await this.updateObject({ [`${path}.initialTrack`]: trackId });
-      else await this.updateObject({ [`${path}.-=initialTrack`]: null });
+      await applyBindingTrack(this.bindingStore, bindingPath('combat', phaseId), trackId);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token phase track:', error);
@@ -187,7 +194,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const btn = target.closest('[data-phase-id]') || target;
     const phaseId = btn.dataset.phaseId;
     try {
-      await this.updateObject({ [`music.combat.overlays.-=${phaseId}`]: null });
+      await clearBindingOverlay(this.bindingStore, 'combat', phaseId);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to clear token phase override:', error);
@@ -201,8 +208,9 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const select = target.closest('select') || target;
     const playlistId = select.value || null;
     try {
-      if (playlistId) await this._applyGridEntry('music.combat', playlistId);
-      else await this.updateObject({ 'music.combat.-=playlist': null, 'music.combat.-=initialTrack': null, 'music.combat.-=priority': null });
+      // Section-level, so a null clears playlist/track/priority but deliberately
+      // leaves `exclusive` and `duck` standing - see clearBindingOverlay's doc.
+      await applyBindingPlaylist(this.bindingStore, bindingPath('combat'), playlistId);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token default override:', error);
@@ -216,8 +224,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const select = target.closest('select') || target;
     const trackId = select.value || null;
     try {
-      if (trackId) await this.updateObject({ 'music.combat.initialTrack': trackId });
-      else await this.updateObject({ 'music.combat.-=initialTrack': null });
+      await applyBindingTrack(this.bindingStore, bindingPath('combat'), trackId);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token default track:', error);
@@ -230,7 +237,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
   static async handleClearDefaultEntry(event, target) {
     event.preventDefault();
     try {
-      await this.updateObject({ 'music.combat.-=playlist': null, 'music.combat.-=initialTrack': null, 'music.combat.-=priority': null });
+      await applyBindingPlaylist(this.bindingStore, bindingPath('combat'), null);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to clear token default override:', error);
@@ -242,8 +249,13 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
    */
   static handleToggleSection(event, target) {
     event?.preventDefault?.();
-    const element = target.closest('[data-section]') || target;
-    const sectionKey = element?.dataset?.section;
+    // `data-collapse-key`, NOT `data-section`. This template uses `data-section` for
+    // the *music* section ('area'/'combat') on its context boxes, so a collapse key
+    // sharing that attribute name meant one attribute with two meanings and a
+    // `closest('[data-section]')` that could walk out of a card header and into a
+    // binding box - returning 'combat' as a collapse key.
+    const element = target.closest('[data-collapse-key]') || target;
+    const sectionKey = element?.dataset?.collapseKey;
     if (!sectionKey) return;
     const instance = this instanceof GameOrchestraConfig ? this : game.gameOrchestra?.configApp;
     if (!instance) return;
@@ -577,8 +589,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
         log(2, `Failed to handle external drop: resolved document is not a Playlist or PlaylistSound`);
         return false;
       }
-      const sectionConfig = CONST.playlistSections[this.documentTypeName][section];
-      if (!sectionConfig) {
+      if (!CONST.playlistSections[this.documentTypeName]?.[section]) {
         log(2, `Failed to handle external drop: no section configuration found for '${section}'`);
         return false;
       }
@@ -595,8 +606,11 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
       const initialTrackId = sound ? sound.id : resolveInitialTrack(playlist.id, existingTrackId);
       const updateData = { [`${overlayPath}.playlist`]: playlist.id };
       if (initialTrackId) updateData[`${overlayPath}.initialTrack`] = initialTrackId;
-      const prevData = getProperty(currentData, overlayPath);
-      if (!prevData?.priority) updateData[`${overlayPath}.priority`] = sectionConfig.priority;
+      // Deliberately does NOT seed a priority. The scope's baseline is applied at
+      // resolution time now (helpers.mjs#sectionBaselinePriority); writing it here
+      // made a dragged binding resolve differently from a visually identical one
+      // picked from the dropdown, which stored nothing. A stored priority now means
+      // exactly one thing: someone deliberately overrode the hierarchy.
       await this.updateObject(updateData);
       log(3, `Successfully handled external drop: assigned playlist '${playlist.name}' (track: '${initialTrackId || 'none'}') to section '${section}' (overlay: '${targetOverlay || 'default'}')`);
       return true;

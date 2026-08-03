@@ -351,8 +351,8 @@ Custom playlists never participate (H9).
 | Window | Entry point | Notes |
 |---|---|---|
 | `GameOrchestraConfig` | Scene Config button, Token Config (Identity tab) | Per-document area (mood) + combat (phase) overrides. Token documents only ever show a combat/phase grid — see `isTokenPhaseGrid` |
-| `PlaylistTreeApp` | Settings menu, keybinding, Mood Widget | Every scene's assignments in one tree, mood and phase rows both |
-| `MoodConfigApp` / `PhaseConfigApp` | Settings menu | World mood / phase definitions — both are `OverlayConfigApp` subclasses (`mood-config.mjs`) sharing one template, differing only by axis |
+| `PlaylistTreeApp` | Settings menu (the module's **one** menu door), keybinding, Mood Widget | Every scene's assignments in one tree, mood and phase rows both, plus per-entry priority |
+| `OverlayConfigApp` | Playlist tree footer | World mood **and** phase definitions — one window, two tabs. `MoodConfigApp`/`PhaseConfigApp` (`mood-config.mjs`) are doors that share its `id` and only pick the opening tab |
 | `MoodWidget` | Scene control, keybinding | Dockable switcher: moods when idle, phases once `game.combat?.started`. Shows **only** the active axis — the inactive one is not rendered at all, not even dimmed |
 | `CustomPlaylistEditor` | Playlist Config button, tree, mood widget | The graph editor — see [editor.md](editor.md) |
 | `PlaylistMixerApp` | Playlist Config button, playlist directory context menu, graph editor Settings pane | Levels for **any** playlist type — see [mixer.md](mixer.md) |

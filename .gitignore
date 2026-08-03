@@ -5,3 +5,13 @@ package-lock.json
 coverage/
 
 .claude/
+
+# Integration tier: generated tone fixtures and Playwright output. The fixtures are rendered from
+# itest/harness/tones.mjs on demand - committing binary audio would let a fixture's frequency
+# drift out of sync with the detector that identifies it.
+itest/fixtures/out/
+itest/report/
+itest/test-results/
+
+# Cached Foundry release archive (licensed software - never commit).
+itest/.cache/

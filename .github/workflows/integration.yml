@@ -1,0 +1,150 @@
+# Audio integration tier.
+#
+# Not on every push, and that is intentional. This workflow needs a Foundry licence, downloads a
+# browser, and runs real-time audio - a ~10 minute job that cannot run on a fork's PR because the
+# licence secrets are not exposed there. Making it a required check for every contributor would
+# mean every external PR shows a red X for a reason nobody outside the repo can fix.
+#
+# So: nightly, on demand, on demand per-PR via the `integration` label - and, via `workflow_call`,
+# as a **required gate on every release** (see release.yml). A release is the one moment where
+# skipping this is not a saving: publishing to the Foundry Package API lists the version publicly,
+# and unlike a bad commit it cannot be quietly amended. Callers therefore pass
+# `require_credentials: true`, which turns the "no licence, skip cleanly" path into a hard failure.
+name: Integration (audio)
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      foundry_version:
+        description: 'Override the Foundry version (defaults to module.json compatibility.verified)'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      foundry_version:
+        description: 'Override the Foundry version (defaults to module.json compatibility.verified)'
+        required: false
+        type: string
+      require_credentials:
+        description: 'Fail instead of skipping when the Foundry licence secrets are absent'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      FOUNDRY_USERNAME:
+        required: false
+      FOUNDRY_PASSWORD:
+        required: false
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  audio:
+    # Skip cleanly rather than fail when a run cannot possibly work.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'integration')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Foundry credentials
+        id: credentials
+        env:
+          FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_USERNAME }}
+          REQUIRE_CREDENTIALS: ${{ inputs.require_credentials }}
+        run: |
+          if [[ -n "$FOUNDRY_USERNAME" ]]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          elif [[ "$REQUIRE_CREDENTIALS" == "true" ]]; then
+            # A release gate that skips is a release gate that certifies nothing. Fail loudly.
+            echo "::error::FOUNDRY_USERNAME/FOUNDRY_PASSWORD are not set, and this run requires them."
+            echo "::error::Set them as repository secrets, or set the SKIP_AUDIO_GATE repository variable to 'true' to release without the audio tier."
+            exit 1
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::notice::Foundry credentials unavailable (fork PR?); skipping the audio tier."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.credentials.outputs.available == 'true'
+        with:
+          node-version: '20'
+
+      # The unit suite gates the expensive tier. If the pure logic is broken there is nothing to
+      # learn from ten minutes of real-time audio.
+      - name: Unit suite
+        if: steps.credentials.outputs.available == 'true'
+        run: |
+          npm install
+          npm test
+
+      - name: Install integration deps
+        if: steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      # Chromium's AudioContext will not advance without an output device. A PulseAudio null sink
+      # gives it a real device that discards its output - which is exactly what is wanted, since
+      # the probe taps the graph in-page and nothing needs to physically play.
+      - name: Provide an audio sink
+        if: steps.credentials.outputs.available == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=itest
+          pactl set-default-sink itest
+
+      - name: Generate fixtures
+        if: steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        run: npm run fixtures
+
+      - name: Start Foundry
+        if: steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        env:
+          FOUNDRY_USERNAME: ${{ secrets.FOUNDRY_USERNAME }}
+          FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_PASSWORD }}
+          FOUNDRY_ADMIN_KEY: itest-admin
+          FOUNDRY_VERSION: ${{ inputs.foundry_version }}
+        run: npm run up
+
+      - name: Bootstrap world
+        if: steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        env:
+          FOUNDRY_ADMIN_KEY: itest-admin
+        run: npm run bootstrap
+
+      - name: Audio specs
+        if: steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        run: npm test
+
+      # Uploaded even on success: the HTML report carries the captured timelines, and a run that
+      # passed with a barely-in-tolerance level is the early warning for a drift that will fail
+      # next week.
+      - name: Upload report
+        if: always() && steps.credentials.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-report-${{ github.run_id }}
+          path: itest/report
+          retention-days: 14
+
+      - name: Foundry logs on failure
+        if: failure() && steps.credentials.outputs.available == 'true'
+        run: docker compose -f itest/docker/docker-compose.yml logs --no-color
+
+      - name: Tear down
+        if: always() && steps.credentials.outputs.available == 'true'
+        working-directory: itest
+        run: npm run down

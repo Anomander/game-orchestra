@@ -17,8 +17,10 @@ are the detail behind it.
 | [graph-engine.md](graph-engine.md) | The token-walk playback engine: node semantics, singleton rule, safety nets, Playlist nodes, the stop-before-start race. |
 | [editor.md](editor.md) | The Drawflow graph editor: the no-re-render rule, Drawflow's limits and their workarounds, validation, drag-in, styling constraints. |
 | [mixer.md](mixer.md) | The Playlist Mixer: the two storage layers, the crossfade chain, and the one place rule 5 does not apply. |
+| [ux.md](ux.md) | Which surface serves which job, why the current set doesn't cohere, and the UX-1–UX-9 principles for adding or moving any UI. |
 | [module-map.md](module-map.md) | File-by-file index with purity annotations and a dependency diagram. |
 | [testing.md](testing.md) | The Foundry mock, test conventions, structural guard tests, and what is deliberately not covered. |
+| [integration-testing.md](integration-testing.md) | The audio tier: real Foundry at a pinned version, driven by Playwright, asserted on what the speakers actually output. |
 | [playbook.md](playbook.md) | Step-by-step recipes for common changes, plus known quirks not to "fix". |
 
 ---
@@ -33,6 +35,10 @@ are the detail behind it.
 **Debugging playback:** [architecture.md](architecture.md) § *The playback pipeline* →
 [graph-engine.md](graph-engine.md) → [playbook.md](playbook.md) § *fix a "playback stops silently"
 bug*.
+
+**"The tests pass but it doesn't play":** [integration-testing.md](integration-testing.md) §
+*What the unit suite cannot see* — a green `npm test` says nothing about audio reaching the
+speakers.
 
 ---
 
@@ -73,6 +79,8 @@ confidence levels. The stale paths in the source were deliberately left untouche
 
 - A newly discovered hazard belongs in [invariants.md](invariants.md), with a note on how it was
   confirmed.
+- A new window, panel, or injected control needs a row in [ux.md](ux.md) § *The surfaces today*, and
+  must name which of the five jobs it serves.
 - A new subsystem gets a row in [module-map.md](module-map.md); a new *file* gets one too.
 - A recurring class of mistake becomes a recipe in [playbook.md](playbook.md).
 - Prefer linking to the source over duplicating it. Line counts and structure drift; the reason a

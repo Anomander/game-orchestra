@@ -8,6 +8,7 @@ import {
   getFirstAvailableGM,
   isHeadGM,
   getDocumentCategory,
+  sectionBaselinePriority,
   PlaylistContext,
   FadingTrack,
   log,
@@ -116,10 +117,69 @@ describe('helpers.mjs', () => {
     });
   });
 
+  describe('sectionBaselinePriority', () => {
+    // The hierarchy the module actually promises: a token's theme outranks the scene
+    // it stands in, which outranks the world default.
+    it('gives a Scene its per-section baselines', () => {
+      expect(sectionBaselinePriority({ documentName: 'Scene' }, 'area')).toBe(-20);
+      expect(sectionBaselinePriority({ documentName: 'Scene' }, 'combat')).toBe(-15);
+    });
+
+    it('gives a Token the combat baseline that outranks both scene sections', () => {
+      expect(sectionBaselinePriority({ documentName: 'Token' }, 'combat')).toBe(20);
+    });
+
+    it('treats an Actor as its prototype token, since that is who it speaks for', () => {
+      expect(sectionBaselinePriority({ documentName: 'Actor' }, 'combat')).toBe(20);
+    });
+
+    it('puts the world default at 0, below both scene baselines', () => {
+      // "Fallback" is exactly what a lower baseline than every configured scope means.
+      expect(sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'area')).toBe(0);
+    });
+
+    it('returns 0 for a section a scope has no entry for, rather than undefined', () => {
+      expect(sectionBaselinePriority({ documentName: 'Token' }, 'area')).toBe(0);
+      expect(sectionBaselinePriority(null, 'area')).toBe(0);
+    });
+  });
+
   describe('PlaylistContext._extractSectionConfig', () => {
     it('returns null values for null/undefined section', () => {
       const config = PlaylistContext._extractSectionConfig(null, '');
       expect(config).toEqual({ playlistId: null, trackId: null, priority: 0, isOverlay: false });
+    });
+
+    describe('scope baseline', () => {
+      // The scope's inherent standing is applied HERE, at resolution time, instead of
+      // being written into a flag by whichever code path happened to create the
+      // binding. Previously only the drag-and-drop path seeded it, so a dragged
+      // binding resolved at -20 while an identical dropdown-picked one resolved at 0.
+      it('uses the baseline when the section stores no priority of its own', () => {
+        const section = { playlist: 'pl1' };
+        expect(PlaylistContext._extractSectionConfig(section, '', -20).priority).toBe(-20);
+      });
+
+      it('lets a stored priority override the baseline entirely', () => {
+        const section = { playlist: 'pl1', priority: 5 };
+        expect(PlaylistContext._extractSectionConfig(section, '', -20).priority).toBe(5);
+      });
+
+      it('treats a stored 0 as a deliberate override, not as absent', () => {
+        const section = { playlist: 'pl1', priority: 0 };
+        expect(PlaylistContext._extractSectionConfig(section, '', -20).priority).toBe(0);
+      });
+
+      it('adds the overlay offset on top of the baseline', () => {
+        // This is what makes a mood/phase row outrank its own section default with
+        // no manual priority juggling - the reason most GMs never touch the number.
+        const section = { playlist: 'base', overlays: { boss: { playlist: 'boss-pl' } } };
+        expect(PlaylistContext._extractSectionConfig(section, 'boss', -20).priority).toBe(-10);
+      });
+
+      it('defaults the baseline to 0 when omitted, matching the world default scope', () => {
+        expect(PlaylistContext._extractSectionConfig({ playlist: 'pl1' }, '').priority).toBe(0);
+      });
     });
 
     it('returns base section values when no overlay is active', () => {
