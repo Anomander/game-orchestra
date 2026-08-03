@@ -12,10 +12,13 @@
  * - **`retries: 0` locally, 1 in CI.** A retried audio test hides exactly the flakiness worth
  *   knowing about. The single CI retry buys tolerance for container startup races only; if a
  *   spec needs a second retry, the fix is a longer settle window, not a bigger retry budget.
- * - **No `--mute-audio`.** Muting is implemented by Chromium as a null output *device*, and on
- *   some platforms that stops the `AudioContext` clock from advancing - the probe then captures
- *   nothing and every silence assertion passes vacuously. The container provides a PulseAudio
- *   null sink instead, which keeps rendering real.
+ * - **`--mute-audio` is Playwright's own default and cannot simply be omitted here** - it is on the
+ *   headless-shell command line whatever this file says. It has not been a problem: the probe taps
+ *   the graph *before* the destination, and the context keeps rendering with it set (verified by
+ *   `status().clockRatio` reading 1.0 both locally and on a runner). What does matter is that the
+ *   machine still has a sink the context can pace against, which is why CI installs a PulseAudio
+ *   null sink and exports `PULSE_SERVER` - without a reachable server Chrome falls back to a dummy
+ *   backend that renders as fast as it can, measured at 2.3x-5.6x realtime.
  */
 
 import { defineConfig, devices } from '@playwright/test';
@@ -32,7 +35,11 @@ export default defineConfig({
   // hang is what decides whether the run finishes and reports at all. It did not, once: every spec
   // timed out at the old 180 s, retries doubled it, and the job was killed at 30 minutes before
   // Playwright printed a single reason. The timeout budget is a diagnostics feature.
-  timeout: 120_000,
+  // 180 s. Every spec joins its own client, and a world load on a runner is far slower than
+  // locally - the longest *passing* run measured 128 s end to end, which the previous 120 s budget
+  // failed by eight seconds while the assertions inside it were all green. A timeout that fails
+  // work which actually succeeded teaches nothing; `maxFailures` below is what bounds a bad run.
+  timeout: 180_000,
   expect: { timeout: 15_000 },
 
   // Stop after a handful of failures in CI. When something environmental is broken every spec
@@ -82,7 +89,9 @@ export default defineConfig({
             '--use-fake-ui-for-media-stream',
             // Chromium's audio service is sandboxed separately and is the usual cause of a
             // silently dead AudioContext inside a container.
-            '--disable-features=AudioServiceSandbox'
+            '--disable-features=AudioServiceSandbox',
+            // /dev/shm is 64 MB in a default container and Chromium will thrash or crash on it.
+            '--disable-dev-shm-usage'
           ]
         }
       }

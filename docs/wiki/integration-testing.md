@@ -26,9 +26,10 @@ whose own bugs get blamed on the module.** Two real defects were caught by L1 be
 ever saw Foundry, and the tier as a whole flushed out a dozen more — see
 [Findings](#findings-from-building-this).
 
-**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**. The first two CI runs
-failed; the cause was found and fixed (see [When CI fails](#when-ci-fails)) but has not yet been
-confirmed green on a runner.
+**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**, twice consecutively with
+no retries. Three CI runs have failed; each named a distinct cause and each is fixed — see
+[When CI fails](#when-ci-fails), which is the most useful section on this page. The third run's
+fixes have not yet been confirmed green on a runner.
 
 ---
 
@@ -149,6 +150,21 @@ own correctness is knowable.
 6. **Specs run in real time.** There is no fake clock — the real audio pipeline is the subject.
    The suite's runtime is the sum of the `record()` durations, so keep them tight.
 
+7. **Anchor every measurement window to a mark, never to arithmetic on phase lengths.** Use the
+   `mark` that `recordDuring` returns, or take one with `probeNow()`. A window written as
+   `{from: 2500}` silently assumes the state change landed at time zero; it did not, and on a
+   contended machine it landed eight seconds later. Three specs failed in CI on exactly this while
+   the module was behaving correctly.
+
+8. **A mark belongs to the page it was taken on.** Each client's probe has its own origin and its
+   own audio clock. Applying a GM mark to a player's frames compares two different stretches of
+   audio — the failure mode is a spec that passes alone and flakes in a full run.
+
+9. **Reproduce a "finding" with the main thread free before writing it down.** This tier measures
+   the module through a browser whose main thread it shares. A documented claim that the graph
+   engine never crossfades its first hand-off turned out to be the arming deadline being missed
+   under canvas contention — a property of the machine, not of the engine.
+
 10. **The world is reset by the `gm` fixture, before *and* after each spec.** Before matters most:
     a run that crashed never cleaned up, and the next run's first spec would otherwise fail on a
     stray tone it never started.
@@ -263,7 +279,7 @@ changes make the next failure legible:
 |---|---|
 | `['github']` reporter | Emits `::error::` annotations **as each spec fails**, so a killed run still shows the reasons |
 | `maxFailures: 3` in CI | A systemic failure stops after three, leaving time to report |
-| `timeout: 120_000` | The longest passing spec is ~45 s; this halves what a hang costs |
+| `timeout: 180_000` | Bounds a hang, with room for a slow world load on a runner (a passing spec measured 128 s) |
 | `timeout-minutes: 45` | Room for a failing run to finish *and* upload its report and traces |
 
 `itest/test-results` (traces and videos) is now uploaded alongside `itest/report`, because it
@@ -319,7 +335,59 @@ Chrome can actually reach the PulseAudio server rather than falling back to its 
 is belt-and-braces — the harness no longer depends on it — and the printed ratio will say whether
 it worked.
 
-## Debugging a failure## Debugging a failure
+### Root cause: the canvas starves the main thread, and every window slides
+
+The third run (`release-0.0.1c`) was the informative one. The audio clock now read **1.0x** — the
+PulseAudio fix worked — and the smoke canary *passed*. But three combat specs still failed, and
+the trace uploaded with them showed why. These are wall-clock durations of calls into the page:
+
+| Call | On the runner |
+|---|---|
+| `window.__goProbe.status()` — a no-op | **2.4 s – 7.0 s** |
+| `window.__goProbe.reset()` | 2.6 s |
+| `playCurrentTrack()` | 8.2 s |
+| `preloadPlaylist()` | 20.3 s |
+
+A CI runner has no GPU, so Foundry's PIXI canvas renders through SwiftShader on the CPU and
+saturates the main thread. Every `page.evaluate` then queues behind the render loop.
+
+That is fatal to *this* tier specifically. `recordDuring(page, ms, action)` starts recording, runs
+the action, and the spec asserts from "1 s in" — but if the action takes eight seconds to reach the
+page, "1 s in" is audio from seven seconds **before** the change. The failures read as module bugs
+and were nothing of the sort:
+
+- `expected silence` — the window covered the area track still legitimately playing, before the
+  suppression landed.
+- `expected entry order [alpha, charlie], got [alpha]` — the mood switch landed so late that
+  charlie had barely entered by the end of the capture.
+
+Two fixes, and both are needed:
+
+1. **`session.mjs#quietCanvas` stops the PIXI ticker** once the world is up. Nothing this tier
+   measures is drawn, so no coverage is lost and the main thread comes back.
+
+   Foundry's own "Disable Canvas" setting is the wrong tool, and was tried first: with
+   `core.noCanvas` on, `canvas` is null and `TokenDocument#_onDeleteOperation` dereferences it, so
+   deleting a token throws `Cannot read properties of null (reading 'clipboard')`. Combat needs a
+   token and teardown needs to delete it, so every combat spec broke in teardown instead.
+
+2. **`recordDuring` returns a `mark` as well as frames**, and windows are computed from it. The
+   mark is the timeline position at which the action actually landed, so `{from: mark + 1000}`
+   means what it says no matter how long the page took to accept the call. This is house rule 7
+   applied to the one place that had not adopted it.
+
+The same conflation existed *between* clients: the multi-client specs took marks on the GM and
+applied them to the player's frames. Each page's probe has its own origin and its own audio clock,
+so those are different timelines — milliseconds apart on an idle machine, seconds apart otherwise.
+That is what made the solo spec pass alone and flake in a full run. Both specs now mark each client
+separately, and `expectClientsAgree` takes `windowA`/`windowB`.
+
+`mainThreadLatency()` measures a no-op round trip, and the smoke spec prints it next to
+`clockRatio`. Neither is asserted — there is no defensible threshold, and the number that matters
+is whether it reads 5 ms or 5000 ms. Both have now caused a whole-suite failure, so both are
+printed in the first fifteen seconds of every run.
+
+## Debugging a failure
 
 Every assertion attaches an ASCII timeline on failure:
 
@@ -368,17 +436,26 @@ cost a full debugging round each. Everything below was **confirmed live** agains
 - **A combat must be `active`, not merely `started`.** The module resolves through
   `game.combats.active`; a created-and-started-but-not-activated combat changes nothing while every
   piece of combat state looks right.
-- **The first hand-off in a graph never crossfades.** Measured on a three-node walk:
+- **Every graph hand-off crossfades by the configured duration, including the first** — and the
+  claim that the first one *never* crossfades, which this page asserted for three revisions, was a
+  measurement artifact. Measured on a three-node walk with the canvas render loop stopped:
 
   | `graphCrossfade` | A → B (first) | B → C (later) |
   |---|---|---|
-  | 0 ms | 0 ms | 0 ms |
-  | 500 ms | 0 ms | 320 ms |
-  | 1000 ms | 40 ms | 760 ms |
+  | 0 ms | 0–310 ms | < 150 ms |
+  | 1000 ms | ~1050 ms | ~1000 ms |
 
-  Later hand-offs scale with the setting; the first does not overlap at all. That fits the engine's
-  armed-start design - there is no prior node to arm from - and is now asserted both ways so a
-  change has to be deliberate.
+  The old numbers (0 ms, 0 ms, 40 ms for the first hand-off) were taken while PIXI was rendering,
+  and a tidy explanation was built on them: the engine arms the next start against the
+  `AudioContext` clock ahead of time, and the first node has no prior node to arm from. Plausible,
+  and wrong — what was actually being measured was that arming deadline being **missed under
+  main-thread contention**. With the thread free the first hand-off overlaps like any other,
+  reproducibly. It does stay the loose one: it still trails up to ~310 ms with the crossfade at
+  zero, where later hand-offs cut inside a single analysis frame.
+
+  This is the most valuable thing the tier taught, and it is a warning about the tier: a plausible
+  story that fits the numbers is not a finding until the numbers are reproduced with the main
+  thread free. See house rule 9.
 - **Ducking is exactly right.** Sound volume goes 1 → 0.4 → 1 with the document volume untouched,
   and the measured level ratios are 0.399 and 1.011. An earlier apparent failure was the harness
   measuring during the fade-in ramp.
@@ -405,7 +482,18 @@ cost a full debugging round each. Everything below was **confirmed live** agains
   playlist, so the binding was simply removed.
 - **Real-time windows must be anchored to marks.** Under full-suite load the same phase takes twice
   as long as it does in isolation, and windows computed from nominal phase lengths measure the
-  wrong audio - passing alone, failing in the suite.
+  wrong audio - passing alone, failing in the suite. On a CI runner the same effect appears as an
+  eight-second gap between starting a recording and the action reaching the page, which is why
+  `recordDuring` returns a mark.
+- **A mark belongs to one page.** The multi-client specs took marks on the GM and applied them to
+  the player's frames - two probes, two origins, two audio clocks. Milliseconds apart on an idle
+  machine and seconds apart otherwise, so the solo spec passed alone and flaked in a full run for
+  the second time, from a different cause than the first.
+- **`assertProbeHealthy` had to wait, not sample.** Foundry creates its contexts lazily and the
+  worklet attaches asynchronously on top of that, so a client that has just joined legitimately
+  has zero taps for a moment. Sampling once made the *second* client intermittently fail with
+  "audio probe never attached" - a real race, but in the assertion rather than in anything it was
+  checking.
 - **`down -v` used to throw away the 140 MB Foundry download**, because the image caches it inside
   the named volume. The cache is now a host mount (`itest/.cache/`) and survives teardown.
 

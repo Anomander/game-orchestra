@@ -18,7 +18,7 @@
  * stopped being a smoke test.
  */
 
-import { expect, record, resetProbe, test } from '../harness/session.mjs';
+import { expect, mainThreadLatency, record, resetProbe, test } from '../harness/session.mjs';
 import { toneIndex } from '../harness/tones.mjs';
 import { bindScenePlaylist, createPlaylist, describeState, preloadPlaylist } from '../harness/foundry-api.mjs';
 import { expectAudible } from '../harness/expect-audio.mjs';
@@ -55,14 +55,21 @@ test.describe('smoke', () => {
     expect(frames.length, 'the probe captured no frames at all - the AudioContext is not rendering').toBeGreaterThan(10);
     expectAudible(frames, ALPHA, { from: 1500 });
 
-    // The clock ratio is logged, not asserted: a runner whose audio renders several times faster
-    // than realtime is unusual but not broken, and the harness is built to be indifferent to it.
-    // Printing it makes that visible in the CI log, where an unexplained ratio would otherwise be
-    // the hidden cause of a whole suite failing.
+    // Two environment numbers, logged rather than asserted, because both have already been the
+    // hidden cause of a whole suite failing and neither has a defensible threshold.
+    //
+    // `clockRatio` is how fast the AudioContext renders relative to wall time - 4x on a runner
+    // whose null sink does not pace playback. `latency` is a no-op round trip into the page; a
+    // few milliseconds when the main thread is free, and seconds when Foundry's canvas is
+    // rendering through SwiftShader, which delays every state change relative to the recording
+    // meant to capture it. If a later run of this suite fails in a way that looks like the module
+    // reacting late, read these two lines first.
     const status = await gm.evaluate(() => window.__goProbe.status());
+    const latency = await mainThreadLatency(gm);
     console.log(
       `smoke: ${status.contexts} audio context(s), ${frames.length} frames, ` +
-        `audio clock running at ${status.clockRatio}x wall time\n${renderTimeline(frames)}`
+        `audio clock running at ${status.clockRatio}x wall time, ` +
+        `main-thread round trip ${latency}ms\n${renderTimeline(frames)}`
     );
   });
 });

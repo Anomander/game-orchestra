@@ -167,12 +167,21 @@ export function expectLevelRatio(frames, { tone, before, after, ratio, tolerance
  * @param {number} tone - Tone index to compare.
  * @param {object} [options] - Options.
  * @param {number} [options.tolerance=0.1] - Allowed fractional difference in mean level.
- * @param {import('./analysis.mjs').Window} [options.window] - Window to compare over.
+ * @param {import('./analysis.mjs').Window} [options.window] - Window to compare over, on both
+ *   clients. Only correct when the two timelines share an origin, which they do not by default -
+ *   prefer `windowA`/`windowB`.
+ * @param {import('./analysis.mjs').Window} [options.windowA] - Window on the first client's own
+ *   timeline. Each client's probe has its own origin and its own audio clock, so a mark taken on
+ *   one is not a position on the other; the gap is milliseconds when the machine is idle and
+ *   seconds when it is not. Passing one window for both made this comparison intermittently
+ *   average two different stretches of audio.
+ * @param {import('./analysis.mjs').Window} [options.windowB] - Window on the second client's own
+ *   timeline.
  * @returns {void}
  */
-export function expectClientsAgree(a, b, tone, { tolerance = 0.1, window } = {}) {
-  const levelA = mean(a, tone, window);
-  const levelB = mean(b, tone, window);
+export function expectClientsAgree(a, b, tone, { tolerance = 0.1, window, windowA = window, windowB = window } = {}) {
+  const levelA = mean(a, tone, windowA);
+  const levelB = mean(b, tone, windowB);
   const reference = Math.max(levelA, levelB, AUDIBLE_FLOOR);
   const difference = Math.abs(levelA - levelB) / reference;
   expect(

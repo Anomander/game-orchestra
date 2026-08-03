@@ -28,17 +28,19 @@ test.describe('area <-> combat', () => {
     await setFadeDuration(gm, 2000);
 
     // Area music, alone. `expectExactlyAudible` also proves nothing else leaked in.
-    const areaFrames = await recordDuring(gm, 3000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
-    expectExactlyAudible(areaFrames, [AREA], { from: 1000 });
+    const areaPhase = await recordDuring(gm, 3000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
+    expectExactlyAudible(areaPhase.frames, [AREA], { from: areaPhase.mark + 1000 });
 
     // Combat takes over. Combat beats area categorically, so area must not merely be quieter.
+    // The crossfade needs no anchor - it is found by searching for the overlap - but the
+    // "combat alone, afterwards" window does, or it lands on the pre-roll when the page is slow.
     const combatFrames = await recordDuring(gm, 7000, () => startCombat(gm));
-    expectCrossfade(combatFrames, { from: AREA, to: COMBAT, durationMs: 2000 });
-    expectExactlyAudible(combatFrames, [COMBAT], { from: 4500 });
+    expectCrossfade(combatFrames.frames, { from: AREA, to: COMBAT, durationMs: 2000 });
+    expectExactlyAudible(combatFrames.frames, [COMBAT], { from: combatFrames.mark + 4500 });
 
     const endFrames = await recordDuring(gm, 7000, () => endCombat(gm));
-    expectCrossfade(endFrames, { from: COMBAT, to: AREA, durationMs: 2000 });
-    expectExactlyAudible(endFrames, [AREA], { from: 4500 });
+    expectCrossfade(endFrames.frames, { from: COMBAT, to: AREA, durationMs: 2000 });
+    expectExactlyAudible(endFrames.frames, [AREA], { from: endFrames.mark + 4500 });
   });
 
   test('suppressing area music silences it without ending the scene binding', async ({ gm }) => {
@@ -46,14 +48,17 @@ test.describe('area <-> combat', () => {
     await bindScenePlaylist(gm, { section: 'area', playlistId: area.id });
 
     const playing = await recordDuring(gm, 3000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
-    expectExactlyAudible(playing, [AREA], { from: 1000 });
+    expectExactlyAudible(playing.frames, [AREA], { from: playing.mark + 1000 });
 
+    // Anchored, and it matters most here: an unanchored `from: 2500` on a contended runner asked
+    // "was it silent 2.5 s in?" of a recording whose first eight seconds predate the suppression.
+    // The answer was the area track, still playing, exactly as it should have been.
     const suppressed = await recordDuring(gm, 4000, () => setSetting(gm, 'suppressArea', true));
-    expectSilence(suppressed, { from: 2500 });
+    expectSilence(suppressed.frames, { from: suppressed.mark + 2500 });
 
     const restored = await recordDuring(gm, 4000, () => setSetting(gm, 'suppressArea', false));
     expect(await describeState(gm)).toMatchObject({ isHeadGM: true, audioLocked: false });
-    expectExactlyAudible(restored, [AREA], { from: 2000 });
+    expectExactlyAudible(restored.frames, [AREA], { from: restored.mark + 2000 });
   });
 
   test('a mood switch swaps the area track without touching combat', async ({ gm }) => {

@@ -25,6 +25,26 @@
  * 3. **The player client must join after the GM.** Head-GM election is "first active GM by id"
  *    (CLAUDE.md rule 5), so a player joining first is harmless, but the multi-client specs need
  *    to know which client owns the engine. Joining in a fixed order makes that deterministic.
+ *
+ * ## The canvas render loop is stopped, and that is a timing fix, not a tidiness one
+ *
+ * A CI runner has no GPU, so Foundry's PIXI canvas renders through SwiftShader on the CPU and
+ * saturates the main thread. Every `page.evaluate` then queues behind the render loop: measured on
+ * a GitHub runner, a *no-op* `window.__goProbe.status()` took **2.4-7.0 s**, `playCurrentTrack()`
+ * took 8.2 s, and `preloadPlaylist` took 20 s. That is fatal to this tier specifically, because a
+ * recording started before an action and asserted from "1 s in" is really asserting on audio from
+ * eight seconds *before* the action landed. All three combat specs failed that way while the module
+ * was behaving perfectly.
+ *
+ * {@link quietCanvas} stops the PIXI ticker once the world is up. Nothing this tier measures is
+ * drawn, so no coverage is lost and the main thread comes back.
+ *
+ * **Foundry's own "Disable Canvas" setting is the wrong tool here, and was tried first.** With
+ * `core.noCanvas` on, `canvas` is null, and `TokenDocument#_onDeleteOperation` dereferences it -
+ * so deleting a token throws `Cannot read properties of null (reading 'clipboard')`. Combat needs
+ * a token, and teardown needs to delete it, so every combat spec broke in teardown. Stopping the
+ * ticker gets the same CPU back while leaving the canvas object graph intact for code that
+ * reaches into it.
  */
 
 import { readFileSync } from 'node:fs';
@@ -86,8 +106,54 @@ export async function join(context, baseURL, user) {
   await page.waitForFunction(() => window.game?.ready === true, null, { timeout: 120_000 });
   await page.waitForFunction(() => !!window.game?.gameOrchestra?.musicController, null, { timeout: 30_000 });
 
+  await quietCanvas(page);
   await unlockAudio(page);
   return page;
+}
+
+/**
+ * Stop the PIXI render loop, giving the main thread back to the module and to `page.evaluate`.
+ *
+ * See this file's header for why: on a GPU-less runner the software rasteriser makes every round
+ * trip into the page take seconds, which silently shifts every measurement window in this tier.
+ * The canvas object graph is left intact - only the ticker stops - so code that reaches into
+ * `canvas` still works.
+ * @param {import('@playwright/test').Page} page - A page with the world loaded.
+ * @returns {Promise<void>}
+ */
+export async function quietCanvas(page) {
+  const stopped = await page.evaluate(() => {
+    const ticker = globalThis.canvas?.app?.ticker;
+    if (!ticker) return false;
+    ticker.stop();
+    return true;
+  });
+  if (!stopped) {
+    // Not fatal - a world with no active scene has no canvas to quieten - but if it happens on a
+    // runner it is the first thing to suspect when timings look wrong, so say so.
+    console.warn('no PIXI ticker to stop; if the main-thread round trip is slow, this is why.');
+  }
+}
+
+/**
+ * How long a round trip into the page currently takes.
+ *
+ * A trivial `page.evaluate` should return in a few milliseconds. When it does not, the page's main
+ * thread is contended, and *every* timing in this tier is wrong in the same direction: the module's
+ * state change lands late relative to the recording that is supposed to capture it. Reported rather
+ * than asserted, because the number that matters is whether it is 5 ms or 5000 ms, and a threshold
+ * would only invent a boundary between them.
+ * @param {import('@playwright/test').Page} page - Any live page.
+ * @returns {Promise<number>} Round-trip milliseconds, averaged over a few calls.
+ */
+export async function mainThreadLatency(page) {
+  const samples = [];
+  for (let i = 0; i < 5; i++) {
+    const start = Date.now();
+    await page.evaluate(() => 1);
+    samples.push(Date.now() - start);
+  }
+  return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
 }
 
 /**
@@ -110,8 +176,18 @@ export async function unlockAudio(page) {
  * @returns {Promise<void>}
  */
 export async function assertProbeHealthy(page) {
-  const status = await page.evaluate(() => window.__goProbe.status());
-  expect(status.attached, `audio probe never attached: ${status.errors.join('; ') || 'no AudioContext was created'}`).toBeGreaterThan(0);
+  // Waits, rather than sampling once. Foundry creates its `AudioContext`s lazily and the worklet
+  // attaches asynchronously on top of that (`addModule` returns a promise), so a client that has
+  // only just joined can legitimately have zero taps for a moment. Sampling immediately turned
+  // that into an intermittent "audio probe never attached" on the second client - a real race,
+  // but in the assertion rather than in anything it was checking.
+  try {
+    await page.waitForFunction(() => window.__goProbe.status().attached > 0, null, { timeout: 15_000 });
+  } catch {
+    // Re-read so the failure carries the probe's own explanation rather than a timeout message.
+    const status = await page.evaluate(() => window.__goProbe.status());
+    expect(status.attached, `audio probe never attached: ${status.errors.join('; ') || 'no AudioContext was created'}`).toBeGreaterThan(0);
+  }
 }
 
 /**
@@ -163,16 +239,31 @@ export async function record(page, ms) {
 }
 
 /**
- * Run an action and record the audio it produces, from just before it starts.
+ * Run an action and record the audio around it.
+ *
+ * Returns a **mark** as well as the frames, and every window a caller computes must be relative to
+ * that mark rather than to zero. The two are not the same instant: recording starts before the
+ * action so the transition itself is captured, and the gap between them is however long the page
+ * took to accept the call. Locally that is a few milliseconds and the distinction looks academic.
+ * On a contended CI runner it was measured at **eight to ten seconds** - so `{from: 1000}` was
+ * asserting on audio from seven seconds *before* the change it was meant to be testing, and three
+ * specs failed while the module did exactly the right thing. Anchoring to the mark makes the
+ * assertion mean what it says at any speed.
+ *
+ * Assertions about the transition itself - crossfades, entry order - need no anchor: they search
+ * the whole capture for the overlap, and the pre-roll cannot contain one.
  * @param {import('@playwright/test').Page} page - A probed page.
- * @param {number} ms - How long to keep recording after the action resolves.
+ * @param {number} ms - Timeline milliseconds to keep recording after the action resolves.
  * @param {() => Promise<void>} action - The state change under test.
- * @returns {Promise<import('./analysis.mjs').ProbeFrame[]>} Frames from the action onward.
+ * @returns {Promise<{frames: import('./analysis.mjs').ProbeFrame[], mark: number}>} The capture,
+ *   and the timeline position at which the action had landed.
  */
 export async function recordDuring(page, ms, action) {
   await resetProbe(page);
   await action();
-  return record(page, ms);
+  const mark = await probeNow(page);
+  const frames = await record(page, ms);
+  return { frames, mark };
 }
 
 export const test = base.extend({

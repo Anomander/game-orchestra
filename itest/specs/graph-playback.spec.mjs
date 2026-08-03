@@ -75,28 +75,39 @@ test.describe('custom playback graph', () => {
     await bindScenePlaylist(gm, { section: 'area', playlistId: playlist.id });
     await setGraphCrossfade(gm, 0);
 
-    const frames = await recordDuring(gm, 14_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
+    const { frames } = await recordDuring(gm, 14_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
 
     expectEntryOrder(frames, [A, B, C]);
     expectExactlyAudible(frames, [A, B, C]);
   });
 
   /**
-   * `graphCrossfade` governs how long consecutive nodes overlap - but **not on the first
-   * hand-off**.
+   * `graphCrossfade` governs how long consecutive nodes overlap, on **every** hand-off including
+   * the first.
    *
-   * Measured on a three-node `sequential-once` walk of 3 s tracks:
+   * Measured on a three-node `sequential-once` walk of 3 s tracks, with the canvas render loop
+   * stopped:
    *
    * | `graphCrossfade` | A -> B (first) | B -> C (later) |
    * |---|---|---|
    * | 0 ms | 0 ms | 0 ms |
-   * | 500 ms | 0 ms | 320 ms |
-   * | 1000 ms | 40 ms | 760 ms |
+   * | 1000 ms | ~1050 ms | ~1000 ms |
    *
-   * The later hand-off scales with the setting; the first does not overlap at all. That fits the
-   * engine's design - the next start is *armed* against the `AudioContext` clock ahead of time,
-   * and on the very first node there has been no prior node to arm from. Both halves are asserted
-   * below so that if either changes, it changes deliberately.
+   * ## This table used to say the first hand-off never crossfades. That was a measurement artifact
+   *
+   * The earlier numbers - 0 ms, 0 ms, 40 ms for the first hand-off at 0/500/1000 ms - were taken
+   * while Foundry's PIXI canvas was rendering, and a theory was built on top of them: that the
+   * engine arms the next start against the `AudioContext` clock ahead of time, and the first node
+   * has no prior node to arm from. Plausible, and wrong.
+   *
+   * With the render loop stopped (see `session.mjs#quietCanvas`) the first hand-off overlaps by
+   * the configured duration like any other, reproducibly, across repeated runs. What the old
+   * numbers actually measured was the *arming deadline being missed under main-thread contention*
+   * - a real degradation, but a property of the machine, not of the engine.
+   *
+   * The lesson is worth more than the table: this tier measures the module through a browser whose
+   * main thread it shares, so a finding that looks like module behaviour has to be reproduced with
+   * that thread free before it is written down as design.
    *
    * These are two tests rather than two measurements in one, because a `sequential-once` graph is
    * *finished* when it reaches the end: re-calling `playCurrentTrack()` resolves the same context,
@@ -106,22 +117,28 @@ test.describe('custom playback graph', () => {
     await buildWalk(gm);
     await setGraphCrossfade(gm, 0);
 
-    const frames = await recordDuring(gm, 13_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
+    const { frames } = await recordDuring(gm, 13_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
     expectEntryOrder(frames, [A, B, C]);
-    expectHardCut(frames, A, B);
+    // The first hand-off is the loose one, in both directions: it overlaps by the configured
+    // crossfade when there is one (see the next test), and it still trails ~0-310 ms with the
+    // crossfade at zero, where later hand-offs cut inside a single analysis frame. Measured over
+    // four runs: <=150, <=150, 181, 309 ms. That is inaudible as a fade and nowhere near the
+    // ~1000 ms a configured crossfade produces, so it is bounded here rather than asserted away -
+    // if it ever grows into a real fade, this still catches it.
+    expectHardCut(frames, A, B, 400);
     expectHardCut(frames, B, C);
   });
 
-  test('a later hand-off overlaps by the configured crossfade, while the first still cuts', async ({ gm }) => {
+  test('every hand-off overlaps by the configured crossfade, including the first', async ({ gm }) => {
     await buildWalk(gm);
     await setGraphCrossfade(gm, 1000);
 
-    const frames = await recordDuring(gm, 13_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
+    const { frames } = await recordDuring(gm, 13_000, () => gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack()));
     expectEntryOrder(frames, [A, B, C]);
-    // `monotonic` is off: the outgoing track plays out to its natural end rather than fading, so
-    // only the incoming side ramps. A real overlap, just not a symmetrical one.
+    // `monotonic` is off on both: the outgoing track plays out to its natural end rather than
+    // fading, so only the incoming side ramps. A real overlap, just not a symmetrical one.
+    expectCrossfade(frames, { from: A, to: B, durationMs: 1000, monotonic: false });
     expectCrossfade(frames, { from: B, to: C, durationMs: 1000, monotonic: false });
-    expectHardCut(frames, A, B);
   });
 
   test('a graph interrupted by combat yields immediately', async ({ gm }) => {
@@ -140,9 +157,9 @@ test.describe('custom playback graph', () => {
     await resetProbe(gm);
     await gm.evaluate(() => game.gameOrchestra.musicController.playCurrentTrack());
     await record(gm, 2000);
-    const frames = await recordDuring(gm, 7000, () => startCombat(gm));
+    const { frames, mark } = await recordDuring(gm, 7000, () => startCombat(gm));
 
     // Whatever node the graph was on must stop; combat is categorical, not a priority contest.
-    expectExactlyAudible(frames, [COMBAT], { from: 4000 });
+    expectExactlyAudible(frames, [COMBAT], { from: mark + 4000 });
   });
 });
