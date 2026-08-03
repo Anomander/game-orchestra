@@ -26,8 +26,9 @@ whose own bugs get blamed on the module.** Two real defects were caught by L1 be
 ever saw Foundry, and the tier as a whole flushed out a dozen more — see
 [Findings](#findings-from-building-this).
 
-**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**. They do **not** yet pass
-on a GitHub runner — see [When CI fails](#when-ci-fails).
+**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**. The first two CI runs
+failed; the cause was found and fixed (see [When CI fails](#when-ci-fails)) but has not yet been
+confirmed green on a runner.
 
 ---
 
@@ -273,24 +274,52 @@ works at all: head GM, audio unlocked, probe attached, one track audible. It run
 broken environment now fails there, with a message naming which part broke, instead of proving the
 same point twelve more times.
 
-### What is known and not known about that failure
+### Root cause: the audio clock does not run at realtime on a CI runner
 
-Established from the run log:
+The second run — with the diagnostics above in place — named it. Every failing spec attached a
+timeline whose *span* was several times the duration that had been recorded:
 
-- Setup was **entirely healthy**: PulseAudio loaded its null sink, the container came up, the world
-  bootstrapped (`World 'game-orchestra-itest' (worldbuilding 0.8.2) running on Foundry 14.364`),
-  and `globalSetup` succeeded — the suite got as far as `Running 12 tests`.
-- Every spec then failed at its timeout, meaning something in the shared `gm` fixture or the first
-  interaction hangs on a runner.
+| Requested | Captured | Ratio |
+|---|---|---|
+| 3000 ms | 12214 ms | 4.07x |
+| 4000 ms | 16721 ms | 4.18x |
+| 7500 ms | 17276 ms | 2.30x |
 
-Not established: **which** wait hangs. The run was killed before any reason was printed. Attempts to
-reproduce it locally — including deleting the world and bootstrapping fresh, so the world was as new
-as CI's — all pass. The remaining differences are the runner itself: Linux vs macOS Docker, a slower
-shared CPU, and headless Chromium against a PulseAudio null sink rather than a real device.
+**Chromium's `AudioContext` renders far faster than realtime on the runner**, because a null sink
+that does not pace playback lets it produce samples as fast as it can. The ratio is not even
+constant — it varies with load, so no fixed correction would help.
 
-The next CI run should name the failing wait directly in the Actions annotations.
+That alone was survivable. What made every spec fail was that the harness had frames stamped with
+the **audio** clock while `record()` and `probeNow()` used the **wall** clock. Three wall seconds
+captured twelve seconds of audio, so every measurement window covered a quarter of the material it
+meant to — and a window opened "2 s after the change" landed before the change had even been made.
+Hence the two contradictory-looking failures in the same run: `expected exactly [alpha] audible,
+got []` (window past the end of the material) and `expected silence` (window before the change
+took effect).
 
-## Debugging a failure
+The fix is to stop mixing clocks:
+
+- Frames, `probeNow()` and `reset()` all use the audio timeline.
+- `record(page, ms)` waits for the **timeline** to advance by `ms`, via `__goProbe.advance()`,
+  instead of sleeping for `ms` of wall time.
+- `advance()` waits on **both** clocks, whichever is slower. The timeline governs how much audio is
+  captured, but the module is not purely audio-driven — debounces, the engine's scheduler and
+  Foundry's document round-trips run on wall time, so returning the moment a fast audio clock has
+  caught up would hand back a long recording of a change the module had not finished making. On a
+  normal machine the two are the same number and nothing changes.
+- The probe raises a clear error if the timeline stops advancing, so a *suspended* context — the
+  opposite failure — reports itself instead of hanging.
+
+`status().clockRatio` reports the measured rate, and the smoke spec prints it. It is 1.0 on a
+desktop. It is logged rather than asserted: a fast clock is unusual, not broken, and the harness is
+now indifferent to it.
+
+The workflow additionally exports `XDG_RUNTIME_DIR` and `PULSE_SERVER` and prints `pactl info`, so
+Chrome can actually reach the PulseAudio server rather than falling back to its dummy backend. That
+is belt-and-braces — the harness no longer depends on it — and the printed ratio will say whether
+it worked.
+
+## Debugging a failure## Debugging a failure
 
 Every assertion attaches an ASCII timeline on failure:
 

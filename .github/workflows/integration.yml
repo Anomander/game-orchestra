@@ -95,16 +95,29 @@ jobs:
           npx playwright install --with-deps chromium
 
       # Chromium's AudioContext will not advance without an output device. A PulseAudio null sink
-      # gives it a real device that discards its output - which is exactly what is wanted, since
-      # the probe taps the graph in-page and nothing needs to physically play.
+      # gives it a real device that discards its output - which is what is wanted, since the probe
+      # taps the graph in-page and nothing needs to physically play.
+      #
+      # The environment variables matter as much as the sink. If Chrome cannot reach the PulseAudio
+      # server it silently falls back to a dummy audio backend that renders **as fast as it can**
+      # rather than at realtime - measured at 2.3x-5.6x on this runner, which is what made the whole
+      # suite fail. The harness no longer depends on a realtime clock (see `probe-init.js`), but a
+      # sink that paces properly is still the better environment, so make the server reachable and
+      # print `pactl info` to prove whether it is.
       - name: Provide an audio sink
         if: steps.credentials.outputs.available == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y pulseaudio
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          sudo mkdir -p "$XDG_RUNTIME_DIR"
+          sudo chown "$(id -u):$(id -g)" "$XDG_RUNTIME_DIR"
           pulseaudio --start --exit-idle-time=-1
           pactl load-module module-null-sink sink_name=itest
           pactl set-default-sink itest
+          pactl info
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> $GITHUB_ENV
+          echo "PULSE_SERVER=unix:$XDG_RUNTIME_DIR/pulse/native" >> $GITHUB_ENV
 
       - name: Generate fixtures
         if: steps.credentials.outputs.available == 'true'

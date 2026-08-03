@@ -58,8 +58,12 @@
 
   /** @type {Array<{t: number, rms: number, mags: number[], ctx: number}>} */
   let frames = [];
-  /** Page-time origin, moved forward by `reset()` so a scenario's timeline starts at zero. */
+  /** Timeline origin, moved forward by `reset()` so a scenario's timeline starts at zero. */
   let originMs = 0;
+  /** The most recent frame's raw timeline position, across all contexts. This *is* the clock. */
+  let lastRawMs = 0;
+  /** Page time when capture began, used only to report how fast the audio clock is running. */
+  const wallStartMs = performance.now();
   /** @type {Map<number, number>} Context index -> offset that maps its audio clock to page time. */
   const clockOffsets = new Map();
   /** @type {WeakMap<BaseAudioContext, GainNode>} One tap per context. */
@@ -110,13 +114,12 @@
         });
         node.port.onmessage = (event) => {
           // Rebase this context's audio clock onto page time, using the first message's arrival.
+          // Only the *offset* comes from page time; the rate is the audio clock's own, which is
+          // the point - see the note on non-realtime clocks in this file's header.
           if (!clockOffsets.has(index)) clockOffsets.set(index, performance.now() - event.data.t);
-          frames.push({
-            t: event.data.t + clockOffsets.get(index) - originMs,
-            rms: event.data.rms,
-            mags: event.data.mags,
-            ctx: index
-          });
+          const raw = event.data.t + clockOffsets.get(index);
+          if (raw > lastRawMs) lastRawMs = raw;
+          frames.push({ t: raw - originMs, rms: event.data.rms, mags: event.data.mags, ctx: index });
         };
         originalConnect.call(tap, node);
         diagnostics.push({ state: 'attached' });
@@ -179,24 +182,54 @@
      * @returns {void}
      */
     reset() {
-      // Every frame's `t` is already page time minus this origin, so moving the origin to now
-      // makes the next frame land at ~0. The per-context clock offsets are deliberately kept:
-      // they map an audio clock onto page time and have nothing to do with where zero is.
-      originMs = performance.now();
+      // Move the origin to the current position **on the audio timeline**, not to
+      // `performance.now()`. Those are not the same number when the audio clock is not running at
+      // realtime, and mixing them is what put every measurement window on the wrong audio.
+      originMs = lastRawMs || performance.now();
       frames = [];
     },
 
     /**
-     * The current position on the capture timeline, in the same units frames carry.
+     * Wait until the capture timeline has advanced by `ms`.
      *
-     * Lets a spec *mark* the moment it changes something instead of assuming how long a phase took.
-     * Under load - a full suite run on a busy machine - a phase that nominally lasts 5 s can take
-     * twice that, and windows computed from the nominal figure then measure the wrong stretch of
-     * audio entirely. Marks make a measurement independent of how slowly the run is going.
-     * @returns {number} Milliseconds since the last `reset()`.
+     * This replaces sleeping for `ms` of wall time, because the two are not interchangeable: on a
+     * CI runner with a null audio sink the `AudioContext` renders **several times faster than
+     * realtime** (measured between 2.3x and 5.6x, varying with load), so three seconds of waiting
+     * captured twelve seconds of audio. Every window a spec computed then covered a quarter of the
+     * material it meant to.
+     *
+     * Waiting on the timeline itself makes the suite indifferent to how fast the clock runs. The
+     * wall-clock cap exists for the opposite failure - a starved or suspended context whose clock
+     * barely advances - so that stalls surface as a clear error rather than a hang.
+     * @param {number} ms - Timeline milliseconds to wait for.
+     * @param {number} [maxWallMs] - Wall-clock budget before giving up.
+     * @returns {Promise<void>}
+     */
+    async advance(ms, maxWallMs = ms * 4 + 20000) {
+      const start = this.now();
+      const wallStart = performance.now();
+      // Both clocks, deliberately. The timeline governs how much audio is captured, but the module
+      // is not purely audio-driven - debounces, the engine's scheduler and Foundry's own document
+      // round-trips all run on wall time. Returning as soon as the (fast) audio clock has advanced
+      // would hand back a long recording of a change the module had not finished making yet.
+      // Waiting for both costs nothing on a normal machine, where the two are the same number.
+      while (this.now() - start < ms || performance.now() - wallStart < ms) {
+        if (performance.now() - wallStart > maxWallMs) {
+          throw new Error(
+            `audio clock advanced only ${Math.round(this.now() - start)}ms of the ${ms}ms requested ` +
+              `in ${Math.round(performance.now() - wallStart)}ms of wall time - the AudioContext is stalled or suspended`
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    },
+
+    /**
+     * The current position on the capture timeline.
+     * @returns {number} Milliseconds since the last `reset()`, on the audio clock.
      */
     now() {
-      return performance.now() - originMs;
+      return lastRawMs - originMs;
     },
 
     /**
@@ -229,6 +262,11 @@
         failed: diagnostics.filter((d) => d.state !== 'attached').length,
         frames: frames.length,
         contexts: nextContextIndex,
+        // How fast the audio clock is running relative to wall time. 1.0 on a normal desktop;
+        // ~4 on a CI runner whose null sink does not pace playback. Reported because it changes
+        // what a timeline means, and because a suite that silently assumed 1.0 once failed
+        // everywhere at once.
+        clockRatio: Number((lastRawMs / Math.max(1, performance.now() - wallStartMs)).toFixed(2)),
         errors: diagnostics.filter((d) => d.error).map((d) => d.error)
       };
     }

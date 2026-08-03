@@ -130,6 +130,10 @@ export async function resetProbe(page) {
  * assumes "the duck starts at 5000 ms because I recorded 5 s first" is correct only while nothing
  * else competes for the machine; in a full suite run the same phase can take twice as long, and
  * every window then lands on the wrong audio. Marking is immune to that.
+ *
+ * This reads the **same clock the frames are stamped with** - the audio clock, which does not
+ * necessarily run at realtime. Mixing it with `performance.now()` is precisely the bug that made
+ * every spec fail on a CI runner.
  * @param {import('@playwright/test').Page} page - A probed page.
  * @returns {Promise<number>} Milliseconds since the probe was last reset.
  */
@@ -138,16 +142,23 @@ export async function probeNow(page) {
 }
 
 /**
- * Record for a fixed wall-clock duration and return the captured timeline.
+ * Record until the capture timeline has advanced by `ms`, and return it.
  *
- * Integration specs run in real time - there is no fake clock, because the thing under test is
- * the real audio pipeline. Keep durations tight; the suite's runtime is the sum of these.
+ * **Timeline milliseconds, not wall-clock milliseconds** - and the difference is not academic. On
+ * a CI runner whose null audio sink does not pace playback, the `AudioContext` renders several
+ * times faster than realtime (measured 2.3x-5.6x, varying with load). Sleeping three wall seconds
+ * there captured twelve seconds of audio, so every window a spec computed covered a quarter of the
+ * material it meant to, and all twelve specs failed at once. Waiting on the clock the frames are
+ * stamped with makes the suite indifferent to how fast that clock runs.
+ *
+ * The probe raises a clear error if the timeline stops advancing, so a suspended context fails
+ * legibly instead of hanging until the test timeout.
  * @param {import('@playwright/test').Page} page - A probed page.
- * @param {number} ms - How long to record.
- * @returns {Promise<import('./analysis.mjs').ProbeFrame[]>} Frames captured during the window.
+ * @param {number} ms - Timeline milliseconds to record.
+ * @returns {Promise<import('./analysis.mjs').ProbeFrame[]>} Frames captured since the last reset.
  */
 export async function record(page, ms) {
-  await page.waitForTimeout(ms);
+  await page.evaluate((target) => window.__goProbe.advance(target), ms);
   return page.evaluate(() => window.__goProbe.frames());
 }
 

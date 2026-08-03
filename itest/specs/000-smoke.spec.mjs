@@ -55,6 +55,14 @@ test.describe('smoke', () => {
     expect(frames.length, 'the probe captured no frames at all - the AudioContext is not rendering').toBeGreaterThan(10);
     expectAudible(frames, ALPHA, { from: 1500 });
 
-    console.log(`smoke: ${probe.contexts} audio context(s), ${frames.length} frames\n${renderTimeline(frames)}`);
+    // The clock ratio is logged, not asserted: a runner whose audio renders several times faster
+    // than realtime is unusual but not broken, and the harness is built to be indifferent to it.
+    // Printing it makes that visible in the CI log, where an unexplained ratio would otherwise be
+    // the hidden cause of a whole suite failing.
+    const status = await gm.evaluate(() => window.__goProbe.status());
+    console.log(
+      `smoke: ${status.contexts} audio context(s), ${frames.length} frames, ` +
+        `audio clock running at ${status.clockRatio}x wall time\n${renderTimeline(frames)}`
+    );
   });
 });
