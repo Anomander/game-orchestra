@@ -47,7 +47,11 @@ jobs:
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'integration')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30. The suite takes ~6 minutes when it passes, but the budget has to cover a run that
+    # *fails* and still finishes reporting: setup is ~3 minutes, and Playwright's own `maxFailures`
+    # bounds the rest. The first real run was killed at 30 minutes mid-suite, which discarded the
+    # report and the traces along with it - the timeout cost the diagnosis, not just the time.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -132,12 +136,20 @@ jobs:
       # Uploaded even on success: the HTML report carries the captured timelines, and a run that
       # passed with a barely-in-tolerance level is the early warning for a drift that will fail
       # next week.
+      #
+      # `test-results` matters as much as `report`: it holds the traces and videos that
+      # `retain-on-failure` writes, and it exists even when a run is cut short before the HTML
+      # report is generated. `if-no-files-found: ignore` keeps a clean run from warning about the
+      # absent failure artifacts.
       - name: Upload report
         if: always() && steps.credentials.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: audio-report-${{ github.run_id }}
-          path: itest/report
+          path: |
+            itest/report
+            itest/test-results
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Foundry logs on failure

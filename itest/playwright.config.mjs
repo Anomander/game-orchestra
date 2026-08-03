@@ -27,17 +27,35 @@ export default defineConfig({
   testMatch: '**/*.spec.mjs',
   globalSetup: './harness/global-setup.mjs',
 
-  // Real-time playback: a three-transition spec genuinely needs ~30 s.
-  timeout: 180_000,
+  // Real-time playback: the longest passing spec measured ~45 s. 120 s leaves generous headroom
+  // while halving what a *hung* spec costs - and in a 12-spec suite with retries, the cost of a
+  // hang is what decides whether the run finishes and reports at all. It did not, once: every spec
+  // timed out at the old 180 s, retries doubled it, and the job was killed at 30 minutes before
+  // Playwright printed a single reason. The timeout budget is a diagnostics feature.
+  timeout: 120_000,
   expect: { timeout: 15_000 },
+
+  // Stop after a handful of failures in CI. When something environmental is broken every spec
+  // fails the same way, and grinding through all 24 attempts to learn one fact wastes the run and
+  // usually exceeds the job timeout - which throws away the report as well as the time.
+  maxFailures: process.env.CI ? 3 : 0,
 
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   forbidOnly: !!process.env.CI,
 
+  // `github` is the important one in CI: it emits ::error:: annotations *as each spec fails*,
+  // rather than only in the end-of-run summary. A run that is killed before it finishes therefore
+  // still shows why each spec failed, which is exactly what was missing when this first ran for
+  // real.
   reporter: process.env.CI
-    ? [['list'], ['html', { outputFolder: 'report', open: 'never' }], ['json', { outputFile: 'report/results.json' }]]
+    ? [
+        ['github'],
+        ['list'],
+        ['html', { outputFolder: 'report', open: 'never' }],
+        ['json', { outputFile: 'report/results.json' }]
+      ]
     : [['list']],
 
   use: {

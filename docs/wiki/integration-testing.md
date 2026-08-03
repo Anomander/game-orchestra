@@ -15,7 +15,7 @@ Read this before changing anything in [itest/](../../itest/), and before assumin
 |---|---|---|---|---|
 | **L0** | The module's logic against `tests/mocks/foundry.mjs` | node, no browser | ~3 s | `npm test` |
 | **L1** | The harness's own maths, against synthesised audio | node, no browser | included in L0 | `npm test` |
-| **L2** | The module in real Foundry, measured by a real audio probe | Docker + Chromium | ~6 min, 12 specs | `cd itest && npm run ci` |
+| **L2** | The module in real Foundry, measured by a real audio probe | Docker + Chromium | ~5 min, 13 specs | `cd itest && npm run ci` |
 | **L3** | Two clients at once (GM + player) | same as L2 | included in L2 | — |
 
 L1 is the unusual one and it is deliberate: `itest/harness/analysis.mjs`, `goertzel.mjs`,
@@ -26,7 +26,8 @@ whose own bugs get blamed on the module.** Two real defects were caught by L1 be
 ever saw Foundry, and the tier as a whole flushed out a dozen more — see
 [Findings](#findings-from-building-this).
 
-**Status:** all 12 L2/L3 specs pass against Foundry **14.364**.
+**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**. They do **not** yet pass
+on a GitHub runner — see [When CI fails](#when-ci-fails).
 
 ---
 
@@ -243,6 +244,51 @@ inside the built zip — the zip is assembled from an explicit file list, so a n
 declared, tested, and still left out of the release.
 
 ---
+
+## When CI fails
+
+The first release-gate run (`release-0.0.1a`) failed, and the *way* it failed is worth keeping,
+because the configuration turned one problem into no information at all:
+
+- Every spec failed identically, each burning its full 180 s timeout.
+- `retries: 1` doubled that.
+- The job hit `timeout-minutes: 30` mid-suite and was killed — so Playwright never printed its
+  end-of-run summary, and the HTML report was never written, so the upload found nothing.
+
+Twelve identical timeouts is one piece of evidence delivered at the highest possible price. Four
+changes make the next failure legible:
+
+| Change | Why |
+|---|---|
+| `['github']` reporter | Emits `::error::` annotations **as each spec fails**, so a killed run still shows the reasons |
+| `maxFailures: 3` in CI | A systemic failure stops after three, leaving time to report |
+| `timeout: 120_000` | The longest passing spec is ~45 s; this halves what a hang costs |
+| `timeout-minutes: 45` | Room for a failing run to finish *and* upload its report and traces |
+
+`itest/test-results` (traces and videos) is now uploaded alongside `itest/report`, because it
+exists even when a run is cut short before the HTML report is generated.
+
+**`specs/000-smoke.spec.mjs` is the canary.** It sorts first and checks only that the environment
+works at all: head GM, audio unlocked, probe attached, one track audible. It runs in ~15 s. A
+broken environment now fails there, with a message naming which part broke, instead of proving the
+same point twelve more times.
+
+### What is known and not known about that failure
+
+Established from the run log:
+
+- Setup was **entirely healthy**: PulseAudio loaded its null sink, the container came up, the world
+  bootstrapped (`World 'game-orchestra-itest' (worldbuilding 0.8.2) running on Foundry 14.364`),
+  and `globalSetup` succeeded — the suite got as far as `Running 12 tests`.
+- Every spec then failed at its timeout, meaning something in the shared `gm` fixture or the first
+  interaction hangs on a runner.
+
+Not established: **which** wait hangs. The run was killed before any reason was printed. Attempts to
+reproduce it locally — including deleting the world and bootstrapping fresh, so the world was as new
+as CI's — all pass. The remaining differences are the runner itself: Linux vs macOS Docker, a slower
+shared CPU, and headless Chromium against a PulseAudio null sink rather than a real device.
+
+The next CI run should name the failing wait directly in the Actions annotations.
 
 ## Debugging a failure
 

@@ -16,7 +16,7 @@ read the page that matches your task before writing code.**
 | `npm test` | Full vitest suite. Baseline: **1591 tests, 38 files, all passing.** ~3s. |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
-| `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~6 min, 12 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
+| `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~5 min, 13 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
 
 There is **no build step, no bundler, no TypeScript, and no linter.** `scripts/*.mjs` ships
 verbatim to the browser as native ESM. `node --check <file>` is the fastest syntax check.

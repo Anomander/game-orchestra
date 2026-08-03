@@ -66,6 +66,16 @@ export default async function globalSetup(config) {
  * @throws {Error} If no Gamemaster is offered on the join screen.
  */
 async function enterWorldAsGamemaster(page, baseURL) {
+  // Check the world is actually running before touching the UI. Without this, a server sitting on
+  // the setup or licence screen - the normal state after a container restart, when nobody has run
+  // `npm run bootstrap` - fails sixty seconds later as "no user option appeared", which describes
+  // the symptom and hides the cause.
+  const status = await page.request.get(`${baseURL}/api/status`).then((r) => r.json()).catch(() => ({}));
+  expect(
+    status.active === true && !!status.world,
+    `no world is running at ${baseURL} (status: ${JSON.stringify(status)}). Run 'npm run bootstrap' first.`
+  ).toBe(true);
+
   const auth = await page.request.post(`${baseURL}/auth`, { data: { adminPassword: ADMIN_KEY }, maxRedirects: 0 });
   expect(auth.status(), 'admin authentication was rejected - check FOUNDRY_ADMIN_KEY').toBe(302);
 

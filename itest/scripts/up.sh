@@ -14,11 +14,26 @@ FOUNDRY_VERSION="${FOUNDRY_VERSION:-$(node -p "require('$repo/module.json').comp
 export FOUNDRY_VERSION
 export FOUNDRY_PORT="${FOUNDRY_PORT:-30000}"
 
-if [[ -z "${FOUNDRY_USERNAME:-}" && -z "${FOUNDRY_RELEASE_URL:-}" ]]; then
+# Credentials are only needed when there is nothing to install *from*. A cached release archive
+# (itest/.cache) or an existing installation in the data volume is enough on its own, and demanding
+# credentials anyway blocks the common case of restarting a container you have already built - the
+# exact situation the host-side cache exists to make cheap.
+cache_zip="$repo/itest/.cache/foundryvtt-${FOUNDRY_VERSION}.zip"
+have_install=""
+if docker volume inspect docker_foundry-data >/dev/null 2>&1; then have_install="volume"; fi
+if [[ -f "$cache_zip" ]]; then have_install="cache"; fi
+
+if [[ -z "${FOUNDRY_USERNAME:-}" && -z "${FOUNDRY_RELEASE_URL:-}" && -z "$have_install" ]]; then
   echo "error: set FOUNDRY_USERNAME/FOUNDRY_PASSWORD or FOUNDRY_RELEASE_URL." >&2
   echo "Foundry is licensed software; this harness downloads it with your own credentials and" >&2
   echo "never redistributes it. See itest/README.md." >&2
+  echo "(A cached release at itest/.cache/foundryvtt-${FOUNDRY_VERSION}.zip, or an existing data" >&2
+  echo " volume, would also do - neither was found.)" >&2
   exit 1
+fi
+
+if [[ -z "${FOUNDRY_USERNAME:-}" && -z "${FOUNDRY_RELEASE_URL:-}" ]]; then
+  echo "No credentials set; using the existing ${have_install}."
 fi
 
 # The fixtures are a bind mount; an empty directory here means every track resolves to a 404 and
