@@ -133,8 +133,50 @@ scope entity used for position memory.
 | Source | Contexts contributed |
 |---|---|
 | Active scene | `area` and `combat` |
-| The combatant **whose turn it is**, if not defeated | `combat`, from token / actor / prototype token |
+| The combatant **whose turn it is**, if not defeated, *and only if it opted into `exclusive`* | `combat`, from token / actor / prototype token |
 | World default music setting | `combat` (only during combat) and `area` |
+
+### Layers
+
+**A combatant's theme layers by default; it only *replaces* the winner if it sets
+`music.combat.exclusive`.** A layer is not in the candidate pool at all — it has no priority, it
+never competes, and it cannot be beaten. `getCurrentLayerContext()` returns it and
+`_syncLayer()` runs it on a **second, independent `CustomPlaybackEngine`** alongside the base one,
+so the base is never stopped, never restarts, and has nothing to resume (which matters: position
+memory can't help a graph — H9).
+
+| | Exclusive (opt-in) | Layer (default) |
+|---|---|---|
+| In the candidate pool | yes | **no** |
+| Base music while it plays | stopped and crossfaded out | **untouched, still playing** |
+| Filtered by `combat.started` / `suppressCombat` | yes | yes |
+| Sorted by priority | yes | n/a |
+| Engine | `_customEngine` | `_layerEngine` |
+
+`exclusive` is stored once per **section** (`music.combat.exclusive`), never per phase overlay —
+one flag governs whichever playlist the section resolves to for any phase. Absent means false, so
+an override configured before layering existed layers.
+
+A layer target may be a plain native playlist, so `_syncLayer()` passes an explicit
+`buildNativeModeGraph()` result to the engine — its own fallback for a playlist with no stored
+graph is an *empty* graph, which starts and goes idle in silence. Same pairing `_runPlaylistPass()`
+uses for a Playlist node's target.
+
+The layer is refused outright if its playlist is the base's, or is anywhere in the base engine
+tree (H15).
+
+**Ducking.** `music.combat.duck` (section level, same as `exclusive`) is the multiplier
+*everything else* is taken to while the layer plays — 1/absent means no ducking, and it is stored
+and rendered exactly like the mixer's `gain`. It is published as the `activeDuck` **world
+setting** rather than held on the controller, because the engine is head-GM-only but volume is
+applied per client (rule 5) — a duck in memory would duck the GM and nobody else. Every client's
+`mixedVolume()` multiplies by `duckFactorFor(playlist)`; the setting's `onChange` calls
+`reassertDuck()`, which re-levels every playing sound gliding over the layer's crossfade value.
+The layer's **whole engine registry** is exempt, not just its root playlist, so a layer graph
+reaching another playlist through a Playlist node doesn't duck its own nested audio. See
+[mixer.md](mixer.md) for where the duck sits in the volume chain.
+
+### Turn scoping
 
 **A token/actor override is a *turn* theme, not a fight theme.** Only `combat.combatant` — the
 combatant currently taking its turn — is consulted; the rest of the tracker contributes nothing.
@@ -210,6 +252,9 @@ first would start already in whatever phase the previous fight ended on (e.g. `E
    Since only the current combatant contributes a combat context at all, the first rule is a
    safety net rather than the mechanism: it keeps a turn theme on top even if a scene section has
    been given a hand-edited priority above the `+20` token baseline.
+4. **Layer** — after the winner has transitioned, `_syncLayer()` brings the additive layer into
+   line. This runs on **every** `playCurrentTrack()`, including the ones that decided the base
+   needed no change at all: a turn passing changes the layer and nothing else.
 
 ### Track resolution
 

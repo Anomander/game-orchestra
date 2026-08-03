@@ -132,6 +132,26 @@ export function effectiveVolume(soundVolume, mix, soundId) {
 }
 
 /**
+ * Coerce a duck factor - the multiplier applied to everything that is NOT the layer while an
+ * additive layer plays (MusicController#_syncLayer). 1 is "no ducking", 0 is silence.
+ *
+ * Deliberately NOT part of `PlaylistMix` and not applied inside effectiveVolume(): a duck is
+ * transient, external, and belongs to no playlist, so folding it into the mix would make the
+ * mixer's `stored -> effective` readout jump around while a boss took its turn. It is applied
+ * once, at the playback boundary (playlist-mix-apply.mjs#mixedVolume), on top of the finished
+ * mix - which also means it can legitimately take a track BELOW the mix's own floor. The floor
+ * is a statement about how quiet a playlist may shape itself; the duck is somebody else
+ * temporarily standing in front of it.
+ * @param {*} raw
+ * @returns {number} A number in [0, 1]; 1 for anything missing or malformed.
+ */
+export function coerceDuckFactor(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
  * Whether a mix changes anything at all about how this playlist sounds. Used by the render
  * layer to decide whether a row needs to show its `stored -> effective` readout, and by the
  * playback layer to skip work entirely on the overwhelmingly common untouched playlist.

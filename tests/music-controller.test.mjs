@@ -7,10 +7,18 @@ setupFoundryMocks();
 // need to verify the controller wires into it correctly, so it's mocked out.
 vi.mock('../scripts/custom-playback-engine.mjs', () => {
   class MockCustomPlaybackEngine {
-    constructor(playlistContext, controller) {
+    constructor(playlistContext, controller, options = {}) {
       this.playlistContext = playlistContext;
       this.controller = controller;
+      this.options = options;
       this.playlist = playlistContext?.playlist ?? null;
+      // Mirrors the real constructor's fallback chain, so a test can tell an explicitly-passed
+      // graph (what a layer needs, since its target may be a plain native playlist) apart from
+      // the empty-graph default that would start and immediately go idle in silence.
+      this.graph = options.graph || { version: 1, nodes: [], edges: [] };
+      // The sounds this engine's durational nodes currently own. Tests that care about the
+      // layer's teardown fade set this per-instance.
+      this.activeSounds = [];
       this.start = vi.fn().mockResolvedValue();
       // Mirrors the real engine: live from construction until stop() runs -
       // see CustomPlaybackEngine's isRunning getter (backed by _runId).
@@ -168,6 +176,203 @@ describe('MusicController', () => {
       const ctxB = { contextEntity: {}, priority: 15 };
 
       expect(controller.sortPlaylists(ctxA, ctxB, combat)).toBe(10); // 15 - 5 > 0 => b comes before a
+    });
+  });
+
+  describe('additive layers', () => {
+    /** A prototype-token-shaped music source, the shape a combatant resolves through. */
+    function combatSource(section) {
+      function PrototypeToken() {
+        this.flags = { 'game-orchestra': { music: { combat: section } } };
+      }
+      return new PrototypeToken();
+    }
+
+    /** Put `token` on the current combatant's turn in a started combat. */
+    function combatWith(token) {
+      const combatant = { token, isDefeated: false };
+      game.combats = { active: { started: true, combatant, combatants: [combatant] } };
+      return combatant;
+    }
+
+    it('keeps a layering combatant out of the winner pool and exposes it as the layer', () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP', priority: 20 }));
+
+      expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).not.toContain(bossPl);
+      expect(controller.getCurrentLayerContext()?.playlist).toBe(bossPl);
+    });
+
+    it('puts an exclusive combatant in the winner pool and produces no layer', () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP', priority: 20, exclusive: true }));
+
+      expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).toContain(bossPl);
+      expect(controller.getCurrentLayerContext()).toBeNull();
+    });
+
+    it('suppresses the layer under the same rules as any combat context', () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP' }));
+
+      setMockSetting('game-orchestra', 'suppressCombat', true);
+      expect(controller.getCurrentLayerContext()).toBeNull();
+
+      setMockSetting('game-orchestra', 'suppressCombat', false);
+      game.combats.active.started = false;
+      expect(controller.getCurrentLayerContext()).toBeNull();
+    });
+
+    it('starts the layer on a second engine, over a graph synthesized from a native playlist', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', [createMockSound('b1', 'Horns')]);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP' }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+
+      await controller._syncLayer();
+
+      expect(controller._layerEngine).not.toBeNull();
+      expect(controller._layerEngine.playlist).toBe(bossPl);
+      expect(controller._layerEngine.start).toHaveBeenCalled();
+      // The empty-graph default would start and go idle in silence - a native layer target has
+      // no stored graph, so one has to be synthesized for it.
+      expect(controller._layerEngine.graph.nodes.length).toBeGreaterThan(0);
+      // The base engine is untouched: a layer is additive, never a transition.
+      expect(controller._customEngine).toBeNull();
+    });
+
+    it('refuses to layer the playlist the base context is already playing', async () => {
+      const sharedPl = createMockPlaylist('sharedP', 'Shared', []);
+      game.playlists.get = vi.fn((id) => (id === 'sharedP' ? sharedPl : null));
+      combatWith(combatSource({ playlist: 'sharedP' }));
+      controller.currentContext = { playlist: sharedPl };
+
+      await controller._syncLayer();
+
+      expect(controller._layerEngine).toBeNull();
+    });
+
+    it('refuses to layer a playlist already in flight inside the base engine tree', async () => {
+      const nestedPl = createMockPlaylist('nestedP', 'Nested', []);
+      game.playlists.get = vi.fn((id) => (id === 'nestedP' ? nestedPl : null));
+      combatWith(combatSource({ playlist: 'nestedP' }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+      controller._customEngine = { isRunning: true, isPlayingPlaylist: vi.fn(() => true) };
+
+      await controller._syncLayer();
+
+      expect(controller._layerEngine).toBeNull();
+    });
+
+    it('leaves a layer that resolved to the same playlist running rather than restarting it', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP' }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+
+      await controller._syncLayer();
+      const first = controller._layerEngine;
+      await controller._syncLayer();
+
+      expect(controller._layerEngine).toBe(first);
+      expect(first.stop).not.toHaveBeenCalled();
+      expect(first.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('retires the layer and fades its sounds when the turn passes to someone without one', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP' }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+
+      await controller._syncLayer();
+      const engine = controller._layerEngine;
+      const layerSound = createMockSound('b1', 'Horns', { playing: true });
+      engine.activeSounds = [layerSound];
+
+      // Turn passes to a combatant with nothing configured.
+      combatWith(combatSource({}));
+      await controller._syncLayer();
+
+      expect(engine.stop).toHaveBeenCalledWith({ stopAudio: false });
+      expect(layerSound.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
+      expect(controller._layerEngine).toBeNull();
+      expect(controller.currentLayerContext).toBeNull();
+    });
+
+    it('publishes the layer duck as a world setting, exempting the layer engine tree', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP', duck: 0.3 }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+
+      await controller._syncLayer();
+      // Stand in for a Playlist node inside the layer graph having entered a nested target.
+      controller._layerEngine._registry = new Set(['bossP', 'nestedP']);
+      await controller._syncLayer();
+
+      const stored = game.settings.get('game-orchestra', 'activeDuck');
+      expect(stored.factor).toBe(0.3);
+      expect(stored.exemptPlaylistIds).toEqual(['bossP', 'nestedP']);
+    });
+
+    it('publishes nothing when the layer asks for no ducking', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP' }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+
+      await controller._syncLayer();
+
+      expect(game.settings.get('game-orchestra', 'activeDuck')).toEqual({});
+    });
+
+    it('lifts the duck when the layer is retired', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
+      combatWith(combatSource({ playlist: 'bossP', duck: 0.3 }));
+      controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
+      await controller._syncLayer();
+
+      combatWith(combatSource({}));
+      await controller._syncLayer();
+
+      expect(game.settings.get('game-orchestra', 'activeDuck')).toEqual({});
+    });
+
+    it('lifts a duck left behind by a previous session, even with no engine to retire', async () => {
+      setMockSetting('game-orchestra', 'activeDuck', { factor: 0.2, exemptPlaylistIds: ['gone'] });
+      game.combats = { active: null };
+
+      await controller.reconcileRestoredPlayback();
+
+      expect(game.settings.get('game-orchestra', 'activeDuck')).toEqual({});
+    });
+
+    it('leaves the layer playing across a base transition that stops every other managed sound', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const layerSound = createMockSound('layer1', 'Horns', { playing: true });
+      const baseSound = createMockSound('old1', 'Old Track', { playing: true });
+      game.playlists.playing = [createMockPlaylist('mixedP', 'Playing', [layerSound, baseSound])];
+      controller._managedSoundIds.add('layer1');
+      controller._managedSoundIds.add('old1');
+      controller._layerEngine = { isRunning: true, activeSounds: [layerSound] };
+
+      const newSound = createMockSound('new1', 'New Track');
+      vi.spyOn(controller, 'playTrack').mockResolvedValue();
+      await controller.transitionToContext({
+        playlist: createMockPlaylist('newP', 'New Playlist', [newSound]),
+        tracks: [newSound],
+        scopeEntity: null
+      });
+
+      expect(baseSound.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
+      expect(layerSound.sound.fade).not.toHaveBeenCalled();
+      expect(layerSound.playing).toBe(true);
     });
   });
 
@@ -1061,7 +1266,7 @@ describe('MusicController', () => {
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? themePlaylist : null));
 
       function PrototypeToken() {
-        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20 } } } };
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20, exclusive: true } } } };
       }
       const prototypeToken = new PrototypeToken();
       // A linked, placed token whose own flags are empty - exactly what a token gets when the
@@ -1083,7 +1288,7 @@ describe('MusicController', () => {
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? themePlaylist : null));
 
       function PrototypeToken() {
-        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20 } } } };
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', priority: 20, exclusive: true } } } };
       }
       const defeatedToken = new PrototypeToken();
       const combatant = { token: defeatedToken, isDefeated: true };
@@ -1105,7 +1310,7 @@ describe('MusicController', () => {
       });
 
       function PrototypeToken(playlistId) {
-        this.flags = { 'game-orchestra': { music: { combat: { playlist: playlistId, priority: 20 } } } };
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: playlistId, priority: 20, exclusive: true } } } };
       }
       const bossToken = new PrototypeToken('bossP');
       const plainToken = new PrototypeToken(null);
@@ -1130,7 +1335,7 @@ describe('MusicController', () => {
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPlaylist : id === 'allyP' ? allyPlaylist : null));
 
       function PrototypeToken(playlistId) {
-        this.flags = { 'game-orchestra': { music: { combat: { playlist: playlistId, priority: 20 } } } };
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: playlistId, priority: 20, exclusive: true } } } };
       }
       const defeatedToken = new PrototypeToken('bossP');
       const aliveToken = new PrototypeToken('allyP');
@@ -1262,7 +1467,7 @@ describe('MusicController', () => {
         this.flags = {
           'game-orchestra': {
             music: {
-              combat: { playlist: 't-def', priority: 20 }
+              combat: { playlist: 't-def', priority: 20, exclusive: true }
             }
           }
         };
@@ -1294,6 +1499,7 @@ describe('MusicController', () => {
               combat: {
                 playlist: 't-def',
                 priority: 20,
+                exclusive: true,
                 overlays: { p2: { playlist: 't-mood' } }
               }
             }

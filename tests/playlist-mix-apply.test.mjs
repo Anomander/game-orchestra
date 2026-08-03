@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { setupFoundryMocks } from './mocks/foundry.mjs';
+import { setupFoundryMocks, setMockSetting } from './mocks/foundry.mjs';
 
 setupFoundryMocks();
 
-import { applyMixToPlaylist, applyMixToSound, clearSolo, getPlaylistMix, getSoloIds, handleUpdatePlaylistMix, handleUpdatePlaylistSoundMix, mixedVolume, playlistNeedsMix, toggleSolo } from '../scripts/playlist-mix-apply.mjs';
+import { applyMixToPlaylist, applyMixToSound, clearSolo, duckFactorFor, getActiveDuck, getPlaylistMix, getSoloIds, handleUpdatePlaylistMix, handleUpdatePlaylistSoundMix, mixedVolume, playlistNeedsMix, reassertDuck, toggleSolo } from '../scripts/playlist-mix-apply.mjs';
 
 /**
  * A playlist and its sounds in the shape this module actually reads: PlaylistSound#parent is the
@@ -29,6 +29,7 @@ const fadeCallsFor = (sound) => sound.sound.fade.mock.calls;
 beforeEach(() => {
   clearSolo('p1');
   clearSolo('p2');
+  setMockSetting('game-orchestra', 'activeDuck', {});
 });
 
 afterEach(() => {
@@ -70,6 +71,61 @@ describe('mixedVolume', () => {
 
   it('returns 0 rather than throwing for a missing sound', () => {
     expect(mixedVolume(null)).toBe(0);
+  });
+});
+
+describe('ducking (an additive layer attenuating everything else)', () => {
+  it('is transparent when nothing is ducking', () => {
+    const { playlist, sounds } = makePlaylist('p1', null, [{ id: 's1', volume: 0.8 }]);
+    expect(getActiveDuck()).toEqual({ factor: 1, exemptPlaylistIds: [] });
+    expect(duckFactorFor(playlist)).toBe(1);
+    expect(mixedVolume(sounds[0])).toBe(0.8);
+  });
+
+  it('attenuates a playlist that is not the layer', () => {
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.25, exemptPlaylistIds: ['layerP'] });
+    const { sounds } = makePlaylist('p1', null, [{ id: 's1', volume: 0.8 }]);
+    expect(mixedVolume(sounds[0])).toBeCloseTo(0.2);
+  });
+
+  it('leaves the layer itself, and anything nested inside its engine tree, alone', () => {
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.25, exemptPlaylistIds: ['layerP', 'nestedP'] });
+    const { sounds: layerSounds } = makePlaylist('layerP', null, [{ id: 's1', volume: 0.8 }]);
+    const { sounds: nestedSounds } = makePlaylist('nestedP', null, [{ id: 's2', volume: 0.8 }]);
+    expect(mixedVolume(layerSounds[0])).toBe(0.8);
+    expect(mixedVolume(nestedSounds[0])).toBe(0.8);
+  });
+
+  it('applies after the mix clamp, so a duck can go below the playlist floor', () => {
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.5, exemptPlaylistIds: [] });
+    const { sounds } = makePlaylist('p1', { floor: 0.6 }, [{ id: 's1', volume: 0.1 }]);
+    // The mix floors it to 0.6; the duck is a separate, external attenuation on top.
+    expect(mixedVolume(sounds[0])).toBeCloseTo(0.3);
+  });
+
+  it('does not resurrect a muted track', () => {
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.5, exemptPlaylistIds: [] });
+    const { sounds } = makePlaylist('p1', { muted: ['s1'] }, [{ id: 's1', volume: 1 }]);
+    expect(mixedVolume(sounds[0])).toBe(0);
+  });
+
+  it('makes an otherwise-transparent playlist need mix work, so a track starting mid-layer is ducked too', () => {
+    const { playlist } = makePlaylist('p1', null, [{ id: 's1' }]);
+    expect(playlistNeedsMix(playlist)).toBe(false);
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.4, exemptPlaylistIds: [] });
+    expect(playlistNeedsMix(playlist)).toBe(true);
+  });
+
+  it('re-levels every playing sound in the world, gliding over the duck fade', () => {
+    const { playlist: p1, sounds: s1 } = makePlaylist('p1', null, [{ id: 'a', volume: 1, playing: true, audioPlaying: true }]);
+    const { playlist: p2, sounds: s2 } = makePlaylist('p2', null, [{ id: 'b', volume: 1, playing: true, audioPlaying: true }]);
+    game.playlists.playing = [p1, p2];
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.5, exemptPlaylistIds: [], fadeMs: 2000 });
+
+    reassertDuck();
+
+    expect(fadeCallsFor(s1[0])[0]).toEqual([0.5, { duration: 2000 }]);
+    expect(fadeCallsFor(s2[0])[0]).toEqual([0.5, { duration: 2000 }]);
   });
 });
 

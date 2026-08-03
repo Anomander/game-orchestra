@@ -1,8 +1,9 @@
 import { CONST } from './config.mjs';
-import { log, PlaylistContext, FadingTrack, isHeadGM, isCustomPlaylist, getCustomGraph, resolvePlaylistRef } from './helpers.mjs';
+import { log, PlaylistContext, FadingTrack, isHeadGM, isCustomPlaylist, getCustomGraph, resolvePlaylistRef, readMusicSection } from './helpers.mjs';
+import { buildNativeModeGraph } from './native-mode-graph.mjs';
 import { CustomPlaybackEngine } from './custom-playback-engine.mjs';
 import { getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
-import { resolveCrossfadeOverride } from './playlist-mix.mjs';
+import { coerceDuckFactor, resolveCrossfadeOverride } from './playlist-mix.mjs';
 
 /**
  * Main music controller class for Game Orchestra module
@@ -19,6 +20,11 @@ export class MusicController {
     this._transitionSequenceId = 0;
     this._debounceTimer = null;
     this._customEngine = null;
+    // The additive layer running alongside _customEngine (a combatant's turn theme), and the
+    // context that produced it. A SECOND, fully independent engine: the whole point of a layer
+    // is that starting and stopping it never touches the base's playback - see _syncLayer.
+    this._layerEngine = null;
+    this._layerContext = null;
     // One-shot: whether this session has cleaned up playback Foundry restored
     // from a previous one (see reconcileRestoredPlayback).
     this._restoredPlaybackReconciled = false;
@@ -30,6 +36,16 @@ export class MusicController {
    */
   get currentTrack() {
     return this.currentTracks[0] || null;
+  }
+
+  /**
+   * The context currently playing as an additive layer over `currentContext`, if any. Distinct
+   * from `currentContext`, which is only ever the winner of the ordinary resolution - a layer
+   * never competes in that (see getCurrentLayerContext).
+   * @returns {PlaylistContext|null}
+   */
+  get currentLayerContext() {
+    return this._layerContext;
   }
 
   /**
@@ -129,14 +145,18 @@ export class MusicController {
 
       if (contextUnchanged && audioActuallyPlaying) {
         log(3, 'Current tracks already match resolved target context and audio is playing. No change.');
-        return;
+      } else {
+        if (contextUnchanged && !audioActuallyPlaying && targetTracks.length > 0) {
+          log(3, 'Context unchanged but audio is not playing — restarting tracks.');
+        }
+        await this.transitionToContext(winnerContext);
       }
 
-      if (contextUnchanged && !audioActuallyPlaying && targetTracks.length > 0) {
-        log(3, 'Context unchanged but audio is not playing — restarting tracks.');
-      }
-
-      await this.transitionToContext(winnerContext);
+      // Always, including on the no-change path above: the base can be entirely unchanged while
+      // the layer has to swap or stop, which is the normal case for a turn passing between two
+      // combatants when neither is exclusive. Returning early here would strand the outgoing
+      // combatant's theme playing over everyone else's turn.
+      await this._syncLayer();
     } catch (error) {
       log(1, 'Error in playCurrentTrack calculation:', error);
     } finally {
@@ -190,9 +210,7 @@ export class MusicController {
     // transition use the one value - it is a single crossfade, not two independent fades, and
     // taking the outgoing playlist's number for the fade-out and the incoming one's for the
     // fade-in would leave an audible dip or bulge in the middle wherever they disagreed.
-    const playlistCrossfadeMs = resolveCrossfadeOverride(getPlaylistMix(targetContext?.playlist)?.crossfadeMs);
-    const fadeDurationSec = game.settings.get(CONST.moduleId, CONST.settings.fadeDuration) ?? 3;
-    const fadeDurationMs = playlistCrossfadeMs ?? fadeDurationSec * 1000;
+    const fadeDurationMs = this._resolveFadeMs(targetContext?.playlist);
 
     log(3, `Transitioning music context to '${targetContext?.playlist?.name || 'none'}' (stopping ${this.fadingTracks.length} tracks, starting ${targetTracks.length} tracks, fade: ${fadeDurationMs}ms)`);
 
@@ -213,27 +231,19 @@ export class MusicController {
       }
     }
 
+    // The layer runs its own engine and outlives base transitions entirely - that is what makes
+    // it a layer. Its sounds are in _managedSoundIds like any other, so without this exclusion
+    // the loop below would fade them out on every single base re-resolution and the layer would
+    // die the moment anything else changed.
+    const layerSoundIds = new Set((this._layerEngine?.activeSounds ?? []).map((sound) => sound.id));
+
     // Fade out current playing tracks (excluding targetTracks). Only ever touches sounds
     // this controller itself previously started — a GM's manually-started ambience or
     // jukebox playlist is left alone rather than being silently cut off.
-    for (const activeSound of game.playlists.playing.flatMap((p) => Array.from(p.sounds.values()))) {
-      if (targetTrackIds.has(activeSound.id)) continue;
-      if (!this._managedSoundIds.has(activeSound.id)) continue;
-      if (activeSound.playing) {
-        const soundObj = activeSound.sound || activeSound;
-        if (fadeDurationMs > 0 && typeof soundObj?.fade === 'function') {
-          log(3, `Fading out track '${activeSound.name}' over ${fadeDurationMs}ms`);
-          soundObj.fade(0, { duration: fadeDurationMs }).then(() => {
-            this.stopTrack(activeSound);
-          }).catch(() => {
-            this.stopTrack(activeSound);
-          });
-          this.fadingTracks.push(new FadingTrack(activeSound, fadeDurationMs));
-        } else {
-          this.stopTrack(activeSound);
-        }
-      }
-    }
+    const soundsToFade = game.playlists.playing
+      .flatMap((p) => Array.from(p.sounds.values()))
+      .filter((sound) => !targetTrackIds.has(sound.id) && this._managedSoundIds.has(sound.id) && !layerSoundIds.has(sound.id));
+    this._fadeOutSounds(soundsToFade, fadeDurationMs);
 
     if (isCustomPlaylist(targetContext?.playlist)) {
       this.currentContext = targetContext;
@@ -297,6 +307,180 @@ export class MusicController {
   }
 
   /**
+   * The crossfade length governing a hand-off involving this playlist: its own mixer override
+   * when it has one, otherwise the world fade setting. Both directions of a transition use the
+   * one value - it is a single crossfade, not two independent fades, and taking the outgoing
+   * playlist's number for the fade-out and the incoming one's for the fade-in would leave an
+   * audible dip or bulge in the middle wherever they disagreed.
+   * @param {object|null} playlist
+   * @returns {number} Milliseconds; 0 means "cut, don't fade".
+   * @private
+   */
+  _resolveFadeMs(playlist) {
+    const override = resolveCrossfadeOverride(getPlaylistMix(playlist)?.crossfadeMs);
+    const fadeDurationSec = game.settings.get(CONST.moduleId, CONST.settings.fadeDuration) ?? 3;
+    return override ?? fadeDurationSec * 1000;
+  }
+
+  /**
+   * Fade the given sounds to silence and stop them, or stop them outright when there is no fade
+   * to run. Shared by the base transition and the layer teardown so a layer ending sounds exactly
+   * like any other hand-off. Callers are responsible for deciding WHICH sounds may be touched -
+   * this stops everything handed to it.
+   * @param {Array<object>} sounds - PlaylistSound documents.
+   * @param {number} fadeDurationMs
+   * @private
+   */
+  _fadeOutSounds(sounds, fadeDurationMs) {
+    for (const activeSound of sounds) {
+      if (!activeSound?.playing) continue;
+      const soundObj = activeSound.sound || activeSound;
+      if (fadeDurationMs > 0 && typeof soundObj?.fade === 'function') {
+        log(3, `Fading out track '${activeSound.name}' over ${fadeDurationMs}ms`);
+        Promise.resolve(soundObj.fade(0, { duration: fadeDurationMs })).then(() => {
+          this.stopTrack(activeSound);
+        }).catch(() => {
+          this.stopTrack(activeSound);
+        });
+        this.fadingTracks.push(new FadingTrack(activeSound, fadeDurationMs));
+      } else {
+        this.stopTrack(activeSound);
+      }
+    }
+  }
+
+  /**
+   * Bring the additive layer into line with what the current combatant asks for, without
+   * disturbing the base context in any way. Called on EVERY playCurrentTrack(), including the
+   * ones where the base is unchanged - a turn passing changes the layer and nothing else.
+   *
+   * The layer is a second, independent CustomPlaybackEngine. It is not a context in the winner
+   * pool, has no priority, and is never crossfaded against the base: the base simply keeps
+   * playing underneath, which is the entire feature - no stop, no restart, and therefore nothing
+   * to resume (position memory can't help a graph anyway, H9).
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _syncLayer() {
+    const next = this.getCurrentLayerContext();
+    const nextPlaylist = next?.playlist ?? null;
+
+    // Same reasoning as transitionToContext()'s already-running guard: a re-resolution that
+    // lands on the playlist already layering (an unrelated mood/phase change, a combatant
+    // update) must not restart it from Start.
+    if (nextPlaylist && this._layerEngine?.isRunning && this._layerEngine.playlist?.id === nextPlaylist.id) {
+      this._layerContext = next;
+      await this._layerEngine.refreshOverlayReactiveTargets();
+      // Re-published, not skipped: the engine's registry may have grown since the layer started
+      // (a Playlist node entering a nested target), and those playlists need exempting too.
+      await this._applyDuck(next);
+      return;
+    }
+
+    await this._retireLayer();
+    if (!nextPlaylist) {
+      // _retireLayer() only runs when there IS an engine to retire, so a duck left behind by an
+      // earlier session or a torn-down engine would otherwise never be lifted.
+      await this._applyDuck(null);
+      return;
+    }
+
+    // Two engines must never drive the same playlist (H15). CustomPlaybackEngine's
+    // _activeSoundOwners map makes two Track nodes sharing a soundId safe, but it is
+    // PER-ENGINE - across two engine trees there is nothing stopping each from adopting,
+    // re-starting and stealing the other's AudioEndWatcher listener on the same physical
+    // PlaylistSound. Refusing the layer is the only safe outcome: the base owns the playlist,
+    // and a second copy of it layered over itself was never going to sound like anything but
+    // a stuttering doubling anyway.
+    const basePlaylistId = this.currentContext?.playlist?.id ?? null;
+    if (nextPlaylist.id === basePlaylistId || this._customEngine?.isPlayingPlaylist(nextPlaylist.id)) {
+      log(2, `Refusing to layer playlist '${nextPlaylist.name}': it is already being played by the base context. Give the combatant a different playlist, or tick 'Play exclusively' to have it replace the base instead.`);
+      return;
+    }
+
+    // An explicit graph, unlike the base's custom-playlist branch: a layer may target a plain
+    // NATIVE playlist, and the engine constructor's own fallback for a playlist with no stored
+    // graph is an EMPTY graph - which starts, finds nothing to do, and goes idle in silence.
+    // Synthesizing one from the playlist's native mode is exactly what a Playlist node does for
+    // its target (_runPlaylistPass), so native and custom layers behave identically.
+    const graph = getCustomGraph(nextPlaylist) || buildNativeModeGraph(nextPlaylist);
+    this._layerContext = next;
+    this._layerEngine = new CustomPlaybackEngine(next, this, { graph });
+    log(3, `Starting music layer '${nextPlaylist.name}' over '${this.currentContext?.playlist?.name || 'nothing'}'`);
+    this._refreshUI();
+    // Before start(), so the base has already dipped by the time the layer's first track is
+    // audible rather than a beat after it.
+    await this._applyDuck(next);
+    await this._layerEngine.start();
+  }
+
+  /**
+   * Publish this layer's duck to the world, or clear it. The value is a WORLD SETTING, not engine
+   * state: the engine runs on the head GM alone, but volume is applied per client from the
+   * document (CLAUDE.md rule 5), so a duck held in memory here would duck the GM and nobody else.
+   * Every client's own mix application reads it back - see playlist-mix-apply.mjs#duckFactorFor.
+   *
+   * The layer's whole engine tree is exempt, not just its root playlist, so a layer graph that
+   * reaches another playlist through a Playlist node doesn't duck its own nested audio. The
+   * registry is shared by reference with child engines (plan D6), so this snapshot keeps growing
+   * correctly for the nodes entered so far; a nested target entered later is picked up by the
+   * next re-publish rather than immediately, which is the one rough edge here.
+   * @param {PlaylistContext|null} layerContext - null clears the duck.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _applyDuck(layerContext) {
+    if (!isHeadGM()) return;
+    const current = game.settings.get(CONST.moduleId, CONST.settings.activeDuck) || {};
+    const factor = layerContext ? coerceDuckFactor(this._resolveDuckFactor(layerContext)) : 1;
+    const exemptPlaylistIds = layerContext ? [...(this._layerEngine?._registry ?? [layerContext.playlist?.id])].filter(Boolean) : [];
+    const fadeMs = layerContext ? this._resolveFadeMs(layerContext.playlist) : this._resolveFadeMs(this.currentContext?.playlist);
+    // Writing an unchanged value would still fire onChange on every client and re-glide audio
+    // that is already at the right level, on every single turn change.
+    const unchanged = coerceDuckFactor(current.factor) === factor &&
+      JSON.stringify(current.exemptPlaylistIds ?? []) === JSON.stringify(exemptPlaylistIds);
+    if (unchanged) return;
+    await game.settings.set(CONST.moduleId, CONST.settings.activeDuck, factor >= 1 ? {} : { factor, exemptPlaylistIds, fadeMs });
+  }
+
+  /**
+   * The duck factor a layer asks for: `music.combat.duck` on whichever document the layer
+   * resolved from, 1 (no ducking) when unset.
+   * @param {PlaylistContext} layerContext
+   * @returns {number}
+   * @private
+   */
+  _resolveDuckFactor(layerContext) {
+    return readMusicSection(layerContext?.contextEntity, 'combat')?.duck;
+  }
+
+  /**
+   * Tear down the running layer, fading its sounds out over the layer playlist's own crossfade
+   * value. Its active sounds have to be captured BEFORE stop(): once the engine has stopped, its
+   * nodes have released them and activeSounds is empty, so there would be nothing left to fade.
+   * Stopped with `stopAudio: false` for the same reason transitionToContext does - it hands the
+   * sounds to the fade instead of hard-cutting them (H11).
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _retireLayer() {
+    const engine = this._layerEngine;
+    if (!engine) return;
+    const sounds = engine.activeSounds;
+    const fadeDurationMs = this._resolveFadeMs(engine.playlist);
+    this._layerEngine = null;
+    this._layerContext = null;
+    log(3, `Retiring music layer '${engine.playlist?.name || 'unknown'}' (fading ${sounds.length} track(s) over ${fadeDurationMs}ms)`);
+    await engine.stop({ stopAudio: false });
+    this._fadeOutSounds(sounds, fadeDurationMs);
+    // Released here rather than in _syncLayer so that EVERY teardown path lifts the duck - a
+    // stale duck is silent and invisible, and would leave the table's music quietly attenuated
+    // with nothing playing over it.
+    await this._applyDuck(null);
+    this._refreshUI();
+  }
+
+  /**
    * Stop any custom-playlist sound Foundry resurrected from persisted document
    * state, before the first playCurrentTrack() of this session.
    *
@@ -322,6 +506,10 @@ export class MusicController {
     // Document updates, so exactly one client must do this - the same one that
     // will be running the engine.
     if (!isHeadGM()) return;
+    // A duck is a world setting, so a hard refresh mid-layer leaves it applied with nothing
+    // layering over it - and unlike a stuck sound it makes no noise to give itself away, it just
+    // makes everything quieter forever. Same class of stale state this whole method exists for.
+    await this._applyDuck(null);
     const playlists = game.playlists?.contents || Array.from(game.playlists || []);
     const visited = new Set();
     // A Map, not an array: a playlist reachable both directly (it has its own
@@ -342,6 +530,13 @@ export class MusicController {
         toCheck.set(target.id, target);
       }
     }
+    // Layer playlists are engine-driven whether or not they have a graph of their own, so a
+    // NATIVE one used as a layer leaves exactly the same orphaned-and-resurrected sounds the
+    // class doc above describes - and the loops above would never look at it, since nothing
+    // references it and it isn't custom. Bounded by the combatant count, and safe for a playlist
+    // that also turns out to be the base: this runs once, before any playback this session, and
+    // a reload has no saved positions to lose anyway.
+    for (const playlist of this._collectLayerPlaylists()) toCheck.set(playlist.id, playlist);
     const stopped = [];
     for (const playlist of toCheck.values()) {
       const sounds = playlist.sounds?.contents || Array.from(playlist.sounds?.values() || []);
@@ -354,6 +549,37 @@ export class MusicController {
     if (stopped.length > 0) {
       log(3, `Stopped ${stopped.length} custom-playlist sound(s) left marked as playing by a previous session: ${stopped.join(', ')}`);
     }
+  }
+
+  /**
+   * Every playlist that could currently run as a layer - the non-exclusive combat override of
+   * each combatant in the active combat, defeated ones included (a combatant can be revived, and
+   * this is only ever used to look for stale sounds). Every combatant is walked here, not just
+   * the current one, because reconcileRestoredPlayback() is cleaning up after a PREVIOUS session
+   * whose turn order is unknowable from here.
+   * @returns {Array<object>} Playlist documents.
+   * @private
+   */
+  _collectLayerPlaylists() {
+    const combat = this.currentCombat;
+    if (!combat?.combatants) return [];
+    const found = new Map();
+    for (const combatant of combat.combatants) {
+      for (const source of this._getCombatantMusicSources(combatant.token, combatant.actor)) {
+        const section = readMusicSection(source, 'combat');
+        if (!section) continue;
+        if (section.exclusive === true) break;
+        // Every phase override too, not just the base pick: which one was live last session is
+        // as unknowable from here as the turn order was.
+        const ids = [section.playlist, ...Object.values(section.overlays || {}).map((o) => o?.playlist)];
+        for (const id of ids) {
+          const playlist = id ? game.playlists?.get(id) : null;
+          if (playlist) found.set(playlist.id, playlist);
+        }
+        break;
+      }
+    }
+    return [...found.values()];
   }
 
   /**
@@ -393,11 +619,12 @@ export class MusicController {
    * @returns {object|null}
    */
   getGraphActivity(playlist) {
-    if (!playlist || !this._customEngine) return null;
+    if (!playlist) return null;
     // Walks into descendants spawned by a Playlist node, not just the root
     // context's own engine - the editor can be opened on a playlist that's
-    // only ever reached as some other graph's Playlist-node target.
-    const engine = this._customEngine.findEngineFor?.(playlist.id);
+    // only ever reached as some other graph's Playlist-node target. The layer
+    // is a separate root of its own, so it needs its own walk.
+    const engine = this._customEngine?.findEngineFor?.(playlist.id) ?? this._layerEngine?.findEngineFor?.(playlist.id);
     return engine ? engine.activityState : null;
   }
 
@@ -418,7 +645,16 @@ export class MusicController {
     // either way, a live edit to ITS graph needs the same rebuild.
     const isCurrent = this.currentContext?.playlist?.id === playlist?.id;
     const isNested = this._customEngine?.isPlayingPlaylist?.(playlist?.id) ?? false;
-    if (!isCurrent && !isNested) return;
+    // The layer is a separate engine tree and rebuilds on its own: retiring it here is enough,
+    // because the _syncLayer() at the end of the playCurrentTrack() below starts a fresh one
+    // over the saved graph. Deliberately NOT folded into the base rebuild - an edit to a layer's
+    // graph must not restart the base music underneath it.
+    const isLayer = this._layerEngine?.isPlayingPlaylist?.(playlist?.id) ?? false;
+    if (isLayer) await this._retireLayer();
+    if (!isCurrent && !isNested) {
+      if (isLayer) this.playCurrentTrack();
+      return;
+    }
     // Must await the stop before starting the replacement engine below - see
     // CustomPlaybackEngine.stop()'s doc comment for the race this closes
     // (confirmed live: a Track node in the new graph sharing a soundId with a
@@ -460,26 +696,11 @@ export class MusicController {
       const combatCtx = PlaylistContext.fromDocument(scene, 'combat', scene);
       if (combatCtx) contexts.push(combatCtx);
     }
-    // ONLY the combatant whose turn it is. A token/actor override is a TURN theme, not a fight
-    // theme: when the turn passes to someone with no override of their own, resolution has to
-    // fall back through scene combat and the world default rather than staying on the previous
-    // combatant. Iterating every non-defeated combatant here - which is what this used to do -
-    // kept the first configured combatant's context in the pool for the entire fight, and since
-    // token combat outranks scene combat (+20 vs -15) it simply won every turn. The
-    // current-combatant-first rule in sortPlaylists() could never demote it, because unconfigured
-    // combatants contribute nothing for it to be promoted over.
-    const combatant = combat?.combatant;
-    if (combatant && !combatant.isDefeated) {
-      // First source that carries an override wins - see _getCombatantMusicSources(). Pushing
-      // every hit instead would let one combatant contribute two competing contexts.
-      for (const musicSource of this._getCombatantMusicSources(combatant.token, combatant.actor)) {
-        const ctx = PlaylistContext.fromDocument(musicSource, 'combat', combat);
-        if (ctx) {
-          contexts.push(ctx);
-          break;
-        }
-      }
-    }
+    // Only an EXCLUSIVE combatant theme competes here. A layering one (the default) is
+    // deliberately absent from this pool - it plays alongside the winner instead of against it,
+    // and is fetched separately by getCurrentLayerContext().
+    const combatantResolution = this._resolveCombatantContext(combat);
+    if (combatantResolution?.exclusive) contexts.push(combatantResolution.context);
     const defaultConfig = game.settings.get(CONST.moduleId, CONST.settings.defaultMusic);
     if (defaultConfig) {
       if (combat) {
@@ -576,6 +797,59 @@ export class MusicController {
       ? (actor ? [actor, proto] : [token])
       : [token, proto, actor];
     return [...new Set(ordered.filter(Boolean))];
+  }
+
+  /**
+   * The combat context contributed by the combatant whose turn it is, plus whether that
+   * combatant asked to play EXCLUSIVELY (replacing the winning context, the pre-layering
+   * behaviour) rather than as a layer over it.
+   *
+   * ONLY the current combatant is consulted. A token/actor override is a TURN theme, not a fight
+   * theme: when the turn passes to someone with no override of their own, resolution has to fall
+   * back through scene combat and the world default rather than staying on the previous
+   * combatant. Iterating every non-defeated combatant - which this used to do - kept the first
+   * configured combatant's context in the pool for the entire fight, and since token combat
+   * outranks scene combat (+20 vs -15) it simply won every turn; the current-combatant-first rule
+   * in sortPlaylists() could never demote it, because unconfigured combatants contribute nothing
+   * for it to be promoted over.
+   *
+   * `exclusive` is read off the SAME source document the context resolved from, at section level
+   * (`music.combat.exclusive`) - never per phase overlay. Absent means false, so an override
+   * configured before layering existed layers by default.
+   * @param {Combat|null} [combat] - Defaults to the active combat.
+   * @returns {{context: PlaylistContext, exclusive: boolean, source: Document}|null}
+   * @private
+   */
+  _resolveCombatantContext(combat = this.currentCombat) {
+    const combatant = combat?.combatant;
+    if (!combatant || combatant.isDefeated) return null;
+    // First source that carries an override wins - see _getCombatantMusicSources(). Taking every
+    // hit instead would let one combatant contribute two competing contexts.
+    for (const source of this._getCombatantMusicSources(combatant.token, combatant.actor)) {
+      const context = PlaylistContext.fromDocument(source, 'combat', combat);
+      if (!context) continue;
+      return { context, exclusive: readMusicSection(source, 'combat')?.exclusive === true, source };
+    }
+    return null;
+  }
+
+  /**
+   * The context that should play as an additive LAYER over whatever won the ordinary resolution -
+   * the current combatant's theme, unless it opted into playing exclusively (in which case it is
+   * in the winner pool instead and there is no layer).
+   *
+   * A layer is filtered by the same rules as any combat context (`combat.started`, the
+   * suppressCombat setting - filterPlaylists()), but it never goes through
+   * excludeAreaWhenCombatApplies() or sortPlaylists(): it does not compete, so it has no
+   * priority and cannot be beaten. It plays over whatever the base happens to be, area music
+   * included - a boss theme joining the ambient track is preferable to it silently not playing
+   * because no combat music was configured anywhere.
+   * @returns {PlaylistContext|null}
+   */
+  getCurrentLayerContext() {
+    const resolution = this._resolveCombatantContext();
+    if (!resolution || resolution.exclusive) return null;
+    return this.filterPlaylists(resolution.context) ? resolution.context : null;
   }
 
   /**

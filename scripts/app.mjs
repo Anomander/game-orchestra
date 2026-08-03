@@ -1,6 +1,7 @@
 import { CONST } from './config.mjs';
 import { getDocumentCategory, getProperty, log, getAvailablePlaylists, buildPlaylistEntry, resolveInitialTrack } from './helpers.mjs';
 import { GameOrchestraAppMixin } from './app-mixins.mjs';
+import { coerceDuckFactor } from './playlist-mix.mjs';
 
 const _loc = (key) => game.i18n.localize(key);
 
@@ -88,8 +89,46 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     updatePhaseEntry: 'handleUpdatePhaseEntry',
     updatePhaseTrack: 'handleUpdatePhaseTrack',
     updateDefaultEntry: 'handleUpdateDefaultEntry',
-    updateDefaultTrack: 'handleUpdateDefaultTrack'
+    updateDefaultTrack: 'handleUpdateDefaultTrack',
+    toggleExclusive: 'handleToggleExclusive',
+    updateDuck: 'handleUpdateDuck'
   };
+
+  /**
+   * Handle the layer's duck slider - how far everything that isn't this layer is attenuated
+   * while it plays. Stored as the resulting MULTIPLIER in [0, 1] (100% = untouched), matching
+   * the mixer's own gain field, and at section level like `exclusive`. 1 removes the key rather
+   * than storing it, so "no ducking" stays the absent-value default.
+   */
+  static async handleUpdateDuck(event, target) {
+    const slider = target.closest('input[type="range"]') || target;
+    const factor = coerceDuckFactor(slider.value);
+    try {
+      if (factor < 1) await this.updateObject({ 'music.combat.duck': factor });
+      else await this.updateObject({ 'music.combat.-=duck': null });
+      game.gameOrchestra?.musicController?.playCurrentTrack();
+    } catch (error) {
+      log(1, 'Failed to update token layer duck:', error);
+    }
+  }
+
+  /**
+   * Handle toggling "play exclusively" for a token's combat music. Written at SECTION level
+   * (`music.combat.exclusive`), never under the selected phase overlay - one flag governs
+   * whichever playlist the section resolves to for any phase. Unticked (the default) means the
+   * theme plays as an additive layer over the winning context instead of replacing it; see
+   * MusicController#getCurrentLayerContext.
+   */
+  static async handleToggleExclusive(event, target) {
+    const checkbox = target.closest('input[type="checkbox"]') || target;
+    try {
+      if (checkbox.checked) await this.updateObject({ 'music.combat.exclusive': true });
+      else await this.updateObject({ 'music.combat.-=exclusive': null });
+      game.gameOrchestra?.musicController?.playCurrentTrack();
+    } catch (error) {
+      log(1, 'Failed to update token exclusive-playback flag:', error);
+    }
+  }
 
   /**
    * Apply a playlist selection to a grid entry, auto-resolving the initial
@@ -422,7 +461,27 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
       default: this.isSectionCollapsed('tokenDefault', hasDefaultOverride)
     };
 
-    return { availablePlaylists, phaseCards, defaultEntry, phasesResolving, defaultResolving, collapsed };
+    // Section level, deliberately read off combatSection rather than the selected phase overlay:
+    // one flag governs whichever playlist this section resolves to for any phase. Only offered
+    // once something is actually configured - the choice is meaningless with no playlist set.
+    const combatExclusive = combatSection.exclusive === true;
+    const hasAnyCombatPlaylist = !!defaultEntry.combat.playlistId || phaseCards.some((p) => p.hasOverride);
+    // Stored as the multiplier the rest of the music is taken to, so 1 is "no ducking" and the
+    // slider reads the same way round as the mixer's gain.
+    const combatDuck = coerceDuckFactor(combatSection.duck);
+
+    return {
+      availablePlaylists,
+      phaseCards,
+      defaultEntry,
+      phasesResolving,
+      defaultResolving,
+      collapsed,
+      combatExclusive,
+      hasAnyCombatPlaylist,
+      combatDuck,
+      combatDuckPercent: Math.round(combatDuck * 100)
+    };
   }
 
   /**

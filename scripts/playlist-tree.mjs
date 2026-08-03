@@ -228,6 +228,19 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       activeResolutionInfo = { label: `${_loc('GameOrchestra.PlaylistTree.ActiveAudioPrefix')} ${source}` };
     }
 
+    // The additive layer is NOT part of the resolution above - it plays alongside the winner
+    // rather than competing with it (see MusicController#getCurrentLayerContext), so it gets its
+    // own pill instead of trying to squeeze two sources into one.
+    const layerContext = game.gameOrchestra?.musicController?.currentLayerContext || null;
+    const layerResolutionInfo = layerContext
+      ? {
+        label: game.i18n.format('GameOrchestra.PlaylistTree.LayerAudio', {
+          playlist: layerContext.playlist?.name || _loc('GameOrchestra.None'),
+          source: layerContext.contextEntity?.name || _loc('GameOrchestra.PlaylistTree.ActiveAudioTokenActor')
+        })
+      }
+      : null;
+
     const hasSceneMoodsOverride = sceneMoods.some((m) => m.hasOverride);
     const hasScenePhasesOverride = scenePhases.some((p) => p.hasOverride);
     const hasSceneDefaultsOverride = !!(sceneDefaults.area.playlistId || sceneDefaults.combat.playlistId);
@@ -264,6 +277,7 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       globalPhasesResolving,
       globalDefaultsResolving,
       activeResolutionInfo,
+      layerResolutionInfo,
       collapsed
     };
   }

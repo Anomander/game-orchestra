@@ -19,7 +19,7 @@
 
 import { CONST } from './config.mjs';
 import { log } from './helpers.mjs';
-import { effectiveVolume, mixIsTransparent, normalizeMix } from './playlist-mix.mjs';
+import { coerceDuckFactor, effectiveVolume, mixIsTransparent, normalizeMix } from './playlist-mix.mjs';
 
 /** How long a re-assert takes to glide, so a live slider drag is smooth rather than stepped. */
 const REASSERT_FADE_MS = 100;
@@ -79,8 +79,39 @@ export function clearSolo(playlistId) {
 }
 
 /**
+ * The world's current duck: `{factor, exemptPlaylistIds}` while an additive layer is playing,
+ * empty otherwise. A world setting, not engine state - see its registration in settings.mjs for
+ * why it has to be readable on every client.
+ * @returns {{factor: number, exemptPlaylistIds: string[]}}
+ */
+export function getActiveDuck() {
+  const raw = game.settings?.get?.(CONST.moduleId, CONST.settings.activeDuck) ?? null;
+  return {
+    factor: coerceDuckFactor(raw?.factor),
+    exemptPlaylistIds: Array.isArray(raw?.exemptPlaylistIds) ? raw.exemptPlaylistIds : []
+  };
+}
+
+/**
+ * The duck multiplier that applies to one playlist right now. Exemption is by playlist id and
+ * covers the layer's whole engine tree, not just its root: a layer graph reaching another
+ * playlist through a Playlist node is still the layer, and ducking its own nested audio would
+ * make the feature fight itself.
+ * @param {object|null} playlist
+ * @returns {number} A number in [0, 1]; 1 when nothing is ducking.
+ */
+export function duckFactorFor(playlist) {
+  const { factor, exemptPlaylistIds } = getActiveDuck();
+  if (factor >= 1) return 1;
+  return exemptPlaylistIds.includes(playlist?.id) ? 1 : factor;
+}
+
+/**
  * The volume a PlaylistSound should actually be heard at on this client: its own document
- * volume, through the playlist's mix, then through any local solo.
+ * volume, through the playlist's mix, then through any local solo, then through any active duck.
+ *
+ * The duck is applied last, outside the mix, on purpose - see coerceDuckFactor's doc for why it
+ * is allowed to take a track below the mix's own floor.
  * @param {object} sound - Foundry PlaylistSound document.
  * @returns {number} A volume in [0, 1].
  */
@@ -89,7 +120,7 @@ export function mixedVolume(sound) {
   const playlist = sound.parent;
   const solo = getSoloIds(playlist?.id);
   if (solo.size > 0 && !solo.has(sound.id)) return 0;
-  return effectiveVolume(sound.volume, getPlaylistMix(playlist), sound.id);
+  return effectiveVolume(sound.volume, getPlaylistMix(playlist), sound.id) * duckFactorFor(playlist);
 }
 
 /**
@@ -101,6 +132,10 @@ export function mixedVolume(sound) {
 export function playlistNeedsMix(playlist) {
   if (!playlist) return false;
   if (getSoloIds(playlist.id).size > 0) return true;
+  // A ducked playlist needs the work even with a completely transparent mix of its own -
+  // otherwise a base track STARTING mid-layer (a graph advancing to its next node) would come in
+  // at full volume and stay there, since handleUpdatePlaylistSoundMix gates on this.
+  if (duckFactorFor(playlist) < 1) return true;
   return !mixIsTransparent(getPlaylistMix(playlist));
 }
 
@@ -158,6 +193,27 @@ export function applyMixToPlaylist(playlist, { duration = REASSERT_FADE_MS } = {
   if (!playlist?.sounds) return;
   for (const sound of playlist.sounds) {
     if (sound.playing) applyMixToSound(sound, { duration });
+  }
+}
+
+/**
+ * Re-level every playing sound in the world after the duck changed, gliding over the duck's own
+ * `fadeMs` so the base dips as the layer arrives and recovers as it leaves.
+ *
+ * Everything playing is walked, not just the base context's playlist: the duck applies to
+ * everything that isn't the layer, which includes any playlist a base graph reached through a
+ * Playlist node - and this client has no idea which those are (the engine is head-GM-only).
+ * Walking `game.playlists.playing` is the only view of "currently audible" every client shares.
+ * @param {object} [options]
+ * @param {number} [options.duration] - Glide time in ms; defaults to the stored duck's fadeMs.
+ */
+export function reassertDuck({ duration } = {}) {
+  const fadeMs = Number(game.settings?.get?.(CONST.moduleId, CONST.settings.activeDuck)?.fadeMs);
+  const glide = duration ?? (Number.isFinite(fadeMs) ? fadeMs : REASSERT_FADE_MS);
+  for (const playlist of game.playlists?.playing ?? []) {
+    for (const sound of playlist.sounds ?? []) {
+      if (sound.playing) applyMixToSound(sound, { duration: glide });
+    }
   }
 }
 

@@ -12,7 +12,7 @@ are the detail behind it.
 
 | Page | Contents |
 |---|---|
-| **[invariants.md](invariants.md)** | **Start here.** The H1–H14 hazards and house rules HR-A–HR-J. The rules that break things silently. |
+| **[invariants.md](invariants.md)** | **Start here.** The H1–H16 hazards and house rules HR-A–HR-J. The rules that break things silently. |
 | [architecture.md](architecture.md) | How game state becomes audio: the playback pipeline, context resolution, priority, transitions, storage, hook wiring. |
 | [graph-engine.md](graph-engine.md) | The token-walk playback engine: node semantics, singleton rule, safety nets, Playlist nodes, the stop-before-start race. |
 | [editor.md](editor.md) | The Drawflow graph editor: the no-re-render rule, Drawflow's limits and their workarounds, validation, drag-in, styling constraints. |

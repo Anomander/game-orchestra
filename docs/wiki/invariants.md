@@ -301,6 +301,72 @@ Two consequences worth keeping in mind when changing that function:
 
 ---
 
+## H15 — Two engines must never drive the same playlist
+
+`CustomPlaybackEngine` makes two Track nodes that share a `soundId` safe with `_activeSoundOwners`
+— one node at a time owns a physical `PlaylistSound`, so a second can't silently "adopt" it,
+overwrite its `AudioEndWatcher` listener and orphan the first node forever (the failure that
+tripped the circuit breaker, see that field's comment).
+
+**That map is per-engine.** It is created in the constructor and never shared, so it offers no
+protection at all *across* engine trees. Since the additive layer runs on a second root engine
+(`_layerEngine`) beside the base one (`_customEngine`), two independent engines driving one
+playlist is now physically expressible — and both would adopt, restart and steal each other's
+listeners on the same sounds.
+
+`_syncLayer()` therefore refuses a layer whose playlist is:
+
+- the base context's own playlist (`currentContext.playlist.id`), or
+- anywhere in the base engine tree (`_customEngine.isPlayingPlaylist(id)` — the `_registry` Set,
+  which a Playlist node's child engines share **by reference**, so it covers nested targets).
+
+Refusing is the only safe outcome, and costs nothing musically: a playlist layered over itself
+was never going to sound like anything but a stuttering doubling. The log line names the playlist
+and points at the `Play exclusively` checkbox, which is what the user actually wanted in that case.
+
+The head-GM rule (rule 5 in CLAUDE.md) covers the layer unchanged — it starts inside
+`playCurrentTrack()`, which has already returned on every non-head client.
+
+---
+
+## H16 — The engine must level its own tracks; the `updatePlaylistSound` hook is not enough
+
+`handleUpdatePlaylistSoundMix` exists to push the mix onto live audio on every client, and for
+audio started by anything *other* than the graph engine it is sufficient. For engine-started
+tracks it has two holes, both of which showed up live as **"track transitions play at full
+volume, ignoring the layer duck"**:
+
+**1. The hook often never fires.** A `PlaylistSound`'s `playing` field is not corrected back to
+`false` when audio ends naturally — only an explicit update clears it (the same staleness
+`_enterTrack`'s `alreadyPlaying` check documents). So on a graph's second pass over a track,
+`Playlist#playSound()` writes `playing: true` over `playing: true`, **the diff is empty, and no
+`updatePlaylistSound` is emitted at all.** The mix and the duck are silently skipped for that
+track, that pass. Nothing errors; the volume is just wrong.
+
+**2. On an armed hand-off it fires, and is then thrown away.** From `Sound##queuePlay`:
+
+```js
+this.#configurePlayback(options);          // volume captured HERE, at play() time
+if ( delay ) await this.wait(delay * 1000);
+this._play();
+this.volume = fade ? 0 : volume;           // ...applied HERE, after the delay
+```
+
+and `set volume` opens with `gain.cancelScheduledValues()`. So every volume change made during
+the arm window — including `reassertDuck()` when a layer starts — is cancelled at the seam and
+replaced by the arm-time snapshot.
+
+`_assertMixedVolume()` closes both: every track the engine starts is levelled explicitly, and for
+an armed start the assert is **deferred past the seam** (`MIX_ASSERT_DELAY_MS`) so it lands after
+`_play()` rather than being wiped by it.
+
+**If you add another place where the engine starts audio, level it there too.** Passing
+`mixedVolume()` into `play({volume})` is necessary but not sufficient — it is a snapshot, and
+anything that changes the correct volume between that call and the sound actually starting will
+be lost.
+
+---
+
 # House rules
 
 Not hazard-numbered, but equally load-bearing. Sourced from the archived plan docs, where they

@@ -206,6 +206,63 @@ describe('GameOrchestraConfig', () => {
     });
   });
 
+  describe('handleToggleExclusive', () => {
+    it('writes the flag at section level, never under the selected phase overlay', async () => {
+      app.selectedPhase = 'p2';
+      const target = { checked: true, dataset: {}, closest: () => null };
+
+      await GameOrchestraConfig.handleToggleExclusive.call(app, new Event('change'), target);
+
+      expect(tokenDoc.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'flags.game-orchestra.music.combat.exclusive': true })
+      );
+      const written = Object.keys(tokenDoc.update.mock.calls[0][0]);
+      expect(written.some((key) => key.includes('overlays'))).toBe(false);
+    });
+
+    it('removes the flag rather than storing false, so the default stays "layer"', async () => {
+      const target = { checked: false, dataset: {}, closest: () => null };
+
+      await GameOrchestraConfig.handleToggleExclusive.call(app, new Event('change'), target);
+
+      expect(tokenDoc.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'flags.game-orchestra.music.combat.-=exclusive': null })
+      );
+    });
+  });
+
+  describe('handleUpdateDuck', () => {
+    it('stores the slider position as a multiplier at section level', async () => {
+      const target = { value: '0.35', dataset: {}, closest: () => null };
+
+      await GameOrchestraConfig.handleUpdateDuck.call(app, new Event('change'), target);
+
+      expect(tokenDoc.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'flags.game-orchestra.music.combat.duck': 0.35 })
+      );
+    });
+
+    it('removes the key at 100%, so "no ducking" stays the absent-value default', async () => {
+      const target = { value: '1', dataset: {}, closest: () => null };
+
+      await GameOrchestraConfig.handleUpdateDuck.call(app, new Event('change'), target);
+
+      expect(tokenDoc.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'flags.game-orchestra.music.combat.-=duck': null })
+      );
+    });
+
+    it('coerces a malformed slider value rather than writing NaN into the flag', async () => {
+      const target = { value: 'not-a-number', dataset: {}, closest: () => null };
+
+      await GameOrchestraConfig.handleUpdateDuck.call(app, new Event('change'), target);
+
+      expect(tokenDoc.update).toHaveBeenCalledWith(
+        expect.objectContaining({ 'flags.game-orchestra.music.combat.-=duck': null })
+      );
+    });
+  });
+
   describe('updateObject (PrototypeToken)', () => {
     let actor;
     let protoApp;

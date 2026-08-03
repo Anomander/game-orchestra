@@ -73,7 +73,7 @@ code it guards, update the comment to match.
 | Page | Read it when |
 |---|---|
 | [architecture.md](docs/wiki/architecture.md) | Anything touching playback, priority, or context resolution |
-| [invariants.md](docs/wiki/invariants.md) | **Always.** H1–H14 hazards + house rules |
+| [invariants.md](docs/wiki/invariants.md) | **Always.** H1–H16 hazards + house rules |
 | [graph-engine.md](docs/wiki/graph-engine.md) | Touching the token-walk engine, node types, or concurrency |
 | [editor.md](docs/wiki/editor.md) | Touching the Drawflow graph editor or any ApplicationV2 window |
 | [mixer.md](docs/wiki/mixer.md) | Touching volume, mute, fades, the crossfade chain, or the `game-orchestra.mix` flag |

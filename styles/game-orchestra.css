@@ -328,6 +328,47 @@
   animation: pulse-dot 1.5s infinite;
 }
 
+/* The additive layer is a second, concurrent source rather than a competitor for the pill above,
+   so it reads as its own pill in a different hue instead of replacing that one. */
+.game-orchestra-playlist-tree .active-resolution-pill.layer-resolution-pill {
+  background: rgba(155, 89, 182, 0.15);
+  border-color: #9b59b6;
+  color: #9b59b6;
+  margin-left: 6px;
+}
+
+.game-orchestra-config .token-exclusive-node {
+  padding: 6px 8px;
+}
+
+.game-orchestra-config .exclusive-toggle {
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.game-orchestra-config .exclusive-toggle input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.game-orchestra-config .duck-row {
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.game-orchestra-config .duck-row label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.game-orchestra-config .duck-readout {
+  flex: 0 0 3.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes pulse-dot {
   0% { opacity: 0.4; }
   50% { opacity: 1; }

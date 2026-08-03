@@ -143,20 +143,26 @@ export function getAvailablePlaylists() {
 }
 
 /**
- * Extract a music section object (`{playlist, moods: {...}}`) from a document
- * the same way PlaylistContext.fromDocument does, without building a full
- * PlaylistContext - resolvePlaylistRef only needs the raw section data.
- * @param {Document|null} document
+ * Extract a music section object (`{playlist, initialTrack, priority, exclusive, overlays}`)
+ * from any of the three document shapes this module configures. The single
+ * place that knows where each category stores its flags - PlaylistContext.fromDocument,
+ * resolvePlaylistRef and MusicController's combatant resolution all read through here.
+ *
+ * `undefined` and `null` are NOT interchangeable in the return: `undefined`
+ * means "this document category isn't one we configure at all" (the caller
+ * should refuse it), `null` means "supported, but this section is unset".
+ * Collapsing the two would make an unsupported document silently look like an
+ * unconfigured one.
+ * @param {Document|object|null} document
  * @param {'area'|'combat'} type
- * @returns {object|null}
- * @private
+ * @returns {object|null|undefined}
  */
-function _extractMusicSection(document, type) {
-  if (!document) return null;
+export function readMusicSection(document, type) {
   const category = getDocumentCategory(document);
   if (category === 'Document') return document.getFlag(CONST.moduleId, `music.${type}`) || null;
-  if (category === 'DefaultMusic') return document.data?.['game-orchestra']?.music?.[type] || null;
-  return null;
+  if (category === 'PrototypeToken') return document.flags?.[CONST.moduleId]?.music?.[type] || null;
+  if (category === 'DefaultMusic') return document.data?.[CONST.moduleId]?.music?.[type] || null;
+  return undefined;
 }
 
 /**
@@ -173,8 +179,8 @@ export function resolvePlaylistRef(ref) {
   const activeOverlayIds = { mood: getActiveOverlayId('mood'), phase: getActiveOverlayId('phase') };
   const scene = game.scenes?.active || null;
   const defaultConfig = game.settings.get(CONST.moduleId, CONST.settings.defaultMusic) || null;
-  const sceneSections = { area: _extractMusicSection(scene, 'area'), combat: _extractMusicSection(scene, 'combat') };
-  const defaultSections = { area: _extractMusicSection(defaultConfig, 'area'), combat: _extractMusicSection(defaultConfig, 'combat') };
+  const sceneSections = { area: readMusicSection(scene, 'area') ?? null, combat: readMusicSection(scene, 'combat') ?? null };
+  const defaultSections = { area: readMusicSection(defaultConfig, 'area') ?? null, combat: readMusicSection(defaultConfig, 'combat') ?? null };
   const playlistId = resolvePlaylistRefId(ref, { sceneSections, defaultSections, activeOverlayIds });
   return playlistId ? getPlaylistById(playlistId) : null;
 }
@@ -412,16 +418,11 @@ export class PlaylistContext {
     overlayId = overlayId ?? getActiveOverlayId(axis);
     const docName = document.name || document.id || document?.constructor?.name;
 
-    // Determine the music section based on document category
-    let section;
-    const category = getDocumentCategory(document);
-    if (category === 'Document') {
-      section = document.getFlag(CONST.moduleId, `music.${type}`) || {};
-    } else if (category === 'PrototypeToken') {
-      section = document.flags?.[CONST.moduleId]?.music?.[type];
-    } else if (category === 'DefaultMusic') {
-      section = document.data?.['game-orchestra']?.music?.[type];
-    } else {
+    // Determine the music section based on document category. `undefined` back
+    // from readMusicSection means an unsupported category, which is a different
+    // outcome from a supported document with nothing configured - see its doc.
+    const section = readMusicSection(document, type);
+    if (section === undefined) {
       log(3, `PlaylistContext.fromDocument: Document of type '${document?.constructor?.name || typeof document}' is not supported (type: '${type}')`);
       return null;
     }

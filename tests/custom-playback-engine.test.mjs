@@ -30,6 +30,15 @@ async function fireEnd(sound) {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
+/**
+ * The crossfade-out calls on a sound: `fade(0, {duration > 0})`. Deliberately narrower than
+ * "fade was called at all" - the engine also levels every track it starts to its mixed volume
+ * (_assertMixedVolume), which is a `fade(volume, {duration: 0})` on the SAME spy and would
+ * otherwise read as a crossfade that never happened.
+ */
+const crossfadeOutCalls = (sound) =>
+  sound.sound.fade.mock.calls.filter(([volume, options]) => volume === 0 && (options?.duration ?? 0) > 0);
+
 function createFakeController() {
   return {
     _managedSoundIds: new Set(),
@@ -1841,6 +1850,41 @@ describe('CustomPlaybackEngine', () => {
       vi.useRealTimers();
     });
 
+    it('levels a cleanly-started track itself, without waiting for an updatePlaylistSound hook', async () => {
+      // The hook cannot be relied on: a PlaylistSound's `playing` flag is not reset when audio
+      // ends naturally, so on a graph's second pass Playlist#playSound writes playing:true over
+      // playing:true, the diff is empty, and no update event is ever emitted.
+      vi.useFakeTimers();
+      setMockSetting('game-orchestra', 'activeDuck', { factor: 0.4, exemptPlaylistIds: [] });
+      const { playlist, s1 } = buildArmChain();
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(s1.sound.fade).toHaveBeenCalledWith(0.4, { duration: 0 });
+      setMockSetting('game-orchestra', 'activeDuck', {});
+      vi.useRealTimers();
+    });
+
+    it('re-levels an armed track AFTER the seam, since Sound##queuePlay overwrites the volume there', async () => {
+      vi.useFakeTimers();
+      setMockSetting('game-orchestra', 'activeDuck', { factor: 0.25, exemptPlaylistIds: ['layerP'] });
+      const { playlist, s2 } = buildArmChain();
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+      await engine.start();
+
+      // Through the arm and the seam, but not yet past the deferred assert.
+      await vi.advanceTimersByTimeAsync(10000);
+      s2.sound.fade.mockClear();
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      // A level to the ducked volume, applied instantly - not a crossfade.
+      expect(s2.sound.fade).toHaveBeenCalledWith(0.25, { duration: 0 });
+      setMockSetting('game-orchestra', 'activeDuck', {});
+      vi.useRealTimers();
+    });
+
     it('adopts the armed sound instead of starting it a second time', async () => {
       vi.useFakeTimers();
       const { playlist, s2 } = buildArmChain();
@@ -2395,7 +2439,7 @@ describe('CustomPlaybackEngine', () => {
           await engine.start();
 
           await vi.advanceTimersByTimeAsync(11000);
-          expect(s1.sound.fade).not.toHaveBeenCalled();
+          expect(crossfadeOutCalls(s1)).toHaveLength(0);
 
           vi.useRealTimers();
           await fireEnd(s1);
@@ -2477,7 +2521,7 @@ describe('CustomPlaybackEngine', () => {
 
         await vi.advanceTimersByTimeAsync(11000);
 
-        expect(s1.sound.fade).not.toHaveBeenCalled();
+        expect(crossfadeOutCalls(s1)).toHaveLength(0);
         vi.useRealTimers();
       });
 
@@ -2540,7 +2584,7 @@ describe('CustomPlaybackEngine', () => {
         await engine.start();
         await vi.advanceTimersByTimeAsync(11000);
 
-        expect(s1.sound.fade).not.toHaveBeenCalled();
+        expect(crossfadeOutCalls(s1)).toHaveLength(0);
       });
 
       it('falls back to the natural end for a track shorter than the crossfade', async () => {
@@ -2552,7 +2596,7 @@ describe('CustomPlaybackEngine', () => {
         await engine.start();
 
         await vi.advanceTimersByTimeAsync(2000);
-        expect(s1.sound.fade).not.toHaveBeenCalled();
+        expect(crossfadeOutCalls(s1)).toHaveLength(0);
         expect(controller.playTrack).not.toHaveBeenCalledWith(s2);
       });
 

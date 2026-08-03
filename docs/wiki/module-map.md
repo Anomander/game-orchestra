@@ -20,14 +20,14 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/music-controller.mjs` | 712 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation. |
-| `scripts/helpers.mjs` | 519 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `getActiveOverlayId(axis)`, `log`. The Foundry-touching side of several pure modules. |
+| `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layer (`_layerEngine`, a second root engine beside `_customEngine`). |
+| `scripts/helpers.mjs` | 525 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `log`. The Foundry-touching side of several pure modules. |
 
 ## Graph engine
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/custom-playback-engine.mjs` | 1802 | **The token-walk engine.** Per-node behavior (`loop.mode` switch: `count`/`forever`/`until`), singleton rule, sound ownership, hand-off latency (pending stops, preload lookahead, per-playlist/world crossfade), drain timings, idle detection, child engines, every safety net. |
+| `scripts/custom-playback-engine.mjs` | 2424 | **The token-walk engine.** Per-node behavior (`loop.mode` switch: `count`/`forever`/`until`), singleton rule, sound ownership, hand-off latency (pending stops, preload lookahead, per-playlist/world crossfade), drain timings, idle detection, child engines, every safety net. |
 | `scripts/custom-playback-schema.mjs` | 236 | Graph/node/edge typedefs, `LoopSpec` union + `resolveLoop()`, durational vs instantaneous sets, `findUpcomingTrackNodes()` (preload lookahead), `resolveGraphCrossfadeMs()` (per-playlist crossfade override), `createEmptyGraph()`. **Pure.** |
 | `scripts/engine-clock.mjs` | 174 | Worker-backed scheduler with absolute due-times (H4), 100ms tick + `precise` mode for audible boundaries. |
 | `scripts/audio-end-watcher.mjs` | 79 | `'end'`-only listener management on `Sound` instances (H3). |
@@ -59,8 +59,8 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/playlist-mixer-controller.mjs` | 560 | **`MixerController` — everything the mixer *does***, with no opinion about its host. Shared by the standalone window and the graph editor's Mixer pane; hosts supply an `onRefresh` callback, because one re-renders freely and the other must never call `render()` (HR-A). |
 | `scripts/playlist-mixer.mjs` | 100 | `PlaylistMixerApp` — the standalone window, a thin ApplicationV2 shell over the controller. One per playlist, **every playlist type**. |
 | `scripts/playlist-mixer-render.mjs` | 290 | The mixer body as an HTML string: full, `compact` (the editor's 300px pane), and `graphTools` (rows as canvas drag sources with add-node buttons). Supersedes the deleted `custom-playlist-tracks.mjs`. **Pure.** |
-| `scripts/playlist-mix.mjs` | 190 | The mix model: `effectiveVolume()`, `clampVolume()`, `normalizeMix()`, `resolveCrossfadeMs()` (the three-link chain), `applyGroupGain()`. **Pure.** |
-| `scripts/playlist-mix-apply.mjs` | 175 | Applies a mix to live audio, and holds session solo state. **Runs on every client** — the one part of the module that is not head-GM-only. |
+| `scripts/playlist-mix.mjs` | 254 | The mix model: `effectiveVolume()`, `clampVolume()`, `normalizeMix()`, `resolveCrossfadeMs()` (the three-link chain), `applyGroupGain()`, `coerceDuckFactor()`. **Pure.** |
+| `scripts/playlist-mix-apply.mjs` | 245 | Applies a mix to live audio, holds session solo state, and reads the `activeDuck` world setting (`duckFactorFor`, `reassertDuck`). **Runs on every client** — the one part of the module that is not head-GM-only. |
 
 ## Other UI
 

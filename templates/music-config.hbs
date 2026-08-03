@@ -114,6 +114,30 @@
       </div>
       {{/unless}}
     </div>
+
+    {{#if hasAnyCombatPlaylist}}
+    {{! Section-level, not per phase: governs whichever playlist the Combat section resolves to. }}
+    <div class="tree-node token-exclusive-node">
+      <label class="exclusive-toggle flexrow">
+        <input type="checkbox" data-change-action="toggleExclusive" {{checked combatExclusive}}>
+        <span>{{localize "GameOrchestra.TokenConfig.Exclusive"}}</span>
+      </label>
+      <p class="hint">{{localize "GameOrchestra.TokenConfig.ExclusiveHint"}}</p>
+
+      {{! Ducking only means anything while something else is still playing underneath, which is
+          exactly what "exclusive" turns off. }}
+      {{#unless combatExclusive}}
+      <div class="duck-row flexrow">
+        <label for="game-orchestra-layer-duck">{{localize "GameOrchestra.TokenConfig.Duck"}}</label>
+        <input type="range" id="game-orchestra-layer-duck" min="0" max="1" step="0.05"
+               value="{{combatDuck}}" data-change-action="updateDuck"
+               aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combatDuckPercent}}">
+        <output class="duck-readout">{{combatDuckPercent}}%</output>
+      </div>
+      <p class="hint">{{localize "GameOrchestra.TokenConfig.DuckHint"}}</p>
+      {{/unless}}
+    </div>
+    {{/if}}
   </div>
 {{else}}
   {{#each playlistConfig as |section|}}

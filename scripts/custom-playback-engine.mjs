@@ -6,7 +6,7 @@ import { buildNativeModeGraph } from './native-mode-graph.mjs';
 import { normalizePlaylistRef } from './playlist-ref.mjs';
 import { resolveLoop, findUpcomingTrackNodes, resolveGraphCrossfadeMs, pickRandomExit, planNextHandoff } from './custom-playback-schema.mjs';
 import { resolveCrossfadeMs } from './playlist-mix.mjs';
-import { getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
+import { applyMixToSound, getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
 
 /**
  * Maximum number of instantaneous (non-durational) nodes a single token may
@@ -83,6 +83,16 @@ const MAX_DURATION_PROBE_ATTEMPTS = 20;
  * a hole.
  */
 const ARMED_START_VERIFY_MS = 350;
+
+/**
+ * How long after adopting an armed hand-off to re-assert the mixed volume (_assertMixedVolume).
+ *
+ * Has to clear the seam itself: `Sound##queuePlay` assigns `this.volume` from the value captured
+ * at arm time only after its delay elapses, cancelling any scheduled ramp as it goes, so a volume
+ * set even a millisecond early is thrown away. Small enough that a duck arriving mid-arm-window
+ * is corrected inside one frame of the seam rather than audibly late.
+ */
+const MIX_ASSERT_DELAY_MS = 40;
 
 /**
  * Poll cadence for a loop.mode 'until' Track's escape condition, boundary
@@ -1160,6 +1170,7 @@ export class CustomPlaybackEngine {
     );
 
     this._warnIfFadeBreaksTheSeam(node, sound);
+    this._assertMixedVolume(node, sound, armedStarted, runId);
     if (armedStarted) this._verifyArmedAudioStarted(node, sound, wantRepeat, runId);
     this._recordTrackTiming(node, sound, loop, elapsedMs, runId);
 
@@ -1687,6 +1698,45 @@ export class CustomPlaybackEngine {
 
     this.clock.schedule(`${node.id}:seam`, Math.max(0, seamAt - Date.now()), () => this._commitArmedHandoff(runId), { precise: true });
     return true;
+  }
+
+  /**
+   * Level a track this engine just started to its mixed volume - the playlist's mix, and any
+   * active layer duck.
+   *
+   * The engine cannot leave this to `handleUpdatePlaylistSoundMix`, even though that hook exists
+   * to do exactly this job on every client. Two engine-specific holes, both confirmed by reading
+   * Foundry's own source rather than deduced:
+   *
+   * 1. **The hook often never fires.** A PlaylistSound's `playing` document field is not corrected
+   *    back to false when audio ends naturally (see the `alreadyPlaying` comment in _enterTrack),
+   *    so on a graph's second pass over a track it is already `true`. `Playlist#playSound()` then
+   *    writes `playing: true` over `playing: true`, the diff is empty, and no `updatePlaylistSound`
+   *    fires at all. The mix and the duck are simply skipped for that track, for that pass.
+   * 2. **On an armed hand-off the hook fires, and is then discarded.** `Sound##queuePlay` captures
+   *    the volume at `play()` time, waits out the arm delay, and only *then* assigns
+   *    `this.volume` - and `set volume` calls `gain.cancelScheduledValues()`, killing any ramp
+   *    set in between. So everything the mix layer does during the arm window (including
+   *    reassertDuck() when a layer starts) is wiped at the seam. Hence the deferral below:
+   *    the assert has to land AFTER `_play()`, not before it.
+   *
+   * Idempotent and cheap - applyMixToSound() is a single `Sound#fade` to a value the sound is
+   * usually already at, and playlistNeedsMix() is not consulted here on purpose: the caller
+   * already knows this sound is one the engine drives.
+   * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {object} sound - PlaylistSound document.
+   * @param {boolean} armedStarted - Whether this start was adopted from an armed hand-off.
+   * @param {number} runId
+   * @private
+   */
+  _assertMixedVolume(node, sound, armedStarted, runId) {
+    const apply = () => {
+      if (this._runId !== runId) return;
+      if (this._activeNodes.get(node.id)?.sound !== sound) return; // already advanced
+      applyMixToSound(sound, { duration: 0 });
+    };
+    if (!armedStarted) return apply();
+    this.clock.schedule(`${node.id}:mix`, MIX_ASSERT_DELAY_MS, apply, { precise: true });
   }
 
   /**

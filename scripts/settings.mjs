@@ -3,6 +3,7 @@ import { MoodWidget } from './mood-widget.mjs';
 import { PlaylistTreeApp } from './playlist-tree.mjs';
 import { CONST } from './config.mjs';
 import { log, setDebugEnabled } from './helpers.mjs';
+import { reassertDuck } from './playlist-mix-apply.mjs';
 
 /**
  * Register module settings and configuration menu
@@ -164,6 +165,20 @@ export function registerSettings() {
     config: false,
     type: Object,
     default: {}
+  });
+
+  // Transient duck state, written by the head GM whenever an additive layer starts or stops
+  // (MusicController#_syncLayer) and read by every client's mix application. A WORLD setting
+  // rather than engine state precisely because it has to reach every client: the engine is
+  // head-GM-only, but volume is applied per client from the document (CLAUDE.md rule 5), so a
+  // duck known only to the GM would duck only the GM. Same shape of solution as activeMood /
+  // activePhase, and the onChange below is what re-levels audio already playing.
+  game.settings.register(CONST.moduleId, CONST.settings.activeDuck, {
+    scope: 'world',
+    config: false,
+    type: Object,
+    default: {},
+    onChange: () => reassertDuck()
   });
 
   game.settings.register(CONST.moduleId, CONST.settings.fadeDuration, {

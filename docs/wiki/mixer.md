@@ -1,7 +1,9 @@
 # The Playlist Mixer
 
 Every *level-shaping* setting for a playlist: per-track volume and fade, mute/solo, a master gain,
-a volume ceiling, the hand-off crossfade, and the playlist fade.
+a volume ceiling, the hand-off crossfade, and the playlist fade. Plus one level that belongs to
+no playlist at all — the additive layer's **duck**, applied here because this is where volume
+reaches live audio.
 
 It has **two hosts**, sharing one implementation:
 
@@ -64,7 +66,17 @@ map shape, so a playlist saved by an in-between build is not stuck muted.
 
 ```
 effective(sound) = muted ? 0 : clamp(sound.volume * mix.gain, mix.floor, mix.ceiling)
+heard(sound)     = effective(sound) * soloFactor * duckFactor(playlist)
 ```
+
+**The duck is not part of the mix, and deliberately sits outside it.** It is the attenuation an
+additive layer applies to everything that isn't itself (`architecture.md` § Layers), published as
+the `activeDuck` world setting and read back by `duckFactorFor()`. Folding it into
+`effectiveVolume()` would make the mixer's `stored → effective` readout jump around every time a
+boss took its turn, for a value belonging to no playlist. Being outside the clamp also means a
+duck can legitimately take a track **below the mix's own floor**: the floor states how quiet a
+playlist may shape *itself*, while the duck is somebody else temporarily standing in front of it.
+Mute still short-circuits ahead of both.
 
 Never written back to a document. Always read through `normalizeMix()` — `mix.gain` read raw is
 `undefined` on every playlist nobody has opened the mixer for, and `undefined * 0.5` is `NaN`,
@@ -111,6 +123,11 @@ So:
 | The mix values | World flags — every client reads the same ones |
 | Applying them | `updatePlaylistSound` / `updatePlaylist` hooks, **on every client** |
 | The mixer window | GM-gated (it writes flags) |
+| The layer duck | `activeDuck` **world setting**, written by the head GM; its `onChange` runs `reassertDuck()` **on every client** |
+
+The duck row is the same inversion for the same reason, and it is why the duck is a *setting* at
+all rather than a field on `MusicController`: `_syncLayer()` runs only on the head GM, so a duck
+held in memory there would duck the GM and leave the table at full volume.
 
 This also rules out the tempting shortcut of `sound.updateSource({volume})` before playback: that
 is a **local-only** source mutation (it is what core uses for its own immediate slider feedback),

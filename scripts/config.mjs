@@ -14,7 +14,8 @@ export const CONST = {
     activePhase: 'activePhase',
     configuredPhases: 'configuredPhases',
     resetPhaseOnCombatEnd: 'resetPhaseOnCombatEnd',
-    moodWidgetPosition: 'moodWidgetPosition'
+    moodWidgetPosition: 'moodWidgetPosition',
+    activeDuck: 'activeDuck'
   },
   defaultMoods: [
     { id: 'calm', label: 'GameOrchestra.Mood.Calm', icon: 'fas fa-leaf', color: '#4caf50' },
