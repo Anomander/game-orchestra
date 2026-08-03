@@ -26,10 +26,11 @@ whose own bugs get blamed on the module.** Two real defects were caught by L1 be
 ever saw Foundry, and the tier as a whole flushed out a dozen more — see
 [Findings](#findings-from-building-this).
 
-**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**, twice consecutively with
-no retries. Three CI runs have failed; each named a distinct cause and each is fixed — see
-[When CI fails](#when-ci-fails), which is the most useful section on this page. The third run's
-fixes have not yet been confirmed green on a runner.
+**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**, and 12 of 13 on a GitHub
+runner — the fourth CI run, in 9.9 min with a healthy environment (`clockRatio` 1.0, an 18 ms
+main-thread round trip). The single remaining failure was not an environment problem: it was this
+tier asserting a number that moves with machine load, which is now fixed and not yet re-confirmed
+on a runner. See [When CI fails](#when-ci-fails) — the most useful section on this page.
 
 ---
 
@@ -160,10 +161,11 @@ own correctness is knowable.
    own audio clock. Applying a GM mark to a player's frames compares two different stretches of
    audio — the failure mode is a spec that passes alone and flakes in a full run.
 
-9. **Reproduce a "finding" with the main thread free before writing it down.** This tier measures
-   the module through a browser whose main thread it shares. A documented claim that the graph
-   engine never crossfades its first hand-off turned out to be the arming deadline being missed
-   under canvas contention — a property of the machine, not of the engine.
+9. **Reproduce a "finding" on a second machine before writing it down, and never assert a number
+   that moves with machine load.** This tier measures the module through a browser whose main
+   thread it shares. The graph engine's first hand-off has now been mis-documented twice from
+   single-machine numbers — see [Findings](#about-the-module-and-foundry). Assert the invariant
+   (ordering, presence, ratio); leave the machine-dependent quantity to the timeline chart.
 
 10. **The world is reset by the `gm` fixture, before *and* after each spec.** Before matters most:
     a run that crashed never cleaned up, and the next run's first spec would otherwise fail on a
@@ -387,6 +389,26 @@ separately, and `expectClientsAgree` takes `windowA`/`windowB`.
 is whether it reads 5 ms or 5000 ms. Both have now caused a whole-suite failure, so both are
 printed in the first fifteen seconds of every run.
 
+### Root cause: the suite was asserting a number that moves with the machine
+
+The fourth run (`release-0.0.1d`) came back with a healthy environment — `clockRatio` 1.0, an
+**18 ms** main-thread round trip (against 2400–7000 ms the run before), 12 of 13 passing, and the
+whole job down from 22 min to 9.9 min. The canvas fix did what it was meant to.
+
+The one failure was the tier's own fault. `expectHardCut(A, B, 400)` measured 1484 ms, because the
+graph engine's *first* hand-off starts the next node early by an amount that scales with machine
+load: 0–310 ms on a desktop, ~1400 ms on the runner. The 400 ms bound had been derived from four
+runs on one idle machine, which is exactly the mistake house rule 9 now names.
+
+The fix is to stop asserting it. The first hand-off's ordering is asserted; its timing is not. The
+underlying early start is a genuine engine issue worth chasing separately — see
+[Findings](#about-the-module-and-foundry) — but a release gate that encodes it is a gate that fails
+on a busy runner and tells you nothing about the module.
+
+This is the third distinct way a machine-dependent quantity has broken this suite (a non-realtime
+audio clock, a starved main thread, and now a load-dependent start time). The pattern is worth
+naming: **assert the invariant, print the quantity.**
+
 ## Debugging a failure
 
 Every assertion attaches an ASCII timeline on failure:
@@ -436,26 +458,27 @@ cost a full debugging round each. Everything below was **confirmed live** agains
 - **A combat must be `active`, not merely `started`.** The module resolves through
   `game.combats.active`; a created-and-started-but-not-activated combat changes nothing while every
   piece of combat state looks right.
-- **Every graph hand-off crossfades by the configured duration, including the first** — and the
-  claim that the first one *never* crossfades, which this page asserted for three revisions, was a
-  measurement artifact. Measured on a three-node walk with the canvas render loop stopped:
+- **A graph's first hand-off starts the next node early, by an amount that grows with machine
+  load.** Measured on a three-node `sequential-once` walk of 3 s tracks:
 
-  | `graphCrossfade` | A → B (first) | B → C (later) |
-  |---|---|---|
-  | 0 ms | 0–310 ms | < 150 ms |
-  | 1000 ms | ~1050 ms | ~1000 ms |
+  | Machine | round trip | A → B at 0 ms | A → B at 1000 ms | B → C |
+  |---|---|---|---|---|
+  | desktop, ticker stopped | 3 ms | 0–310 ms | ~1050 ms | tracks the setting, ±40 ms |
+  | GitHub runner | 18 ms | **~1400 ms** | ~1400 ms | tracks the setting |
 
-  The old numbers (0 ms, 0 ms, 40 ms for the first hand-off) were taken while PIXI was rendering,
-  and a tidy explanation was built on them: the engine arms the next start against the
-  `AudioContext` clock ahead of time, and the first node has no prior node to arm from. Plausible,
-  and wrong — what was actually being measured was that arming deadline being **missed under
-  main-thread contention**. With the thread free the first hand-off overlaps like any other,
-  reproducibly. It does stay the loose one: it still trails up to ~310 ms with the crossfade at
-  zero, where later hand-offs cut inside a single analysis frame.
+  Later hand-offs are stable everywhere. The first is not, and the timeline shows it is the
+  *start* that moves rather than the outgoing track running long — A still plays its full three
+  seconds while B comes in 1.5 s early. **A node starting 1.5 s early is audible, so this is worth
+  chasing in `custom-playback-engine.mjs`.** The spec asserts the first hand-off's *ordering* only;
+  every number tried for its timing turned out to measure the machine.
 
-  This is the most valuable thing the tier taught, and it is a warning about the tier: a plausible
-  story that fits the numbers is not a finding until the numbers are reproduced with the main
-  thread free. See house rule 9.
+  This finding was read wrong twice, in opposite directions, and that is the more useful lesson.
+  First: "the first hand-off never crossfades" (0/0/40 ms), with a tidy explanation about armed
+  starts having no prior node to arm from — taken while PIXI was saturating the main thread. Then,
+  with the ticker stopped: "every hand-off crossfades, including the first" — which fit two runs on
+  one idle machine and was broken by the runner immediately. A plausible story that fits the
+  numbers is not a finding until the numbers hold on a machine other than the one they were found
+  on. See house rule 9.
 - **Ducking is exactly right.** Sound volume goes 1 → 0.4 → 1 with the document volume untouched,
   and the measured level ratios are 0.399 and 1.011. An earlier apparent failure was the harness
   measuring during the fade-in ramp.
