@@ -2162,14 +2162,14 @@
 /* The two reveal triggers. `:hover` covers both pointing at a port and
    dragging a wire onto it - Drawflow's wire drag runs off document listeners
    with no pointer capture, so the port under the cursor still matches :hover
-   mid-drag. .game-orchestra-port-revealed is the far end of that story, applied by
+   mid-drag. [data-go-port-revealed] is the far end of that story, applied by
    custom-playlist-editor.mjs (_setWirePortsRevealed) to BOTH ports of a wire
    the pointer is over, since CSS can't reach from a hovered <svg> sibling
    into the two nodes it happens to join. */
 .game-orchestra-drawflow-canvas .drawflow-node .input:hover,
 .game-orchestra-drawflow-canvas .drawflow-node .output:hover,
-.game-orchestra-drawflow-canvas .drawflow-node .input.game-orchestra-port-revealed,
-.game-orchestra-drawflow-canvas .drawflow-node .output.game-orchestra-port-revealed {
+.game-orchestra-drawflow-canvas .drawflow-node .input[data-go-port-revealed],
+.game-orchestra-drawflow-canvas .drawflow-node .output[data-go-port-revealed] {
   --game-orchestra-port-reveal: 1;
   --game-orchestra-port-scale: 1.15;
   --game-orchestra-port-z: 2;
@@ -2222,11 +2222,11 @@
  * and colour is owned by active/hover. Using a third channel means an uncertain
  * wire that is ALSO being followed right now still reads as both at once.
  *
- * Must stay ABOVE the .game-orchestra-edge-active and .game-orchestra-edge-hover rules
- * below: those are the same 4-class specificity, so document order is what
+ * Must stay ABOVE the [data-go-edge-active] and [data-go-edge-hover] rules
+ * below: those carry the same specificity, so document order is what
  * decides, and hover's thicker 5px stroke has to win over this 2px one. Both
  * restore stroke-opacity for the same reason. */
-.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-uncertain .main-path {
+.game-orchestra-drawflow-canvas .connection[data-go-edge-uncertain] .main-path {
   stroke-width: 2px;
   stroke-opacity: 0.6;
 }
@@ -2262,30 +2262,31 @@
   animation: game-orchestra-node-flash 0.7s ease-out forwards;
 }
 
-/* Three classes (.game-orchestra-drawflow-canvas + .connection + the state class) so
- * this beats the two-class ".game-orchestra-drawflow-canvas .connection .main-path"
+/* Three selectors (.game-orchestra-drawflow-canvas + .connection + the state
+ * ATTRIBUTE, which weighs the same as a class) so this beats the two-class
+ * ".game-orchestra-drawflow-canvas .connection .main-path"
  * base rule above and Drawflow's own vendored ".connection .main-path" - the
  * same specificity discipline the node rules further up document. */
-.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-active .main-path,
-.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-pulse .main-path {
+.game-orchestra-drawflow-canvas .connection[data-go-edge-active] .main-path,
+.game-orchestra-drawflow-canvas .connection[data-go-edge-pulse] .main-path {
   stroke: #22d3ee;
   stroke-dasharray: 6 6;
   animation: game-orchestra-edge-march 0.6s linear infinite;
   /* An uncertain wire that is actually being followed right now is no longer
      uncertain - it was taken. Full opacity so the highlight reads at its
-     normal strength (see the .game-orchestra-edge-uncertain rule above). */
+     normal strength (see the [data-go-edge-uncertain] rule above). */
   stroke-opacity: 1;
 }
 
 /* A wire named by a validation issue (_refreshIssueEdges) - #ef4444 to match
  * .game-orchestra-node-error, so the badged nodes and the wires between them read as
- * one shape rather than two unrelated problems. Same three-class specificity
+ * one shape rather than two unrelated problems. Same three-selector specificity
  * discipline as the rule above.
  *
  * Thicker AND dashed: the error's whole job is to make a loop findable among
  * wires that already vary in colour, and stroke-width survives being zoomed out
  * far enough that hue alone stops resolving. */
-.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-issue .main-path {
+.game-orchestra-drawflow-canvas .connection[data-go-edge-issue] .main-path {
   stroke: #ef4444;
   stroke-width: 5px;
   stroke-dasharray: 8 5;
@@ -2296,7 +2297,7 @@
 @media (prefers-reduced-motion: reduce) {
   /* Colour and width stay - only the movement goes, exactly as for the
      activity highlight below. */
-  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-issue .main-path {
+  .game-orchestra-drawflow-canvas .connection[data-go-edge-issue] .main-path {
     animation: none;
   }
 
@@ -2306,8 +2307,8 @@
     filter: drop-shadow(0 0 8px var(--game-orchestra-active-glow));
   }
   /* Colour and dash pattern stay - only the movement goes. */
-  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-active .main-path,
-  .game-orchestra-drawflow-canvas .connection.game-orchestra-edge-pulse .main-path {
+  .game-orchestra-drawflow-canvas .connection[data-go-edge-active] .main-path,
+  .game-orchestra-drawflow-canvas .connection[data-go-edge-pulse] .main-path {
     animation: none;
   }
   /* Ports still grow on hover - that's the feedback - but they snap rather
@@ -2357,23 +2358,23 @@
    custom property as the tucked/revealed states rather than a transform on the
    port element - see the port-dot block above for why that distinction is not
    cosmetic. */
-.game-orchestra-drawflow-canvas .drawflow-node .outputs .output.game-orchestra-port-hover {
+.game-orchestra-drawflow-canvas .drawflow-node .outputs .output[data-go-port-hover] {
   --game-orchestra-port-reveal: 1;
   --game-orchestra-port-scale: 1.45;
   --game-orchestra-port-z: 2;
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node .outputs .output.game-orchestra-port-hover::after {
+.game-orchestra-drawflow-canvas .drawflow-node .outputs .output[data-go-port-hover]::after {
   background: #f59e0b;
   box-shadow: 0 0 8px 3px rgba(245, 158, 11, 0.7);
 }
 
 /* Three classes deep, to beat the two-class base ".game-orchestra-drawflow-canvas
  * .connection .main-path" and Drawflow's own vendored rule. */
-.game-orchestra-drawflow-canvas .connection.game-orchestra-edge-hover .main-path {
+.game-orchestra-drawflow-canvas .connection[data-go-edge-hover] .main-path {
   stroke: #f59e0b;
   stroke-width: 5px;
-  /* Beats .game-orchestra-edge-uncertain's thinner, faded stroke on document order
+  /* Beats [data-go-edge-uncertain]'s thinner, faded stroke on document order
      (same specificity) - pointing at an exit must highlight it whether or not
      that exit is a conditional one. */
   stroke-opacity: 1;

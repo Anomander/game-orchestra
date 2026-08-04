@@ -521,3 +521,37 @@ Related: `getDocumentCategory()` now tests `instanceof foundry.data.PrototypeTok
 back to `constructor.name`. The name check alone reclassifies a subclassed prototype token as
 `null`, which routes every write into `updateObject`'s no-op branch — the same invisible failure
 as [HR-I](#hr-i--never-configure-against-a-sheets-preview-clone-apptoken).
+
+---
+
+## HR-K — Never put a class on a Drawflow port or connection
+
+Every marker this editor applies to a **port** (`.output.output_N`) or a **wire**
+(`<svg class="connection">`) is an **attribute** — `[data-go-edge-uncertain]`, `[data-go-edge-hover]`,
+`[data-go-edge-issue]`, `[data-go-edge-active]`, `[data-go-edge-pulse]`, `[data-go-port-hover]`,
+`[data-go-port-revealed]`. They go on through `setMarker()` / `clearMarkers()` in
+`scripts/graph-decorations.mjs`, which is where the reasoning lives in full.
+
+Drawflow reads both elements' class lists **by position** and rewrites them in place:
+
+- `updateConnectionNodes()` — which runs on every drag frame and at the end of every
+  `removeNodeOutput()` — resolves a wire's two endpoint ports as `classList[3]`/`classList[4]` and
+  immediately reads `.offsetWidth` off what they select.
+- `removeNodeOutput()` renumbers a wire's port classes by **removing and re-adding** them, which
+  moves them to the *end* of the list. Any class of ours slides down into index 3.
+
+Confirmed against the vendored `drawflow.min.js` in a real DOM: with `game-orchestra-edge-uncertain`
+applied as a class, **deleting a Random node's middle exit threw** `Cannot read properties of
+undefined (reading 'offsetWidth')` from inside `removeNodeOutput()`. `handleRemoveExit()` aborted
+half-done — Drawflow had dropped the port, but the matching `data.exits[]` entry was never spliced
+and no refresh ran. The visible symptom was two exits still showing **33%** weight chips each; the
+invisible one was that every later `updateConnectionNodes()` on that node threw too, so dragging it
+stopped working until the window was reopened. `tests/custom-playlist-editor.test.mjs` reproduces
+it: the fake Drawflow renumbers wire classes by remove/re-add and enforces the positional read.
+
+Attribute selectors carry the same specificity as a class, so the CSS ordering rules in
+[HR-C](#hr-c--node-shape-css-is-specificity-critical) and `editor.md` are unchanged.
+
+**Node** elements keep their classes (`game-orchestra-node-active`, the issue-state classes, …):
+Drawflow only reads `classList[0]` there, and never rewrites it — that one is
+[HR-B](#hr-b--data-drawflow-mount-must-stay-class-free)'s territory.

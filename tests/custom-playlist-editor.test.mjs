@@ -13,6 +13,22 @@ import { createEmptyGraph } from '../scripts/custom-playback-schema.mjs';
  * manually (e.g. simulating Drawflow's own 'nodeSelected' dispatch, which is
  * exactly what the dragging regression this file guards against depends on).
  */
+/**
+ * The attribute half of a fake element. Every marker this editor puts on a PORT
+ * or a CONNECTION is an attribute rather than a class (graph-decorations.mjs) -
+ * a fake that only modelled classList could not see them at all.
+ */
+function fakeAttributes() {
+  const attrs = new Map();
+  return {
+    attrs,
+    setAttribute: (name, value) => attrs.set(name, String(value)),
+    removeAttribute: (name) => attrs.delete(name),
+    hasAttribute: (name) => attrs.has(name),
+    getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null)
+  };
+}
+
 function createFakeDrawflowClass() {
   return class FakeDrawflow {
     constructor(container) {
@@ -57,6 +73,7 @@ function createFakeDrawflowClass() {
               // the port knows where it sits (outputs are in Drawflow's normal
               // flow) - see _refreshExitChips.
               innerHTML: '',
+              ...fakeAttributes(),
               classList: {
                 add: (...c) => c.forEach((x) => classes.add(x)),
                 remove: (...c) => c.forEach((x) => classes.delete(x)),
@@ -81,6 +98,7 @@ function createFakeDrawflowClass() {
           if (!this._portElements.has(key)) {
             const classes = new Set();
             this._portElements.set(key, {
+              ...fakeAttributes(),
               classList: {
                 add: (...c) => c.forEach((x) => classes.add(x)),
                 remove: (...c) => c.forEach((x) => classes.delete(x)),
@@ -156,9 +174,11 @@ function createFakeDrawflowClass() {
       // verify the self-loop arc got applied.
       this._connectionElements = [];
       container.querySelectorAll = (sel) => {
-        // A bare class selector: _refreshUncertainEdges() sweeps every wire
-        // already carrying its class before reapplying it, so this has to
-        // actually find them or the clear-and-reapply pass would be untested.
+        // A bare attribute selector: clearMarkers() sweeps every wire already
+        // carrying a marker before reapplying it, so this has to actually find
+        // them or the clear-and-reapply pass would be untested.
+        const attr = /^\[([\w-]+)\]$/.exec(sel);
+        if (attr) return this._connectionElements.filter((c) => c.el.hasAttribute(attr[1])).map((c) => c.el);
         const bare = /^\.([\w-]+)$/.exec(sel);
         if (bare) return this._connectionElements.filter((c) => c.el.classList.contains(bare[1])).map((c) => c.el);
         // Every part of the selector is optional, matching edgeSelector(): the
@@ -187,9 +207,14 @@ function createFakeDrawflowClass() {
       // connection. Real, not decorative: connectionPortSelectors() reads a
       // hovered wire's own class list to work out which two ports to reveal,
       // so a fake without them couldn't exercise that path at all.
-      const classes = new Set(['connection', `node_in_node-${inId}`, `node_out_node-${outId}`, inPort]);
+      // Order matters as much as membership: the vendor writes them
+      // node_in, node_out, output_N, input_N and then reads them back BY INDEX
+      // (classList[3]/[4]) - see updateConnectionNodes() below.
+      const classes = new Set(['connection', `node_in_node-${inId}`, `node_out_node-${outId}`]);
       if (port) classes.add(port);
+      classes.add(inPort);
       const el = {
+        ...fakeAttributes(),
         classList: {
           add: (...c) => c.forEach((x) => classes.add(x)),
           remove: (...c) => c.forEach((x) => classes.delete(x)),
@@ -250,8 +275,52 @@ function createFakeDrawflowClass() {
       const count = Object.keys(node.outputs).length;
       node.outputs[`output_${count + 1}`] = { connections: [] };
     }
+    /**
+     * Mirrors the vendored removeNodeOutput in the three ways the editor depends
+     * on, all read out of drawflow.min.js and confirmed against it in a real DOM:
+     * the port's own connections go first (each dispatching 'connectionRemoved'),
+     * the remaining ports renumber contiguously (H5), and each surviving wire's
+     * port classes are renumbered by REMOVE-then-ADD - which moves them to the
+     * END of that wire's class list. That last one is why every marker this
+     * editor puts on a wire is an attribute (graph-decorations.mjs); a fake that
+     * just deleted the key could never show it.
+     */
     removeNodeOutput(id, port) {
-      delete this._nodes[id].outputs[port];
+      const node = this._nodes[id];
+      if (!node?.outputs?.[port]) return;
+      const indexOf = (name) => parseInt(String(name).split('_')[1], 10);
+      const removedIndex = indexOf(port);
+      for (const conn of [...node.outputs[port].connections]) {
+        this.removeSingleConnection(id, conn.node, port, conn.output);
+        this._fire('connectionRemoved', { output_id: id, input_id: conn.node, output_class: port, input_class: conn.output });
+      }
+      delete node.outputs[port];
+      const renumbered = {};
+      Object.keys(node.outputs)
+        .sort((a, b) => indexOf(a) - indexOf(b))
+        .forEach((name, i) => {
+          renumbered[`output_${i + 1}`] = node.outputs[name];
+        });
+      node.outputs = renumbered;
+      // The mirrored input-side records name the SOURCE's output port, so they
+      // shift with it.
+      for (const other of Object.values(this._nodes)) {
+        for (const inPort of Object.values(other.inputs || {})) {
+          for (const conn of inPort.connections) {
+            if (conn.node === String(id) && indexOf(conn.input) > removedIndex) conn.input = `output_${indexOf(conn.input) - 1}`;
+          }
+        }
+      }
+      for (const conn of this._connectionElements) {
+        if (conn.outId !== String(id) || !conn.port || indexOf(conn.port) <= removedIndex) continue;
+        const next = `output_${indexOf(conn.port) - 1}`;
+        conn.el.classList.remove(conn.port);
+        conn.el.classList.remove(conn.inPort);
+        conn.el.classList.add(next);
+        conn.el.classList.add(conn.inPort);
+        conn.port = next;
+      }
+      this.updateConnectionNodes(`node-${id}`);
     }
     /**
      * Mirrors real Drawflow: takes the DOM id ('node-<n>'), not the bare numeric id, drops every
@@ -290,9 +359,26 @@ function createFakeDrawflowClass() {
       const inIndex = ins.findIndex((c) => c.node === String(outId) && c.input === outputClass);
       if (inIndex >= 0) ins.splice(inIndex, 1);
     }
+    /**
+     * Records the call (several tests assert on it) AND enforces the vendor's
+     * positional read of a wire's endpoint classes: it resolves the two ports as
+     * classList[3]/classList[4] and immediately reads `.offsetWidth` off what
+     * they select, so anything of ours sitting at those indices makes it
+     * dereference undefined. That throw is not invented for this fake - it is
+     * what deleting a Random exit did in a real DOM while our uncertain-edge
+     * marker was still a class, aborting the delete half-done.
+     */
     updateConnectionNodes(nodeElementId) {
       this.updateConnectionNodesCalls = this.updateConnectionNodesCalls || [];
       this.updateConnectionNodesCalls.push(nodeElementId);
+      const id = String(nodeElementId).slice(5);
+      for (const conn of this._connectionElements) {
+        if (!conn.port || (conn.outId !== id && conn.inId !== id)) continue;
+        const classes = [...conn.el.classList];
+        if (!/^output_\d+$/.test(classes[3] ?? '') || !/^input_\d+$/.test(classes[4] ?? '')) {
+          throw new TypeError("Cannot read properties of undefined (reading 'offsetWidth')");
+        }
+      }
     }
     zoom_in() {
       this.zoomInCalls++;
@@ -2273,6 +2359,39 @@ describe('CustomPlaylistEditor', () => {
       CustomPlaylistEditor.handleRemoveExit.call(editor, { preventDefault: vi.fn() }, { dataset: { nodeId, port } });
     const exitsOf = (editor, nodeId) => editor._drawflow.getNodeFromId(nodeId).data.exits;
 
+    it("renormalizes the remaining weight chips when a wired Random exit is deleted", () => {
+      // Reported live: deleting one of a Random node's three exits left the two
+      // survivors' chips reading 33% each. The cause was not the arithmetic - it
+      // was that removeNodeOutput() threw partway through (see the fake's
+      // updateConnectionNodes), so handleRemoveExit never reached the splice or
+      // the refresh below it. The node kept three exits behind two ports, and
+      // every later updateConnectionNodes on it threw too.
+      const { editor, nodeId } = editorWithNode('random');
+      addExit(editor, nodeId);
+      addExit(editor, nodeId);
+      const targets = [];
+      for (let i = 0; i < 3; i++) {
+        CustomPlaylistEditor.handleAddNode.call(editor, { preventDefault: vi.fn() }, { dataset: { nodeType: 'end' } });
+        const targetId = editor.graph.nodes.filter((n) => n.type === 'end').at(-1).id;
+        targets.push(targetId);
+        editor._drawflow.addConnection(nodeId, targetId, `output_${i + 1}`, 'input_1');
+        editor._drawflow.addFakeConnectionPath(nodeId, targetId, 'M0 0 C1 1 2 2 3 3', `output_${i + 1}`);
+      }
+      editor._syncFromDrawflow(editor._drawflow);
+      editor._refreshNodeDisplay(nodeId);
+      const chipTexts = () =>
+        Object.keys(editor._drawflow.getNodeFromId(nodeId).outputs).map(
+          (port) => /(\d+)%/.exec(editor._drawflow.container.querySelector(`#node-${nodeId} .outputs .output.${port}`).innerHTML)?.[1] ?? null
+        );
+      expect(chipTexts()).toEqual(['33', '33', '33']);
+
+      removeExit(editor, nodeId, 'output_2');
+
+      expect(exitsOf(editor, nodeId)).toHaveLength(2);
+      expect(chipTexts()).toEqual(['50', '50']);
+      expect(editor.graph.edges.map((e) => e.to)).toEqual([targets[0], targets[2]]);
+    });
+
     it('gives a new Condition node exactly one exit, the fixed fallback', () => {
       const { editor, nodeId } = editorWithNode('condition');
       expect(exitsOf(editor, nodeId)).toEqual([{ condition: { kind: 'default' } }]);
@@ -2385,8 +2504,8 @@ describe('CustomPlaylistEditor', () => {
 
       editor._onExitHover({ target: rowTarget(nodeId, 'output_1') });
 
-      expect(portEl(editor, nodeId, 'output_1').classList.contains('game-orchestra-port-hover')).toBe(true);
-      expect(edgeEl(editor).classList.contains('game-orchestra-edge-hover')).toBe(true);
+      expect(portEl(editor, nodeId, 'output_1').hasAttribute('data-go-port-hover')).toBe(true);
+      expect(edgeEl(editor).hasAttribute('data-go-edge-hover')).toBe(true);
     });
 
     it('highlights just the port for an exit that is not wired to anything', () => {
@@ -2394,8 +2513,8 @@ describe('CustomPlaylistEditor', () => {
 
       editor._onExitHover({ target: rowTarget(nodeId, 'output_2') });
 
-      expect(portEl(editor, nodeId, 'output_2').classList.contains('game-orchestra-port-hover')).toBe(true);
-      expect(edgeEl(editor).classList.contains('game-orchestra-edge-hover')).toBe(false);
+      expect(portEl(editor, nodeId, 'output_2').hasAttribute('data-go-port-hover')).toBe(true);
+      expect(edgeEl(editor).hasAttribute('data-go-edge-hover')).toBe(false);
     });
 
     it('clears the previous highlight when the pointer moves to another row', () => {
@@ -2404,9 +2523,9 @@ describe('CustomPlaylistEditor', () => {
       editor._onExitHover({ target: rowTarget(nodeId, 'output_1') });
       editor._onExitHover({ target: rowTarget(nodeId, 'output_2') });
 
-      expect(portEl(editor, nodeId, 'output_1').classList.contains('game-orchestra-port-hover')).toBe(false);
-      expect(edgeEl(editor).classList.contains('game-orchestra-edge-hover')).toBe(false);
-      expect(portEl(editor, nodeId, 'output_2').classList.contains('game-orchestra-port-hover')).toBe(true);
+      expect(portEl(editor, nodeId, 'output_1').hasAttribute('data-go-port-hover')).toBe(false);
+      expect(edgeEl(editor).hasAttribute('data-go-edge-hover')).toBe(false);
+      expect(portEl(editor, nodeId, 'output_2').hasAttribute('data-go-port-hover')).toBe(true);
     });
 
     it('clears the highlight when the pointer moves off any row', () => {
@@ -2415,7 +2534,7 @@ describe('CustomPlaylistEditor', () => {
 
       editor._onExitHover({ target: { closest: () => null } });
 
-      expect(portEl(editor, nodeId, 'output_1').classList.contains('game-orchestra-port-hover')).toBe(false);
+      expect(portEl(editor, nodeId, 'output_1').hasAttribute('data-go-port-hover')).toBe(false);
     });
 
     it('clears the highlight when the inspector re-renders the row out from under it', () => {
@@ -2425,7 +2544,7 @@ describe('CustomPlaylistEditor', () => {
       editor._renderInspector();
 
       expect(editor._hoveredExit).toBeNull();
-      expect(portEl(editor, nodeId, 'output_1').classList.contains('game-orchestra-port-hover')).toBe(false);
+      expect(portEl(editor, nodeId, 'output_1').hasAttribute('data-go-port-hover')).toBe(false);
     });
   });
 
@@ -2689,10 +2808,10 @@ describe('CustomPlaylistEditor', () => {
       editor._renderInspector();
       return editor;
     }
-    const wireClasses = (editor, edgeId) => {
+    const wireMarkers = (editor, edgeId) => {
       const port = /output_\d+/.exec(edgeId)[0];
       const [from, to] = edgeId.split(/:output_\d+->/);
-      return editor._drawflow._connectionElements.find((c) => c.outId === from && c.inId === to && c.port === port).el.classList;
+      return editor._drawflow._connectionElements.find((c) => c.outId === from && c.inId === to && c.port === port).el.attrs;
     };
 
     it('badges every node on an instantaneous cycle, not just the one the issue is anchored to', () => {
@@ -2706,22 +2825,22 @@ describe('CustomPlaylistEditor', () => {
     it('colours the wires that form the cycle, and only those', () => {
       const editor = editorWithCycle();
       // The two edges the DFS actually closed the loop through.
-      expect(wireClasses(editor, '2:output_1->3').contains('game-orchestra-edge-issue')).toBe(true);
-      expect(wireClasses(editor, '3:output_1->2').contains('game-orchestra-edge-issue')).toBe(true);
+      expect(wireMarkers(editor, '2:output_1->3').has('data-go-edge-issue')).toBe(true);
+      expect(wireMarkers(editor, '3:output_1->2').has('data-go-edge-issue')).toBe(true);
       // Feeds the loop but isn't on it; leaves the loop but isn't on it.
-      expect(wireClasses(editor, '1:output_1->2').contains('game-orchestra-edge-issue')).toBe(false);
-      expect(wireClasses(editor, '3:output_2->4').contains('game-orchestra-edge-issue')).toBe(false);
+      expect(wireMarkers(editor, '1:output_1->2').has('data-go-edge-issue')).toBe(false);
+      expect(wireMarkers(editor, '3:output_2->4').has('data-go-edge-issue')).toBe(false);
     });
 
     it('clears the wire colouring once the cycle is broken', () => {
       const editor = editorWithCycle();
-      expect(wireClasses(editor, '2:output_1->3').contains('game-orchestra-edge-issue')).toBe(true);
+      expect(wireMarkers(editor, '2:output_1->3').has('data-go-edge-issue')).toBe(true);
 
       // Repoint the back-edge at the Track, so nothing closes instantaneously.
       editor.graph.edges = editor.graph.edges.filter((e) => e.id !== '3:output_1->2');
       editor._renderInspector();
 
-      expect(wireClasses(editor, '2:output_1->3').contains('game-orchestra-edge-issue')).toBe(false);
+      expect(wireMarkers(editor, '2:output_1->3').has('data-go-edge-issue')).toBe(false);
     });
 
     it('clears the badges once the graph is wired up', () => {
@@ -3124,7 +3243,7 @@ describe('CustomPlaylistEditor', () => {
     }
 
     const hasUncertain = (editor, outId) =>
-      editor._drawflow._connectionElements.find((c) => c.outId === outId).el.classList.contains('game-orchestra-edge-uncertain');
+      editor._drawflow._connectionElements.find((c) => c.outId === outId).el.hasAttribute('data-go-edge-uncertain');
 
     it("marks a Random's wires and leaves a Fork's alone - a Fork takes every exit at once", () => {
       const editor = editorWithBranches();
@@ -3192,7 +3311,7 @@ describe('CustomPlaylistEditor', () => {
       return editor;
     }
 
-    const revealed = (editor, key) => Boolean(editor._drawflow._portElements.get(key)?.classList?.contains('game-orchestra-port-revealed'));
+    const revealed = (editor, key) => Boolean(editor._drawflow._portElements.get(key)?.hasAttribute?.('data-go-port-revealed'));
 
     it('reveals the ports at BOTH ends of the hovered wire', () => {
       const editor = wiredEditor();
@@ -3633,8 +3752,8 @@ describe('CustomPlaylistEditor', () => {
     }
 
     const nodeHasClass = (editor, id, cls) => editor._drawflow.container.querySelector(`#node-${id}`).classList.contains(cls);
-    const edgeHasClass = (editor, outId, inId, cls) =>
-      editor._drawflow._connectionElements.find((c) => c.outId === outId && c.inId === inId).el.classList.contains(cls);
+    const edgeHasMarker = (editor, outId, inId, attr) =>
+      editor._drawflow._connectionElements.find((c) => c.outId === outId && c.inId === inId).el.hasAttribute(attr);
 
     it('subscribes to engine activity on render and unsubscribes on close', () => {
       const editor = mountPlayingEditor();
@@ -3653,7 +3772,7 @@ describe('CustomPlaylistEditor', () => {
       Hooks.callAll('gameOrchestraGraphActivity', { playlistId: 'pl1', activeNodeIds: ['2'], enteredNodeId: '2', traversedEdgeIds: [] });
 
       expect(nodeHasClass(editor, '2', 'game-orchestra-node-active')).toBe(true);
-      expect(edgeHasClass(editor, '2', '3', 'game-orchestra-edge-active')).toBe(true);
+      expect(edgeHasMarker(editor, '2', '3', 'data-go-edge-active')).toBe(true);
     });
 
     it('moves the highlight as the token advances, leaving nothing behind on the old node', () => {
@@ -3664,7 +3783,7 @@ describe('CustomPlaylistEditor', () => {
 
       expect(nodeHasClass(editor, '2', 'game-orchestra-node-active')).toBe(false);
       expect(nodeHasClass(editor, '3', 'game-orchestra-node-active')).toBe(true);
-      expect(edgeHasClass(editor, '2', '3', 'game-orchestra-edge-active')).toBe(false);
+      expect(edgeHasMarker(editor, '2', '3', 'data-go-edge-active')).toBe(false);
     });
 
     it('flashes an instantaneous node and clears the flash on its own, keeping the active glow', () => {
@@ -3678,12 +3797,12 @@ describe('CustomPlaylistEditor', () => {
         traversedEdgeIds: ['1:output_1->2']
       });
       expect(nodeHasClass(editor, '1', 'game-orchestra-node-pulse')).toBe(true);
-      expect(edgeHasClass(editor, '1', '2', 'game-orchestra-edge-pulse')).toBe(true);
+      expect(edgeHasMarker(editor, '1', '2', 'data-go-edge-pulse')).toBe(true);
 
       vi.advanceTimersByTime(1000);
 
       expect(nodeHasClass(editor, '1', 'game-orchestra-node-pulse')).toBe(false);
-      expect(edgeHasClass(editor, '1', '2', 'game-orchestra-edge-pulse')).toBe(false);
+      expect(edgeHasMarker(editor, '1', '2', 'data-go-edge-pulse')).toBe(false);
       expect(nodeHasClass(editor, '2', 'game-orchestra-node-active')).toBe(true); // persistent part survives
     });
 
@@ -3702,7 +3821,7 @@ describe('CustomPlaylistEditor', () => {
       Hooks.callAll('gameOrchestraGraphActivity', { playlistId: 'pl1', activeNodeIds: [], traversedEdgeIds: [] });
 
       expect(nodeHasClass(editor, '2', 'game-orchestra-node-active')).toBe(false);
-      expect(edgeHasClass(editor, '2', '3', 'game-orchestra-edge-active')).toBe(false);
+      expect(edgeHasMarker(editor, '2', '3', 'data-go-edge-active')).toBe(false);
     });
 
     it('primes itself from an engine already playing when the window opens', () => {

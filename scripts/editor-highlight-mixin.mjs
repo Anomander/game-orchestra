@@ -1,4 +1,5 @@
 import { computeHighlight, edgeSelector } from './graph-activity-highlight.mjs';
+import { setMarker, ACTIVE_EDGE_ATTR, PULSE_EDGE_ATTR } from './graph-decorations.mjs';
 
 /**
  * How long (ms) an instantaneous node or a just-followed edge stays flashed.
@@ -10,8 +11,6 @@ const ACTIVITY_PULSE_MS = 700;
 
 const ACTIVE_NODE_CLASS = 'game-orchestra-node-active';
 const PULSE_NODE_CLASS = 'game-orchestra-node-pulse';
-const ACTIVE_EDGE_CLASS = 'game-orchestra-edge-active';
-const PULSE_EDGE_CLASS = 'game-orchestra-edge-pulse';
 
 /**
  * Which keyframes drain which node type - a Delay empties downward over its
@@ -63,10 +62,12 @@ export function EditorHighlightMixin(Base) {
      * Always lifts the previous highlight first rather than diffing. Drawflow
      * rewrites connection paths on every drag frame and destroys/recreates the
      * whole `<svg class="connection">` element when a connection is remade, so a
-     * class applied earlier cannot be assumed to still be where it was put -
+     * marker applied earlier cannot be assumed to still be where it was put -
      * re-resolving both sides from ids each time keeps this idempotent.
      *
-     * Pure classList work: never this.render() (see the class doc) and never
+     * Node state is a class; a wire's is an attribute (graph-decorations.mjs).
+     *
+     * Pure DOM marking: never this.render() (see the class doc) and never
      * _renderInspector() either - playback state has no bearing on the inspector.
      * @param {ReturnType<import('./graph-activity-highlight.mjs').computeHighlight>} state
      * @private
@@ -78,10 +79,10 @@ export function EditorHighlightMixin(Base) {
       for (const id of state.activeNodeIds) this._nodeElement(id)?.classList?.add(ACTIVE_NODE_CLASS);
       for (const id of state.pulseNodeIds) this._nodeElement(id)?.classList?.add(PULSE_NODE_CLASS);
       for (const edge of state.activeEdges) {
-        for (const el of this._connectionElements(edge)) el.classList?.add(ACTIVE_EDGE_CLASS);
+        for (const el of this._connectionElements(edge)) setMarker(el, ACTIVE_EDGE_ATTR, true);
       }
       for (const edge of state.pulseEdges) {
-        for (const el of this._connectionElements(edge)) el.classList?.add(PULSE_EDGE_CLASS);
+        for (const el of this._connectionElements(edge)) setMarker(el, PULSE_EDGE_ATTR, true);
       }
       for (const timing of state.activeTimings || []) this._setNodeDrain(timing.nodeId, timing);
       this._activityHighlight = state;
@@ -95,7 +96,7 @@ export function EditorHighlightMixin(Base) {
     }
 
     /**
-     * Remove every class the last _applyActivityHighlight() added.
+     * Remove every marker the last _applyActivityHighlight() added.
      * @private
      */
     _liftActivityHighlight() {
@@ -105,7 +106,10 @@ export function EditorHighlightMixin(Base) {
         this._nodeElement(id)?.classList?.remove(ACTIVE_NODE_CLASS, PULSE_NODE_CLASS);
       }
       for (const edge of [...previous.activeEdges, ...previous.pulseEdges]) {
-        for (const el of this._connectionElements(edge)) el.classList?.remove(ACTIVE_EDGE_CLASS, PULSE_EDGE_CLASS);
+        for (const el of this._connectionElements(edge)) {
+          setMarker(el, ACTIVE_EDGE_ATTR, false);
+          setMarker(el, PULSE_EDGE_ATTR, false);
+        }
       }
       for (const timing of previous.activeTimings || []) this._setNodeDrain(timing.nodeId, null);
       this._activityHighlight = null;
@@ -122,7 +126,7 @@ export function EditorHighlightMixin(Base) {
       if (!current) return;
       for (const id of current.pulseNodeIds) this._nodeElement(id)?.classList?.remove(PULSE_NODE_CLASS);
       for (const edge of current.pulseEdges) {
-        for (const el of this._connectionElements(edge)) el.classList?.remove(PULSE_EDGE_CLASS);
+        for (const el of this._connectionElements(edge)) setMarker(el, PULSE_EDGE_ATTR, false);
       }
       this._activityHighlight = { ...current, pulseNodeIds: [], pulseEdges: [] };
     }

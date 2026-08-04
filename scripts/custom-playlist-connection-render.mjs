@@ -261,9 +261,11 @@ export function parsePathEndpoints(d) {
  * Drawflow tags every completed connection with four endpoint classes:
  * `node_out_node-<id>` / `node_in_node-<id>` for the nodes, and `output_N` /
  * `input_N` for the ports. They are matched here by shape, not by position:
- * the vendor reads them as classList[1]..[4], but this editor adds classes of
- * its own to the same element (game-orchestra-edge-uncertain / -hover / -active), so
- * their indices are not ours to depend on.
+ * the vendor reads them as classList[1]..[4], and it renumbers a port class by
+ * removing and re-adding it, which reorders the list - so their indices are not
+ * ours to depend on. (This editor's own wire markers stay out of the class list
+ * entirely and are attributes - see graph-decorations.mjs for what happened when
+ * they weren't.)
  * @param {Iterable<string>} classNames - The element's `classList`.
  * @returns {{output: string, input: string}|null} null for anything that isn't
  *   a completed connection - notably the in-progress wire Drawflow draws while

@@ -13,7 +13,7 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **1595 tests, 38 files, all passing.** ~4s. |
+| `npm test` | Full vitest suite. Baseline: **1596 tests, 38 files, all passing.** ~4s. |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
 | `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~5 min, 13 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |

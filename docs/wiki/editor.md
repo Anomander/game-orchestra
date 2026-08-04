@@ -4,7 +4,7 @@
 building a playlist's `customPlayback` graph visually.
 
 This is the most hazard-dense file in the module. Read [invariants.md](invariants.md) § *House
-rules* (HR-A…HR-D) before changing anything here.
+rules* (HR-A…HR-D, and HR-K on decorating ports and wires) before changing anything here.
 
 Class composition:
 
@@ -555,7 +555,7 @@ more fields: `nodeIds[]` and `edgeIds[]`. `InstantaneousCycle` is the only one t
 - `nodeId` is the first of `nodeIds`, so click-to-focus still has one place to jump to.
 - `_refreshIssueBadges()` badges **every** node in `nodeIds` — marking only the anchor would leave
   the rest of the loop looking innocent.
-- `_refreshIssueEdges()` paints every connection in `edgeIds` with `.game-orchestra-edge-issue` (red,
+- `_refreshIssueEdges()` paints every connection in `edgeIds` with `[data-go-edge-issue]` (red,
   thicker and dashed — width survives being zoomed out past where hue resolves). It repaints from
   scratch each pass rather than diffing like the activity highlight, because validation is a
   whole-graph property: one rewire can move the cycle somewhere else entirely.
@@ -843,12 +843,15 @@ matches on the click target being that element) can never fire for it either.
 
 Two further state channels avoid hue entirely, because it was already spoken for:
 
-- **Uncertain wires** (`.game-orchestra-edge-uncertain`, from `uncertainEdges()`): edges leaving a Random
+- **Uncertain wires** (`[data-go-edge-uncertain]`, from `uncertainEdges()`): edges leaving a Random
   or Condition node render thinner and faded. Width + opacity, *not* dash — the dash pattern
   belongs to the playback highlight and multi-select — so an uncertain wire that is also being
-  followed still reads as both. The `.game-orchestra-edge-uncertain` rule must stay **above**
-  `.game-orchestra-edge-active` and `.game-orchestra-edge-hover`: same specificity, so document order decides,
+  followed still reads as both. The `[data-go-edge-uncertain]` rule must stay **above**
+  `[data-go-edge-active]` and `[data-go-edge-hover]`: same specificity, so document order decides,
   and hover's thicker stroke has to win.
+
+  Every one of those markers is an **attribute, never a class** — see HR-K in
+  [invariants.md](invariants.md) for the delete-an-exit bug that rule comes from.
 - **Zoom tiers** (`data-zoom-tier`, from `zoomTier()`): below ~0.6 zoom the detail line and name
   caption are hidden, leaving shape + icon. Stamped on the canvas element from Drawflow's own
   `zoom` event — subscribe to that, never patch `handleZoomIn/Out/Reset`, or ctrl+wheel is missed.
@@ -865,15 +868,15 @@ consumed by its `::after`: `--game-orchestra-port-reveal` (the 0/1 switch, multi
 - **The port itself is hovered** — plain CSS `:hover`, no JS. This covers dragging a wire onto a
   port too: Drawflow's wire drag runs off document listeners with no pointer capture, so the port
   under the cursor still matches `:hover` mid-drag.
-- **A wire touching it is highlighted** — `.game-orchestra-port-revealed`, applied by
+- **A wire touching it is highlighted** — `[data-go-port-revealed]`, applied by
   `_setWirePortsRevealed()` to *both* ports of the wire under the pointer, and to the far end of an
   exit the inspector is pointing out. CSS cannot do this: the wire is an `<svg>` sibling of the
   nodes, and there is no selector from a hovered element into two arbitrary descendants elsewhere.
   `connectionPortSelectors()` (pure, in `custom-playlist-connection-render.mjs`) reads the
   endpoint classes Drawflow writes on every connection — `node_out_node-<id>` / `node_in_node-<id>`
   / `output_N` / `input_N` — matching them **by shape, not by index**. The vendor reads them
-  positionally as `classList[3]`/`[4]`; this editor adds classes of its own to the same element, so
-  those positions are not ours to rely on.
+  positionally as `classList[3]`/`[4]` *and* reorders them when a port is renumbered, so those
+  positions are not ours to rely on — and nothing of ours may sit in that class list at all (HR-K).
 
 **The dot is a `::after`, and that is not cosmetic.** Three reasons:
 

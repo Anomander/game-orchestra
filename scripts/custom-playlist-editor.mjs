@@ -27,38 +27,28 @@ import { EditorHighlightMixin } from './editor-highlight-mixin.mjs';
 import { createDefaultPlaylistRef, normalizePlaylistRef, describePlaylistRef } from './playlist-ref.mjs';
 import { resolveGraphDrop } from './graph-drop.mjs';
 import { GraphHistory } from './graph-history.mjs';
+import {
+  setMarker,
+  clearMarkers,
+  PORT_HOVER_ATTR,
+  EDGE_HOVER_ATTR,
+  PORT_REVEAL_ATTR,
+  UNCERTAIN_EDGE_ATTR,
+  ISSUE_EDGE_ATTR
+} from './graph-decorations.mjs';
 
 /** Minimum vertical clearance (px) a self-loop's arc keeps above a node. */
 const SELF_LOOP_MIN_CLEARANCE_PX = 40;
 
-/** Applied while an inspector exit row is hovered, to point out its exit on the canvas. */
-const PORT_HOVER_CLASS = 'game-orchestra-port-hover';
-const EDGE_HOVER_CLASS = 'game-orchestra-edge-hover';
-
-/**
- * Lifts a port out of its tucked-in resting size (see the port-dot block in
- * game-orchestra.css). Applied to both ports of whichever wire the pointer is over -
- * hovering a port itself is handled by plain CSS `:hover` and needs no class.
- */
-const PORT_REVEAL_CLASS = 'game-orchestra-port-revealed';
-
-/** Applied to wires leaving a Random/Condition node - see uncertainEdges(). */
-const UNCERTAIN_EDGE_CLASS = 'game-orchestra-edge-uncertain';
-
 /**
  * Node classes carrying validation state, applied alongside the corner badge.
  * Indexed by the same severity strings _refreshIssueBadges() already computes.
+ *
+ * Classes are fine HERE and nowhere near a port or a wire: every marker this
+ * editor puts on one of THOSE is an attribute instead, for the reason
+ * graph-decorations.mjs opens with.
  */
 const ISSUE_STATE_CLASSES = { warning: 'game-orchestra-node-warning', error: 'game-orchestra-node-error' };
-
-/**
- * Applied to a connection named by an issue's `edgeIds` - see
- * _refreshIssueEdges(). One class for both severities, unlike the node state
- * above: the only issue that names edges today is an error, and a wire is too
- * thin to carry a glyph the way a badge does, so a second colour here would be
- * distinguishable by hue alone.
- */
-const ISSUE_EDGE_CLASS = 'game-orchestra-edge-issue';
 
 /**
  * A distinct glyph per severity, so warning and error are never told apart by
@@ -1175,7 +1165,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   _refreshIssueEdges(validation) {
     const container = this._drawflow?.container;
     if (!container) return;
-    for (const el of container.querySelectorAll?.(`.${ISSUE_EDGE_CLASS}`) || []) el.classList?.remove?.(ISSUE_EDGE_CLASS);
+    clearMarkers(container, ISSUE_EDGE_ATTR);
 
     const edgeIds = new Set();
     for (const issue of [...(validation?.errors || []), ...(validation?.warnings || [])]) {
@@ -1188,7 +1178,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       // Same EdgeRef shape (and same port-less over-highlight fallback) the
       // activity highlight uses - see edgeSelector()'s doc comment.
       for (const el of this._connectionElements({ from: edge.from, to: edge.to, port: portFromEdgeId(edge.id) })) {
-        el.classList?.add?.(ISSUE_EDGE_CLASS);
+        setMarker(el, ISSUE_EDGE_ATTR, true);
       }
     }
   }
@@ -1491,19 +1481,19 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
    * Mark the wires that leave a Random or Condition node, which take only one
    * of their exits, so they read as conditional rather than as guaranteed
    * flow - see uncertainEdges() for the rule and the
-   * `.game-orchestra-edge-uncertain` rule in game-orchestra.css for the treatment.
+   * `[data-go-edge-uncertain]` rule in game-orchestra.css for the treatment.
    *
    * Cleared and reapplied wholesale rather than diffed: a single node changing
-   * type would otherwise leave stale classes behind, and the wire count here
+   * type would otherwise leave stale markers behind, and the wire count here
    * is bounded by the size of a hand-authored graph.
    * @private
    */
   _refreshUncertainEdges() {
     const container = this._drawflow?.container;
     if (!container?.querySelectorAll) return;
-    for (const el of container.querySelectorAll(`.${UNCERTAIN_EDGE_CLASS}`)) el.classList?.remove?.(UNCERTAIN_EDGE_CLASS);
+    clearMarkers(container, UNCERTAIN_EDGE_ATTR);
     for (const edge of uncertainEdges(this.graph)) {
-      for (const el of container.querySelectorAll(edgeSelector(edge))) el.classList?.add?.(UNCERTAIN_EDGE_CLASS);
+      for (const el of container.querySelectorAll(edgeSelector(edge))) setMarker(el, UNCERTAIN_EDGE_ATTR, true);
     }
   }
 
@@ -1533,14 +1523,14 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (this._hoveredExit?.nodeId === nodeId && this._hoveredExit?.portName === portName) return;
     this._clearExitHover();
     if (!nodeId || !portName) return;
-    this._drawflow?.container?.querySelector?.(`#node-${nodeId} .outputs .output.${portName}`)?.classList?.add(PORT_HOVER_CLASS);
+    setMarker(this._drawflow?.container?.querySelector?.(`#node-${nodeId} .outputs .output.${portName}`), PORT_HOVER_ATTR, true);
     // No `to`: this asks for whatever that port is wired to, which the
     // inspector has no need to know (and an unwired port simply matches nothing).
     for (const el of this._drawflow?.container?.querySelectorAll?.(edgeSelector({ from: nodeId, port: portName })) || []) {
-      el.classList?.add(EDGE_HOVER_CLASS);
+      setMarker(el, EDGE_HOVER_ATTR, true);
       // Highlighting the wire reveals what it lands ON as well, so the row
       // answers "and where does it go?" without a second look. Shares
-      // PORT_REVEAL_CLASS with the canvas-side wire hover above; the two never
+      // PORT_REVEAL_ATTR with the canvas-side wire hover above; the two never
       // overlap in practice (the pointer is either in the inspector or on the
       // canvas, and moving between them fires this side's mouseleave first).
       this._setWirePortsRevealed(el, true);
@@ -1556,9 +1546,9 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (!hovered) return;
     this._hoveredExit = null;
     const container = this._drawflow?.container;
-    container?.querySelector?.(`#node-${hovered.nodeId} .outputs .output.${hovered.portName}`)?.classList?.remove(PORT_HOVER_CLASS);
+    setMarker(container?.querySelector?.(`#node-${hovered.nodeId} .outputs .output.${hovered.portName}`), PORT_HOVER_ATTR, false);
     for (const el of container?.querySelectorAll?.(edgeSelector({ from: hovered.nodeId, port: hovered.portName })) || []) {
-      el.classList?.remove(EDGE_HOVER_CLASS);
+      setMarker(el, EDGE_HOVER_ATTR, false);
       this._setWirePortsRevealed(el, false);
     }
   }
@@ -1588,7 +1578,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   _setHoveredWire(connectionEl) {
     const next = connectionEl || null;
     if (this._hoveredWire === next) return;
-    // Cleared from the OLD element's own class list, even if Drawflow has since
+    // Cleared from the OLD element, even if Drawflow has since
     // detached it (deleting a wire while hovering it does exactly that): a
     // detached <svg> still knows which ports it used to join, and those ports
     // are still in the document waiting to be un-revealed.
@@ -1608,9 +1598,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (!selectors) return;
     const container = this._drawflow?.container;
     for (const selector of [selectors.output, selectors.input]) {
-      const port = container?.querySelector?.(selector);
-      if (revealed) port?.classList?.add(PORT_REVEAL_CLASS);
-      else port?.classList?.remove(PORT_REVEAL_CLASS);
+      setMarker(container?.querySelector?.(selector), PORT_REVEAL_ATTR, revealed);
     }
   }
 

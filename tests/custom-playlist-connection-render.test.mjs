@@ -303,11 +303,14 @@ describe('connectionPortSelectors', () => {
     });
   });
 
-  it('ignores the editor\'s own classes and does not depend on class order', () => {
-    // The vendor reads these positionally (classList[3]/[4]); this editor adds
-    // classes of its own to the same element, so position is not reliable.
+  it('does not depend on class order, or on nothing else being in the list', () => {
+    // The vendor reads these positionally (classList[3]/[4]) AND reorders them
+    // when it renumbers a port, so position is not reliable. This editor's own
+    // wire markers are attributes and stay out of the list entirely (HR-K), but
+    // matching by shape is what makes that a belt-and-braces rule rather than
+    // the only thing holding this function up.
     expect(
-      connectionPortSelectors(['game-orchestra-edge-uncertain', 'input_3', 'connection', 'node_out_node-a', 'game-orchestra-edge-hover', 'output_1', 'node_in_node-b'])
+      connectionPortSelectors(['input_3', 'connection', 'node_out_node-a', 'output_1', 'node_in_node-b'])
     ).toEqual({
       output: '#node-a .outputs .output.output_1',
       input: '#node-b .inputs .input.input_3'
