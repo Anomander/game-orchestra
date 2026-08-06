@@ -17,7 +17,9 @@ describe('PlaylistTreeApp', () => {
       id: 'sc1',
       getFlag: vi.fn((mod, key) => {
         if (key === 'music.area.playlist') return 'pl-area';
-        if (key === 'music.area.overlays.boss.playlist') return 'pl-boss';
+        // The whole overlay entry, not just its playlist: the tree reads `layer`/`duck` off it
+        // too, so a mock that only answers the `.playlist` path renders a row with no override.
+        if (key === 'music.area.overlays.boss') return { playlist: 'pl-boss' };
         return null;
       }),
       setFlag: vi.fn().mockResolvedValue(),
@@ -73,7 +75,7 @@ describe('PlaylistTreeApp', () => {
     it('keeps scene/global phases separate from moods, reading combat overlays instead of area ones', () => {
       setMockSetting('game-orchestra', 'configuredPhases', [{ id: 'enrage', label: 'Enrage', icon: 'fas fa-fire', color: '#f44336' }]);
       scene1.getFlag = vi.fn((mod, key) => {
-        if (key === 'music.combat.overlays.enrage.playlist') return 'pl-boss';
+        if (key === 'music.combat.overlays.enrage') return { playlist: 'pl-boss' };
         return null;
       });
 
@@ -160,7 +162,9 @@ describe('PlaylistTreeApp', () => {
 
       await PlaylistTreeApp.handleClearSceneOverlay(event, target);
 
-      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.boss.playlist');
+      // The whole entry, not its fields: `layer` and `duck` must not outlive the binding that
+      // carried them - see clearBindingOverlay.
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.boss');
       expect(game.gameOrchestra.musicController.playCurrentTrack).toHaveBeenCalled();
     });
   });
@@ -260,26 +264,192 @@ describe('PlaylistTreeApp', () => {
     });
   });
 
-  describe('priority placeholders', () => {
-    it('shows the scene area baseline, matching what resolution would use', () => {
-      const ctx = app._prepareContext({});
-      expect(ctx.sceneDefaults.area.priorityPlaceholder).toBe(CONST.playlistSections.Scene.area.priority);
-    });
-
-    it('shows the scene combat baseline', () => {
-      const ctx = app._prepareContext({});
-      expect(ctx.sceneDefaults.combat.priorityPlaceholder).toBe(CONST.playlistSections.Scene.combat.priority);
-    });
-
-    it('adds the overlay offset for an overlay row', () => {
+  describe('overlay layer view model', () => {
+    beforeEach(() => {
       setMockSetting('game-orchestra', 'configuredMoods', [{ id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }]);
-      const ctx = app._prepareContext({});
-      expect(ctx.sceneMoods[0].area.priorityPlaceholder).toBe(CONST.playlistSections.Scene.area.priority + 10);
     });
 
-    it('leaves the world default at 0, with no scene baseline leaking in', () => {
+    it('reads layer and duck off the overlay entry', () => {
+      scene1.getFlag = vi.fn((mod, key) =>
+        (key === 'music.area.overlays.calm' ? { playlist: 'pl1', layer: true, duck: 0.4 } : null));
+
+      const entry = app._prepareContext({}).sceneMoods[0].area;
+      expect(entry.isLayer).toBe(true);
+      expect(entry.duck).toBe(0.4);
+      expect(entry.duckPercent).toBe(40);
+    });
+
+    it('defaults to replacing, at no ducking', () => {
+      scene1.getFlag = vi.fn((mod, key) => (key === 'music.area.overlays.calm' ? { playlist: 'pl1' } : null));
+
+      const entry = app._prepareContext({}).sceneMoods[0].area;
+      expect(entry.isLayer).toBe(false);
+      expect(entry.duck).toBe(1);
+    });
+
+    it('never calls a layer row "beaten by" - it plays alongside the winner, not against it', () => {
+      scene1.getFlag = vi.fn((mod, key) =>
+        (key === 'music.area.overlays.calm' ? { playlist: 'pl1', layer: true } : null));
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      game.gameOrchestra.musicController.currentContext = {
+        contextEntity: { documentName: 'DefaultMusic' }, isOverlay: false, overlayAxis: null
+      };
+
+      expect(app._prepareContext({}).sceneMoods[0].area.beatenBy).toBeNull();
+    });
+
+    it('keeps the section default eligible for a beaten-by label when its overlay only layers', () => {
+      // A replacing overlay takes the section default out of the contest entirely; a layering
+      // one plays OVER it, so the default is still competing and can still be beaten.
+      scene1.getFlag = vi.fn((mod, key) => {
+        if (key === 'music.area.overlays.calm') return { playlist: 'pl1', layer: true };
+        if (key === 'music.area.playlist') return 'pl2';
+        return null;
+      });
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      game.gameOrchestra.musicController.currentContext = {
+        contextEntity: { documentName: 'DefaultMusic' }, isOverlay: false, overlayAxis: null
+      };
+
+      expect(app._prepareContext({}).sceneDefaults.area.beatenBy).not.toBeNull();
+    });
+
+    it('marks the row that is audibly layering right now (UX-7)', () => {
+      // A layering overlay never wins the base resolution, so `is-resolving` can never light up
+      // for it - without this the row would show nothing at all while plainly playing.
+      scene1.getFlag = vi.fn((mod, key) =>
+        (key === 'music.area.overlays.calm' ? { playlist: 'pl1', layer: true } : null));
+      game.gameOrchestra.musicController.currentLayerContexts = [
+        { isLayer: true, context: 'area', overlayId: 'calm', contextEntity: scene1 }
+      ];
+
+      expect(app._prepareContext({}).sceneMoods[0].area.isLayerActive).toBe(true);
+    });
+
+    it('does not mark a row whose layer belongs to a different scope', () => {
+      scene1.getFlag = vi.fn((mod, key) =>
+        (key === 'music.area.overlays.calm' ? { playlist: 'pl1', layer: true } : null));
+      game.gameOrchestra.musicController.currentLayerContexts = [
+        { isLayer: true, context: 'area', overlayId: 'calm', contextEntity: { documentName: 'DefaultMusic' } }
+      ];
+
       const ctx = app._prepareContext({});
-      expect(ctx.globalDefaults.area.priorityPlaceholder).toBe(0);
+      expect(ctx.sceneMoods[0].area.isLayerActive).toBe(false);
+      expect(ctx.globalMoods[0].area.isLayerActive).toBe(true);
+    });
+  });
+
+  describe('Advanced disclosure open state', () => {
+    // The reported symptom: ticking "Play as overlay" closed the Advanced block it lives in.
+    // Every write in this window re-renders, HandlebarsApplicationMixin replaces the part's DOM
+    // wholesale, and a native <details> keeps `open` nowhere but in that DOM.
+    beforeEach(() => {
+      setMockSetting('game-orchestra', 'configuredMoods', [{ id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }]);
+    });
+
+    const details = (key, open) => ({ target: { open, dataset: { disclosureKey: key } } });
+
+    it('renders closed until the user opens it', () => {
+      expect(app._prepareContext({}).sceneMoods[0].advancedOpen).toBe(false);
+    });
+
+    it('stays open across the re-render that a control inside it triggers', () => {
+      const key = app._prepareContext({}).sceneMoods[0].advancedKey;
+
+      app._onDisclosureToggle(details(key, true));
+
+      expect(app._prepareContext({}).sceneMoods[0].advancedOpen).toBe(true);
+    });
+
+    it('closes again when the user closes it', () => {
+      const key = app._prepareContext({}).sceneMoods[0].advancedKey;
+      app._onDisclosureToggle(details(key, true));
+      app._onDisclosureToggle(details(key, false));
+
+      expect(app._prepareContext({}).sceneMoods[0].advancedOpen).toBe(false);
+    });
+
+    it('keys each row separately, so opening one does not open the rest', () => {
+      setMockSetting('game-orchestra', 'configuredMoods', [
+        { id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' },
+        { id: 'tense', label: 'Tense', icon: 'fas fa-bolt', color: '#ff9800' }
+      ]);
+      const ctx = app._prepareContext({});
+      app._onDisclosureToggle(details(ctx.sceneMoods[0].advancedKey, true));
+
+      const after = app._prepareContext({});
+      expect(after.sceneMoods[0].advancedOpen).toBe(true);
+      expect(after.sceneMoods[1].advancedOpen).toBe(false);
+    });
+
+    it('does not re-render on toggle - that would replace the element mid-interaction', () => {
+      const renderSpy = vi.spyOn(app, 'render').mockImplementation(() => {});
+      app._onDisclosureToggle(details('sceneMood:calm:advanced', true));
+      expect(renderSpy).not.toHaveBeenCalled();
+    });
+
+    it('ignores a toggle from an element carrying no disclosure key', () => {
+      app._onDisclosureToggle({ target: { open: true, dataset: {} } });
+      expect(app.openDisclosures.size).toBe(0);
+    });
+  });
+
+  describe('overlay layer editing', () => {
+    it('writes the layer flag under the overlay path', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { checked: true, dataset: { contextType: 'combat', phaseId: 'enrage' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlayLayer(new Event('change'), target);
+
+      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.combat.overlays.enrage.layer', true);
+    });
+
+    it('unticking clears the duck alongside the flag, so a stale one cannot come back', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { checked: false, dataset: { contextType: 'area', moodId: 'calm' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlayLayer(new Event('change'), target);
+
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.calm.layer');
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.calm.duck');
+    });
+
+    it('writes a duck as a multiplier, and removes it at 100%', async () => {
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '0.35', dataset: { contextType: 'area', moodId: 'calm' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlayDuck(new Event('change'), target);
+      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.calm.duck', 0.35);
+
+      const full = { value: '1', dataset: { contextType: 'area', moodId: 'calm' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlayDuck(new Event('change'), full);
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.calm.duck');
+    });
+
+    it('writes a global overlay layer flag into the defaultMusic setting', async () => {
+      game.gameOrchestra.playlistTree = app;
+      setMockSetting('game-orchestra', 'defaultMusic', { documentName: 'DefaultMusic', data: { 'game-orchestra': { music: {} } } });
+
+      const target = { checked: true, dataset: { contextType: 'area', moodId: 'calm' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateGlobalOverlayLayer(new Event('change'), target);
+
+      const written = game.settings.set.mock.calls.find((c) => c[1] === 'defaultMusic')[2];
+      expect(written.data['game-orchestra'].music.area.overlays.calm.layer).toBe(true);
+    });
+
+    it('removes the whole overlay entry when its playlist is cleared, taking layer and duck with it', async () => {
+      // Otherwise a cleared row keeps `layer: true` and silently starts layering again the next
+      // time a playlist is picked for it - see clearBindingOverlay.
+      game.gameOrchestra.playlistTree = app;
+      app.selectedSceneId = 'sc1';
+
+      const target = { value: '', dataset: { contextType: 'area', moodId: 'calm' }, closest: () => null };
+      await PlaylistTreeApp.handleUpdateSceneOverlay(new Event('change'), target);
+
+      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.overlays.calm');
     });
   });
 
@@ -337,62 +507,21 @@ describe('PlaylistTreeApp', () => {
     });
   });
 
-  describe('priority editing', () => {
-    // Priority used to be reachable only from GameOrchestraConfig, which in turn
-    // never opens for the world default - so a priority conflict between a scene
-    // and the global fallback could not be resolved from any single window
-    // (docs/wiki/ux.md D2).
-    it('writes a scene default priority as a number, not the raw string', async () => {
-      game.gameOrchestra.playlistTree = app;
-      app.selectedSceneId = 'sc1';
-
-      const target = { value: '25', dataset: { contextType: 'area' }, closest: () => null };
-      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
-
-      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority', 25);
+  describe('priority is not something a user types', () => {
+    // The `Advanced` disclosure that held it now holds the overlay layer controls, which are a
+    // real everyday choice rather than an absolute number nobody can set correctly in isolation
+    // (docs/wiki/ux.md D8). The field is still stored, still honoured at resolution time, and
+    // still has its write-op in binding-store.mjs - it just has no UI on any surface.
+    it('registers no priority change action', () => {
+      const actions = Object.keys(PlaylistTreeApp._CHANGE_ACTIONS);
+      expect(actions.filter((a) => /Priority$/.test(a))).toEqual([]);
     });
 
-    it('writes a scene overlay priority under the overlay path', async () => {
-      game.gameOrchestra.playlistTree = app;
-      app.selectedSceneId = 'sc1';
-
-      const target = { value: '-5', dataset: { contextType: 'combat', phaseId: 'enrage' }, closest: () => null };
-      await PlaylistTreeApp.handleUpdateSceneOverlayPriority(new Event('change'), target);
-
-      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.combat.overlays.enrage.priority', -5);
-    });
-
-    it('keeps an explicit 0 rather than treating it as blank', async () => {
-      game.gameOrchestra.playlistTree = app;
-      app.selectedSceneId = 'sc1';
-
-      const target = { value: '0', dataset: { contextType: 'area' }, closest: () => null };
-      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
-
-      // 0 pins the entry at zero; blank would inherit the section baseline instead.
-      expect(scene1.setFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority', 0);
-      expect(scene1.unsetFlag).not.toHaveBeenCalledWith('game-orchestra', 'music.area.priority');
-    });
-
-    it('unsets the flag when the field is cleared, so the entry inherits again', async () => {
-      game.gameOrchestra.playlistTree = app;
-      app.selectedSceneId = 'sc1';
-
-      const target = { value: '', dataset: { contextType: 'area' }, closest: () => null };
-      await PlaylistTreeApp.handleUpdateSceneDefaultPriority(new Event('change'), target);
-
-      expect(scene1.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'music.area.priority');
-    });
-
-    it('writes a global default priority into the defaultMusic setting', async () => {
-      game.gameOrchestra.playlistTree = app;
-      setMockSetting('game-orchestra', 'defaultMusic', { documentName: 'DefaultMusic', data: { 'game-orchestra': { music: {} } } });
-
-      const target = { value: '7', dataset: { contextType: 'combat' }, closest: () => null };
-      await PlaylistTreeApp.handleUpdateGlobalDefaultPriority(new Event('change'), target);
-
-      const written = game.settings.set.mock.calls.find((c) => c[1] === 'defaultMusic')[2];
-      expect(written.data['game-orchestra'].music.combat.priority).toBe(7);
+    it('exposes no priority handler for a stale template to dispatch into', () => {
+      for (const name of ['handleUpdateSceneDefaultPriority', 'handleUpdateSceneOverlayPriority',
+        'handleUpdateGlobalDefaultPriority', 'handleUpdateGlobalOverlayPriority']) {
+        expect(PlaylistTreeApp[name]).toBeUndefined();
+      }
     });
   });
 
@@ -727,9 +856,23 @@ describe('PlaylistTreeApp', () => {
       app._onRender({}, {});
       app._onRender({}, {});
 
-      expect(mockElement.addEventListener).toHaveBeenCalledTimes(2);
+      expect(mockElement.addEventListener).toHaveBeenCalledTimes(3);
       expect(mockElement.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
       expect(mockElement.addEventListener).toHaveBeenCalledWith('dragleave', expect.any(Function));
+      expect(mockElement.addEventListener).toHaveBeenCalledWith('toggle', expect.any(Function), true);
+    });
+
+    it('binds the disclosure listener in the CAPTURE phase, because `toggle` does not bubble', () => {
+      // A delegated listener on the root element never sees a non-bubbling event during the
+      // bubble phase. Drop the `true` and every Advanced disclosure silently stops remembering
+      // whether it was open.
+      const mockElement = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+      app.element = mockElement;
+
+      app._onRender({}, {});
+
+      const toggleCall = mockElement.addEventListener.mock.calls.find((c) => c[0] === 'toggle');
+      expect(toggleCall[2]).toBe(true);
     });
 
     it('removes change and dragleave listeners on _onClose and resets flags', () => {
@@ -746,6 +889,8 @@ describe('PlaylistTreeApp', () => {
       app._onClose({});
       expect(mockElement.removeEventListener).toHaveBeenCalledWith('change', app._onChangeInputHandler);
       expect(mockElement.removeEventListener).toHaveBeenCalledWith('dragleave', app._onDragLeaveHandler);
+      // Capture is part of a listener's identity: removing without the `true` leaves it attached.
+      expect(mockElement.removeEventListener).toHaveBeenCalledWith('toggle', app._onDisclosureToggleHandler, true);
       expect(app._changeListenerBound).toBe(false);
       expect(app._dragLeaveListenerBound).toBe(false);
     });

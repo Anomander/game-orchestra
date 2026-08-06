@@ -16,7 +16,7 @@ const treeScript = read('scripts/playlist-tree.mjs');
  * These exist because the binding markup is being consolidated onto a shared
  * shape, and neither template has any other test coverage: the app tests drive
  * handlers directly and never render Handlebars. A refactor that silently
- * dropped a `data-change-action`, a `data-context-type`, or a priority field
+ * dropped a `data-change-action`, a `data-context-type`, or an overlay id
  * would produce a control that renders perfectly and does nothing - the exact
  * class of failure this codebase's comments keep warning about.
  */
@@ -53,21 +53,73 @@ describe('binding template structural invariants', () => {
       for (const [tag] of overlaySelects) expect(tag).toMatch(/data-(mood|phase)-id="/);
     });
 
-    it('exposes a priority input for every context box', () => {
-      const priorityInputs = [...treeSource.matchAll(/class="priority-input"/g)];
-      expect(priorityInputs).toHaveLength(treeBoxes.length);
+    it('offers the layer controls on every OVERLAY box, and on no section-default box', () => {
+      // A section default is what a layer plays *over* - the pair would be inert there
+      // (architecture.md § Layers). Four overlay boxes: scene mood, scene phase, global mood,
+      // global phase.
+      const layerInputs = [...treeSource.matchAll(/class="layer-input"/g)];
+      const duckInputs = [...treeSource.matchAll(/class="duck-input"/g)];
+      expect(layerInputs).toHaveLength(4);
+      expect(duckInputs).toHaveLength(4);
     });
 
-    it('keeps every priority input folded behind an Advanced disclosure', () => {
-      // Priority is an expert escape hatch, not part of the everyday job: the
-      // hierarchy (token > scene > global, overlay > section default) already decides
-      // essentially every real setup. Giving it the same visual weight as the
-      // playlist selector, eight times per scene, was the mistake.
-      const disclosures = [...treeSource.matchAll(/<details class="advanced-disclosure">/g)];
-      expect(disclosures).toHaveLength(treeBoxes.length);
-      // No priority input may sit outside one.
-      const outside = treeSource.split('<details class="advanced-disclosure">')[0];
-      expect(outside).not.toContain('priority-input');
+    it('keeps every layer control folded behind an Advanced disclosure', () => {
+      // Layering is a deliberate, occasional choice, not part of the everyday "what plays here"
+      // job. It replaced priority in this slot - see docs/wiki/ux.md D8 for why the number was
+      // the wrong interface even when it was the only thing in here.
+      const disclosures = [...treeSource.matchAll(/<details class="advanced-disclosure"/g)];
+      expect(disclosures).toHaveLength(4);
+      const outside = treeSource.split('<details class="advanced-disclosure"')[0];
+      expect(outside).not.toContain('layer-input');
+      expect(outside).not.toContain('duck-input');
+    });
+
+    it('every layer control dispatches to a real registered change action', () => {
+      const declared = new Set([...treeScript.matchAll(/^\s{4}(\w+): '(\w+)',?$/gm)].map((m) => m[1]));
+      const used = [...treeSource.matchAll(/class="(?:layer|duck)-input"[^>]*?data-change-action="(\w+)"/gs)].map((m) => m[1]);
+      expect(used).toHaveLength(8);
+      for (const action of used) expect(declared, `'${action}' is not in _CHANGE_ACTIONS`).toContain(action);
+    });
+
+    it('every layer control carries the same dataset its box dispatches with', () => {
+      // The handler resolves the element via closest(), so an input missing
+      // data-context-type would fall back to 'area' regardless of its box, and one missing its
+      // overlay id would write to the section default instead.
+      const inputs = [...treeSource.matchAll(/<input[^>]*class="(?:layer|duck)-input"[^>]*?>/gs)].map((m) => m[0]);
+      expect(inputs).toHaveLength(8);
+      for (const input of inputs) {
+        expect(input).toMatch(/data-context-type="(area|combat)"/);
+        expect(input).toMatch(/data-(mood|phase)-id="/);
+      }
+    });
+
+    it('every Advanced disclosure declares a key and renders its own open state', () => {
+      // A native <details> keeps `open` in the DOM alone, and every control inside it writes -
+      // which re-renders the part and replaces the element. Without the key the toggle is never
+      // recorded; without the `open` binding it is never restored, and the block shuts itself on
+      // every click. Confirmed live with the layer checkbox. See app-mixins.mjs#openDisclosures.
+      const disclosures = [...treeSource.matchAll(/<details class="advanced-disclosure"[^>]*>/g)].map((m) => m[0]);
+      expect(disclosures).toHaveLength(4);
+      for (const tag of disclosures) {
+        expect(tag).toMatch(/data-disclosure-key="\{\{[\w.]+\}\}"/);
+        expect(tag).toMatch(/\{\{#if [\w.]+\}\}open\{\{\/if\}\}/);
+      }
+    });
+
+    it('hides the duck slider unless the row is actually layering', () => {
+      // Ducking only means anything while something else still plays underneath, which is
+      // exactly what a replacing overlay turns off - the same rule the token grid follows.
+      const guards = [...treeSource.matchAll(/\{\{#if [\w.]+\.isLayer\}\}/g)];
+      expect(guards).toHaveLength(4);
+    });
+
+    it('says when a layer row is the one currently playing', () => {
+      // UX-7. A layering row never wins the base resolution, so `is-resolving` can never light
+      // up for it and it would otherwise be the one binding the window says nothing about.
+      const notes = [...treeSource.matchAll(/class="layering-now"/g)];
+      expect(notes).toHaveLength(4);
+      const guards = [...treeSource.matchAll(/\{\{#if [\w.]+\.isLayerActive\}\}/g)];
+      expect(guards).toHaveLength(4);
     });
 
     it('offers a beaten-by line for every context box', () => {
@@ -81,30 +133,6 @@ describe('binding template structural invariants', () => {
       expect(guards).toHaveLength(treeBoxes.length);
     });
 
-    it('every priority input dispatches to a real registered change action', () => {
-      const declared = new Set([...treeScript.matchAll(/^\s{4}(\w+): '(\w+)',?$/gm)].map((m) => m[1]));
-      const used = [...treeSource.matchAll(/class="priority-input" data-change-action="(\w+)"/g)].map((m) => m[1]);
-      expect(used.length).toBeGreaterThan(0);
-      for (const action of used) expect(declared, `'${action}' is not in _CHANGE_ACTIONS`).toContain(action);
-    });
-
-    it('every priority input carries the same dataset its box dispatches with', () => {
-      // The handler resolves the element via closest(), so an input missing
-      // data-context-type would fall back to 'area' regardless of its box.
-      const inputs = [...treeSource.matchAll(/<input type="number" class="priority-input"[^>]*?>/gs)].map((m) => m[0]);
-      expect(inputs).toHaveLength(8);
-      for (const input of inputs) expect(input).toMatch(/data-context-type="(area|combat)"/);
-    });
-
-    it('overlay priority inputs carry an overlay id and section ones do not', () => {
-      const inputs = [...treeSource.matchAll(/<input type="number" class="priority-input"[^>]*?>/gs)].map((m) => m[0]);
-      const overlay = inputs.filter((i) => /data-change-action="\w*Overlay Priority"|data-change-action="\w*OverlayPriority"/.test(i));
-      const section = inputs.filter((i) => /data-change-action="\w*DefaultPriority"/.test(i));
-      expect(overlay).toHaveLength(4);
-      expect(section).toHaveLength(4);
-      for (const i of overlay) expect(i).toMatch(/data-(mood|phase)-id="/);
-      for (const i of section) expect(i).not.toMatch(/data-(mood|phase)-id="/);
-    });
   });
 
   describe('music-config.hbs', () => {
@@ -160,6 +188,18 @@ describe('binding template structural invariants', () => {
       // H2: an UNSEQUENCED playlist plays nothing without one.
       for (const source of [treeSource, configSource]) {
         expect(source).toContain('soundboard-required-badge');
+      }
+    });
+
+    it('never expose a priority field to the user', () => {
+      // docs/wiki/ux.md D8. `priority` remains a stored field that resolution honours - what is
+      // gone is the expectation that a GM types the number. An absolute value nobody can set
+      // correctly without knowing every other value in the world was a second, disagreeing
+      // encoding of the hierarchy these windows already display in their own section ordering.
+      for (const source of [treeSource, configSource]) {
+        expect(source).not.toMatch(/name="music\.[^"]*priority"/);
+        expect(source).not.toContain('priority-input');
+        expect(source).not.toContain('GameOrchestra.Priority');
       }
     });
   });

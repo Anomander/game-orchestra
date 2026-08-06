@@ -6,9 +6,11 @@ import {
   bindingPath,
   applyBindingPlaylist,
   applyBindingTrack,
-  applyBindingPriority,
-  coercePriority
+  applyBindingLayer,
+  applyBindingDuck,
+  clearBindingOverlay
 } from './binding-store.mjs';
+import { coerceDuckFactor } from './playlist-mix.mjs';
 import { MoodConfigApp, PhaseConfigApp } from './mood-config.mjs';
 import { CustomPlaylistEditor } from './custom-playlist-editor.mjs';
 import { GameOrchestraAppMixin } from './app-mixins.mjs';
@@ -74,26 +76,32 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
   /** @override */
   _prepareContext(_options) {
     const availablePlaylists = getAvailablePlaylists();
-    // The same baselines resolution applies (helpers.mjs#sectionBaselinePriority), so
-    // the placeholder a GM reads is the number the engine would actually use. The
-    // world default has no entry in playlistSections and sits at 0.
-    const SCENE_AREA_BASELINE = CONST.playlistSections.Scene.area.priority;
-    const SCENE_COMBAT_BASELINE = CONST.playlistSections.Scene.combat.priority;
     /**
-     * `priority` is the stored override (blank when unset, so the field can show
-     * "inheriting" rather than a made-up number), and `priorityPlaceholder` is what
-     * resolution would actually use in its absence. That default is computed exactly
-     * as helpers.mjs#_extractSectionConfig computes it - section priority, plus the
-     * +10 an overlay gets for being an overlay - because a placeholder that disagreed
-     * with the engine would be worse than no placeholder at all.
+     * One context box's view model.
+     *
+     * `isLayer`/`duck` are the overlay-only half: an overlay entry marked `layer` plays *over*
+     * its section's base music instead of replacing it, and `duck` is how far everything else is
+     * attenuated while it does (architecture.md § Layers). A section default is never a layer -
+     * it is the thing layers play over - so those stay absent there rather than rendering an
+     * inert control.
+     *
+     * Priority is deliberately not here, and no longer anywhere on any surface. It is still
+     * stored and still honoured at resolution time - it is simply not something a GM types. See
+     * ux.md D8 for why the number was the wrong interface even when it was the only thing behind
+     * `Advanced`.
      */
-    const buildEntry = (playlistId, trackId, storedPriority = null, sectionPriority = null, isOverlay = false, baseline = 0) => ({
+    const buildEntry = (playlistId, trackId, overlay = null) => ({
       ...buildPlaylistEntry(availablePlaylists, playlistId, trackId),
-      priority: storedPriority ?? '',
-      priorityPlaceholder: (sectionPriority ?? baseline) + (isOverlay ? 10 : 0),
+      isLayer: overlay?.layer === true,
+      duck: coerceDuckFactor(overlay?.duck),
+      duckPercent: Math.round(coerceDuckFactor(overlay?.duck) * 100),
       // Set by decorate() below once the winner is known - a row can only be called
       // "beaten" after resolution has actually run.
-      beatenBy: null
+      beatenBy: null,
+      // Set below from the controller's live layers: a layering overlay never wins the base
+      // resolution, so `is-resolving` can never light up for it and UX-7 would otherwise have
+      // nothing at all to say about a row that is audibly playing.
+      isLayerActive: false
     });
 
     const activeScene = game.scenes?.active || null;
@@ -121,10 +129,9 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     // each gets its OWN card grid rather than sharing one, since a scene/global
     // config can be on a different mood tab than phase tab at once.
     const sceneMoods = configuredMoods.map((m) => {
-      const areaPlId = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.area.overlays.${m.id}.playlist`) || null : null;
-      const areaTrId = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.area.overlays.${m.id}.initialTrack`) || null : null;
-      const areaPrio = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.area.overlays.${m.id}.priority`) ?? null : null;
-      const areaSectionPrio = selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.area.priority') ?? null : null;
+      const areaOverlay = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.area.overlays.${m.id}`) || null : null;
+      const areaPlId = areaOverlay?.playlist || null;
+      const areaTrId = areaOverlay?.initialTrack || null;
       const hasOverride = !!areaPlId;
       const isResolving = winningEntity === selectedScene && winningIsOverlay && winningOverlayAxis === 'mood' && activeMood === m.id;
       const cardKey = `sceneMood:${m.id}`;
@@ -135,20 +142,24 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
         label: m.label,
         icon: m.icon,
         color: m.color,
-        area: buildEntry(areaPlId, areaTrId, areaPrio, areaSectionPrio, true, SCENE_AREA_BASELINE),
+        area: buildEntry(areaPlId, areaTrId, areaOverlay),
         isActive: activeMood === m.id,
         isResolving,
         hasOverride,
         isCardCollapsed,
-        cardKey
+        cardKey,
+        advancedKey: `${cardKey}:advanced`,
+        // A native <details> keeps its open state in the DOM alone, and every write in this
+        // window re-renders the part that holds it - so the state has to be mirrored here or
+        // the disclosure slams shut the moment anything inside it is used.
+        advancedOpen: this.openDisclosures.has(`${cardKey}:advanced`)
       };
     });
 
     const scenePhases = configuredPhases.map((p) => {
-      const combatPlId = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.combat.overlays.${p.id}.playlist`) || null : null;
-      const combatTrId = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.combat.overlays.${p.id}.initialTrack`) || null : null;
-      const combatPrio = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.combat.overlays.${p.id}.priority`) ?? null : null;
-      const combatSectionPrio = selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.combat.priority') ?? null : null;
+      const combatOverlay = selectedScene ? selectedScene.getFlag(CONST.moduleId, `music.combat.overlays.${p.id}`) || null : null;
+      const combatPlId = combatOverlay?.playlist || null;
+      const combatTrId = combatOverlay?.initialTrack || null;
       const hasOverride = !!combatPlId;
       const isResolving = winningEntity === selectedScene && winningIsOverlay && winningOverlayAxis === 'phase' && activePhase === p.id;
       const cardKey = `scenePhase:${p.id}`;
@@ -159,12 +170,17 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
         label: p.label,
         icon: p.icon,
         color: p.color,
-        combat: buildEntry(combatPlId, combatTrId, combatPrio, combatSectionPrio, true, SCENE_COMBAT_BASELINE),
+        combat: buildEntry(combatPlId, combatTrId, combatOverlay),
         isActive: activePhase === p.id,
         isResolving,
         hasOverride,
         isCardCollapsed,
-        cardKey
+        cardKey,
+        advancedKey: `${cardKey}:advanced`,
+        // A native <details> keeps its open state in the DOM alone, and every write in this
+        // window re-renders the part that holds it - so the state has to be mirrored here or
+        // the disclosure slams shut the moment anything inside it is used.
+        advancedOpen: this.openDisclosures.has(`${cardKey}:advanced`)
       };
     });
 
@@ -173,15 +189,11 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const sceneDefaults = {
       area: buildEntry(
         selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.area.playlist') || null : null,
-        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.area.initialTrack') || null : null,
-        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.area.priority') ?? null : null,
-        null, false, SCENE_AREA_BASELINE
+        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.area.initialTrack') || null : null
       ),
       combat: buildEntry(
         selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.combat.playlist') || null : null,
-        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.combat.initialTrack') || null : null,
-        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.combat.priority') ?? null : null,
-        null, false, SCENE_COMBAT_BASELINE
+        selectedScene ? selectedScene.getFlag(CONST.moduleId, 'music.combat.initialTrack') || null : null
       )
     };
 
@@ -194,9 +206,9 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const defaultData = defaultConfig?.data?.['game-orchestra']?.music || {};
 
     const globalMoods = configuredMoods.map((m) => {
-      const areaPlId = defaultData.area?.overlays?.[m.id]?.playlist || null;
-      const areaTrId = defaultData.area?.overlays?.[m.id]?.initialTrack || null;
-      const areaPrio = defaultData.area?.overlays?.[m.id]?.priority ?? null;
+      const areaOverlay = defaultData.area?.overlays?.[m.id] || null;
+      const areaPlId = areaOverlay?.playlist || null;
+      const areaTrId = areaOverlay?.initialTrack || null;
       const hasOverride = !!areaPlId;
       const isResolving = winningEntity?.documentName === 'DefaultMusic' && winningIsOverlay && winningOverlayAxis === 'mood' && activeMood === m.id;
       const cardKey = `globalMood:${m.id}`;
@@ -207,19 +219,24 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
         label: m.label,
         icon: m.icon,
         color: m.color,
-        area: buildEntry(areaPlId, areaTrId, areaPrio, defaultData.area?.priority ?? null, true),
+        area: buildEntry(areaPlId, areaTrId, areaOverlay),
         isActive: activeMood === m.id,
         isResolving,
         hasOverride,
         isCardCollapsed,
-        cardKey
+        cardKey,
+        advancedKey: `${cardKey}:advanced`,
+        // A native <details> keeps its open state in the DOM alone, and every write in this
+        // window re-renders the part that holds it - so the state has to be mirrored here or
+        // the disclosure slams shut the moment anything inside it is used.
+        advancedOpen: this.openDisclosures.has(`${cardKey}:advanced`)
       };
     });
 
     const globalPhases = configuredPhases.map((p) => {
-      const combatPlId = defaultData.combat?.overlays?.[p.id]?.playlist || null;
-      const combatTrId = defaultData.combat?.overlays?.[p.id]?.initialTrack || null;
-      const combatPrio = defaultData.combat?.overlays?.[p.id]?.priority ?? null;
+      const combatOverlay = defaultData.combat?.overlays?.[p.id] || null;
+      const combatPlId = combatOverlay?.playlist || null;
+      const combatTrId = combatOverlay?.initialTrack || null;
       const hasOverride = !!combatPlId;
       const isResolving = winningEntity?.documentName === 'DefaultMusic' && winningIsOverlay && winningOverlayAxis === 'phase' && activePhase === p.id;
       const cardKey = `globalPhase:${p.id}`;
@@ -230,18 +247,23 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
         label: p.label,
         icon: p.icon,
         color: p.color,
-        combat: buildEntry(combatPlId, combatTrId, combatPrio, defaultData.combat?.priority ?? null, true),
+        combat: buildEntry(combatPlId, combatTrId, combatOverlay),
         isActive: activePhase === p.id,
         isResolving,
         hasOverride,
         isCardCollapsed,
-        cardKey
+        cardKey,
+        advancedKey: `${cardKey}:advanced`,
+        // A native <details> keeps its open state in the DOM alone, and every write in this
+        // window re-renders the part that holds it - so the state has to be mirrored here or
+        // the disclosure slams shut the moment anything inside it is used.
+        advancedOpen: this.openDisclosures.has(`${cardKey}:advanced`)
       };
     });
 
     const globalDefaults = {
-      area: buildEntry(defaultData.area?.playlist || null, defaultData.area?.initialTrack || null, defaultData.area?.priority ?? null),
-      combat: buildEntry(defaultData.combat?.playlist || null, defaultData.combat?.initialTrack || null, defaultData.combat?.priority ?? null)
+      area: buildEntry(defaultData.area?.playlist || null, defaultData.area?.initialTrack || null),
+      combat: buildEntry(defaultData.combat?.playlist || null, defaultData.combat?.initialTrack || null)
     };
 
     const globalMoodsResolving = winningEntity?.documentName === 'DefaultMusic' && winningIsOverlay && winningOverlayAxis === 'mood';
@@ -251,7 +273,24 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     // Both status pills come from the shared transport builder, so this window and
     // the Mood Widget state the winning context in the same sentence rather than two
     // similar ones (docs/wiki/ux.md UX-2/UX-7, transport.mjs).
-    const { active: activeResolutionInfo, layer: layerResolutionInfo } = resolutionPills(selectedScene);
+    const { active: activeResolutionInfo, layers: layerResolutionInfos } = resolutionPills(selectedScene);
+
+    // Which overlay rows are audibly playing as layers right now. A layering overlay never wins
+    // the base resolution, so the `is-resolving` badge it would otherwise earn can never light up
+    // for it - without this a row that is genuinely playing would show nothing at all (UX-7).
+    const liveLayers = game.gameOrchestra?.musicController?.currentLayerContexts || [];
+    const markLiveLayers = (cards, section, idKey, entryKey, matches) => {
+      for (const card of cards) {
+        card[entryKey].isLayerActive = liveLayers.some((ctx) =>
+          ctx.isLayer && ctx.context === section && ctx.overlayId === card[idKey] && matches(ctx));
+      }
+    };
+    const fromScene = (ctx) => !!selectedScene && ctx.contextEntity === selectedScene;
+    const fromGlobal = (ctx) => ctx.contextEntity?.documentName === 'DefaultMusic';
+    markLiveLayers(sceneMoods, 'area', 'moodId', 'area', fromScene);
+    markLiveLayers(scenePhases, 'combat', 'phaseId', 'combat', fromScene);
+    markLiveLayers(globalMoods, 'area', 'moodId', 'area', fromGlobal);
+    markLiveLayers(globalPhases, 'combat', 'phaseId', 'combat', fromGlobal);
 
     // "Beaten by X" on the rows that actually lost - the answer a GM needs when the
     // music is not what they configured, and the thing a raw priority number never
@@ -274,16 +313,23 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const winnerIsGlobal = currentControllerContext?.contextEntity?.documentName === 'DefaultMusic';
     const decorateLoser = (entry, { section, overlayId, scope, activeOverlayConfigured }) => {
       if (!entry?.playlistId || !currentControllerContext || !winnerSource) return entry;
+      // A layer was never in the contest and cannot lose one: it plays alongside the winner by
+      // construction, so "beaten by" would be a flat lie about a row that is currently audible.
+      if (entry.isLayer) return entry;
       if (scope === 'scene' ? winnerIsScene : winnerIsGlobal) return entry;
       const activeOverlayId = section === 'combat' ? activePhase : activeMood;
       if (!isBindingEligible({ section, overlayId, activeOverlayId, inCombat, activeOverlayConfigured })) return entry;
       entry.beatenBy = winnerSource;
       return entry;
     };
-    const activeSceneMoodConfigured = !!sceneMoods.find((m) => m.moodId === activeMood)?.area.playlistId;
-    const activeScenePhaseConfigured = !!scenePhases.find((p) => p.phaseId === activePhase)?.combat.playlistId;
-    const activeGlobalMoodConfigured = !!globalMoods.find((m) => m.moodId === activeMood)?.area.playlistId;
-    const activeGlobalPhaseConfigured = !!globalPhases.find((p) => p.phaseId === activePhase)?.combat.playlistId;
+    // "Configured" here means "replaces the section", which is what decides whether the section
+    // default is still in the running. A layering overlay plays *over* the default rather than
+    // instead of it, so it leaves the default fully eligible.
+    const replaces = (entry) => !!entry?.playlistId && !entry.isLayer;
+    const activeSceneMoodConfigured = replaces(sceneMoods.find((m) => m.moodId === activeMood)?.area);
+    const activeScenePhaseConfigured = replaces(scenePhases.find((p) => p.phaseId === activePhase)?.combat);
+    const activeGlobalMoodConfigured = replaces(globalMoods.find((m) => m.moodId === activeMood)?.area);
+    const activeGlobalPhaseConfigured = replaces(globalPhases.find((p) => p.phaseId === activePhase)?.combat);
 
     for (const card of sceneMoods) decorateLoser(card.area, { section: 'area', overlayId: card.moodId, scope: 'scene' });
     for (const card of scenePhases) decorateLoser(card.combat, { section: 'combat', overlayId: card.phaseId, scope: 'scene' });
@@ -334,7 +380,7 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       globalPhasesResolving,
       globalDefaultsResolving,
       activeResolutionInfo,
-      layerResolutionInfo,
+      layerResolutionInfos,
       collapsed
     };
   }
@@ -479,16 +525,16 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     selectScene: 'handleSelectScene',
     updateSceneOverlay: 'handleUpdateSceneOverlay',
     updateSceneOverlayTrack: 'handleUpdateSceneOverlayTrack',
-    updateSceneOverlayPriority: 'handleUpdateSceneOverlayPriority',
+    updateSceneOverlayLayer: 'handleUpdateSceneOverlayLayer',
+    updateSceneOverlayDuck: 'handleUpdateSceneOverlayDuck',
     updateSceneDefault: 'handleUpdateSceneDefault',
     updateSceneDefaultTrack: 'handleUpdateSceneDefaultTrack',
-    updateSceneDefaultPriority: 'handleUpdateSceneDefaultPriority',
     updateGlobalOverlay: 'handleUpdateGlobalOverlay',
     updateGlobalOverlayTrack: 'handleUpdateGlobalOverlayTrack',
-    updateGlobalOverlayPriority: 'handleUpdateGlobalOverlayPriority',
+    updateGlobalOverlayLayer: 'handleUpdateGlobalOverlayLayer',
+    updateGlobalOverlayDuck: 'handleUpdateGlobalOverlayDuck',
     updateGlobalDefault: 'handleUpdateGlobalDefault',
-    updateGlobalDefaultTrack: 'handleUpdateGlobalDefaultTrack',
-    updateGlobalDefaultPriority: 'handleUpdateGlobalDefaultPriority'
+    updateGlobalDefaultTrack: 'handleUpdateGlobalDefaultTrack'
   };
 
   /**
@@ -531,31 +577,33 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
   }
 
   /**
-   * Descriptor table for the twelve update/clear handlers below - each one
-   * differs only along three axes: scope (scene vs global), field (playlist
-   * vs track), and whether the entry is overlay-scoped (a mood or phase id,
-   * whichever the card's own section implies - config.mjs#sectionAxis) or the
-   * section's plain default, plus whether the action clears rather than
-   * updates. Every handler stays a real named static method (rather than
-   * existing only as a table entry) since DEFAULT_OPTIONS.actions and
-   * _CHANGE_ACTIONS both reference them by name/identity.
+   * Descriptor table for the update/clear handlers below - each one differs only along three
+   * axes: scope (scene vs global), field (playlist, track, layer or duck), and whether the entry
+   * is overlay-scoped (a mood or phase id, whichever the card's own section implies -
+   * config.mjs#sectionAxis) or the section's plain default, plus whether the action clears rather
+   * than updates. Every handler stays a real named static method (rather than existing only as a
+   * table entry) since DEFAULT_OPTIONS.actions and _CHANGE_ACTIONS both reference them by
+   * name/identity.
+   *
+   * `layer` and `duck` exist only in the overlay rows: a section default is what a layer plays
+   * *over*, so the pair would be inert there (architecture.md § Layers).
    */
   static _ENTRY_SPECS = {
     updateSceneOverlay: { scope: 'scene', field: 'playlist', overlay: true, clear: false },
     updateSceneOverlayTrack: { scope: 'scene', field: 'track', overlay: true, clear: false },
-    updateSceneOverlayPriority: { scope: 'scene', field: 'priority', overlay: true, clear: false },
+    updateSceneOverlayLayer: { scope: 'scene', field: 'layer', overlay: true, clear: false },
+    updateSceneOverlayDuck: { scope: 'scene', field: 'duck', overlay: true, clear: false },
     clearSceneOverlay: { scope: 'scene', field: 'playlist', overlay: true, clear: true },
     updateSceneDefault: { scope: 'scene', field: 'playlist', overlay: false, clear: false },
     updateSceneDefaultTrack: { scope: 'scene', field: 'track', overlay: false, clear: false },
-    updateSceneDefaultPriority: { scope: 'scene', field: 'priority', overlay: false, clear: false },
     clearSceneDefault: { scope: 'scene', field: 'playlist', overlay: false, clear: true },
     updateGlobalOverlay: { scope: 'global', field: 'playlist', overlay: true, clear: false },
     updateGlobalOverlayTrack: { scope: 'global', field: 'track', overlay: true, clear: false },
-    updateGlobalOverlayPriority: { scope: 'global', field: 'priority', overlay: true, clear: false },
+    updateGlobalOverlayLayer: { scope: 'global', field: 'layer', overlay: true, clear: false },
+    updateGlobalOverlayDuck: { scope: 'global', field: 'duck', overlay: true, clear: false },
     clearGlobalOverlay: { scope: 'global', field: 'playlist', overlay: true, clear: true },
     updateGlobalDefault: { scope: 'global', field: 'playlist', overlay: false, clear: false },
     updateGlobalDefaultTrack: { scope: 'global', field: 'track', overlay: false, clear: false },
-    updateGlobalDefaultPriority: { scope: 'global', field: 'priority', overlay: false, clear: false },
     clearGlobalDefault: { scope: 'global', field: 'playlist', overlay: false, clear: true }
   };
 
@@ -567,10 +615,8 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
    * to know which fired), derives the section path and value per `spec`
    * (which overlay-id dataset key applies is decided by the context type's
    * own axis - config.mjs#sectionAxis), applies it via the matching
-   * _applySceneEntry/_applySceneTrack/_applyGlobalEntry/_applyGlobalTrack
-   * helper, then re-triggers playback and a re-render - exactly what each of
-   * the twelve original handlers did by hand.
-   * @param {{scope: 'scene'|'global', field: 'playlist'|'track', overlay: boolean, clear: boolean}} spec
+   * binding-store operation, then re-triggers playback and a re-render.
+   * @param {{scope: 'scene'|'global', field: 'playlist'|'track'|'layer'|'duck', overlay: boolean, clear: boolean}} spec
    * @param {string} actionName - Key into _ENTRY_SPECS, for the error log only.
    * @param {Event} event
    * @param {HTMLElement} target
@@ -578,14 +624,11 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
    */
   static async _handleEntryAction(spec, actionName, event, target) {
     event?.preventDefault?.();
-    const el = target.closest('select, [data-mood-id], [data-phase-id], [data-context-type]') || target;
+    const el = target.closest('select, input, [data-mood-id], [data-phase-id], [data-context-type]') || target;
     const contextType = el.dataset.contextType || 'area';
     const axis = CONST.sectionAxis[contextType];
     const overlayId = spec.overlay ? (axis === 'phase' ? el.dataset.phaseId : el.dataset.moodId) : null;
     const raw = spec.clear ? null : el.value || null;
-    // Priority is a number field, so its raw value needs coercing; blank means
-    // "inherit" and 0 means "pinned at zero" - see applyBindingPriority.
-    const value = spec.field === 'priority' ? coercePriority(raw) : raw;
     const path = bindingPath(contextType, overlayId);
 
     const instance = PlaylistTreeApp._resolveInstance(this);
@@ -597,9 +640,17 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const store = PlaylistTreeApp._storeFor(spec.scope, scene);
 
     try {
-      if (spec.field === 'playlist') await applyBindingPlaylist(store, path, value);
-      else if (spec.field === 'priority') await applyBindingPriority(store, path, value);
-      else await applyBindingTrack(store, path, value);
+      if (spec.field === 'layer') await applyBindingLayer(store, path, !!el.checked);
+      // A blank value is 1 (no ducking), NOT coerceDuckFactor's answer for it: `Number(null)` and
+      // `Number('')` are both 0, so handing a missing slider value straight through would silence
+      // everything but the layer.
+      else if (spec.field === 'duck') await applyBindingDuck(store, path, raw === null ? 1 : coerceDuckFactor(raw));
+      else if (spec.field === 'track') await applyBindingTrack(store, path, raw);
+      // Emptying an OVERLAY row removes the whole `overlays.<id>` entry rather than blanking its
+      // fields, so `layer`/`duck` cannot linger and silently re-apply to whatever is bound next -
+      // see clearBindingOverlay. A section-level clear deliberately keeps its own flags standing.
+      else if (spec.overlay && raw === null) await clearBindingOverlay(store, contextType, overlayId);
+      else await applyBindingPlaylist(store, path, raw);
       // Awaited before the re-render below - see the identical comment in _onDropExternal.
       await game.gameOrchestra?.musicController?.playCurrentTrack();
       instance?.render(false);
@@ -618,9 +669,14 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneOverlayTrack, 'updateSceneOverlayTrack', event, target);
   }
 
-  /** Handle updating scene overlay priority */
-  static async handleUpdateSceneOverlayPriority(event, target) {
-    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneOverlayPriority, 'updateSceneOverlayPriority', event, target);
+  /** Handle toggling whether a scene overlay plays as a layer over its section's base music */
+  static async handleUpdateSceneOverlayLayer(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneOverlayLayer, 'updateSceneOverlayLayer', event, target);
+  }
+
+  /** Handle updating a scene overlay layer's duck */
+  static async handleUpdateSceneOverlayDuck(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneOverlayDuck, 'updateSceneOverlayDuck', event, target);
   }
 
   /** Handle clearing scene overlay override */
@@ -638,11 +694,6 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneDefaultTrack, 'updateSceneDefaultTrack', event, target);
   }
 
-  /** Handle updating scene default priority */
-  static async handleUpdateSceneDefaultPriority(event, target) {
-    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateSceneDefaultPriority, 'updateSceneDefaultPriority', event, target);
-  }
-
   /** Handle clearing scene default override */
   static async handleClearSceneDefault(event, target) {
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.clearSceneDefault, 'clearSceneDefault', event, target);
@@ -658,9 +709,14 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalOverlayTrack, 'updateGlobalOverlayTrack', event, target);
   }
 
-  /** Handle updating global overlay priority */
-  static async handleUpdateGlobalOverlayPriority(event, target) {
-    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalOverlayPriority, 'updateGlobalOverlayPriority', event, target);
+  /** Handle toggling whether a global overlay plays as a layer over its section's base music */
+  static async handleUpdateGlobalOverlayLayer(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalOverlayLayer, 'updateGlobalOverlayLayer', event, target);
+  }
+
+  /** Handle updating a global overlay layer's duck */
+  static async handleUpdateGlobalOverlayDuck(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalOverlayDuck, 'updateGlobalOverlayDuck', event, target);
   }
 
   /** Handle clearing global overlay override */
@@ -676,11 +732,6 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
   /** Handle updating global default track */
   static async handleUpdateGlobalDefaultTrack(event, target) {
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalDefaultTrack, 'updateGlobalDefaultTrack', event, target);
-  }
-
-  /** Handle updating global default priority */
-  static async handleUpdateGlobalDefaultPriority(event, target) {
-    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateGlobalDefaultPriority, 'updateGlobalDefaultPriority', event, target);
   }
 
   /** Handle clearing global default override */

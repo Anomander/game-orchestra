@@ -15,7 +15,8 @@
 - **Area & Combat Music** — assign playlists per-scene for exploration and combat
 - **Per-Token Themes** — give individual tokens their own combat music via Token Config
 - **Priority System** — control which music wins when multiple sources apply
-- **Moods & Phases** — define custom mood/phase overlays and layer-specific playlist overrides on top of scene, token, and world-default music; switch active moods with the dockable Mood Widget
+- **Moods & Phases** — define custom mood/phase overlays and per-overlay playlist overrides on top of scene, token, and world-default music; switch active moods with the dockable Mood Widget
+- **Additive Overlays** — a mood, a phase, or a combatant's theme can play *on top of* the base music instead of replacing it, optionally ducking everything underneath while it does
 - **Playlist Hierarchy Tree** — a manager window for reviewing and editing area/combat/mood assignments across every scene and world defaults in one place
 - **Custom Playback Graphs** — design a playlist's playback rules (sequences, weighted shuffles, parallel layers, delays, game-state branches) as a visual node graph instead of relying on Foundry's built-in modes
 - **Crossfade & Gapless Transitions** — adjustable fade duration and pre-fetch engine for smooth transitions between tracks

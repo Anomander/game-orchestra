@@ -16,7 +16,8 @@ import {
   nodeDisplayLabel,
   nextNodeLabel,
   zoomTier,
-  EXPANDABLE_EXIT_NODE_TYPES
+  EXPANDABLE_EXIT_NODE_TYPES,
+  NODE_ICONS
 } from './custom-playlist-node-render.mjs';
 import { parseCurvePath, buildSelfLoopPath, uncertainEdges, buildRoutedPath, parsePathEndpoints, connectionPortSelectors, connectionEndpoints } from './custom-playlist-connection-render.mjs';
 import { planEdgeInsertion, planNodeBypass } from './graph-splice.mjs';
@@ -138,7 +139,21 @@ const NODE_PALETTE = [
   { type: 'random', label: 'GameOrchestra.CustomEditor.NodeType.Random' },
   { type: 'condition', label: 'GameOrchestra.CustomEditor.NodeType.Condition' },
   { type: 'end', label: 'GameOrchestra.CustomEditor.NodeType.End' }
-];
+  // The icon is read from the node renderer's own map rather than re-listed here: each palette
+  // entry renders as a miniature of the node it adds (see the .game-orchestra-node-swatch rules
+  // in game-orchestra.css, which the chip shares with the canvas node itself), and a chip whose
+  // glyph disagreed with the node it drops would be advertising the wrong node type.
+].map((entry) => ({ ...entry, icon: NODE_ICONS[entry.type] }));
+
+/**
+ * The dataTransfer `type` a palette chip carries when dragged onto the canvas.
+ *
+ * Deliberately NOT one of Foundry's document types: this payload names a node TYPE to create,
+ * and there is nothing to resolve - so _onDropExternal has to be able to tell it apart from a
+ * dragged Playlist/PlaylistSound *before* it reaches its fromUuid() lookup. Namespaced, so a drag
+ * originating anywhere else can never be mistaken for one of ours.
+ */
+const PALETTE_DRAG_TYPE = 'game-orchestra.PaletteNode';
 
 /**
  * Visual node-graph editor for a playlist's custom playback graph
@@ -621,16 +636,27 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   }
 
   /**
-   * Drag-start for a Tracks pane row: writes the exact dataTransfer payload shape Foundry's own
-   * sidebar produces for a dragged PlaylistSound, so _onDropExternal() has only one payload shape
-   * to parse regardless of where the drag started.
+   * Drag-start for this window's own two drag sources, which share one `[data-vg-drag]` selector
+   * (and therefore one binding - see _setupDragDrop):
+   *
+   * - a **Tracks pane row**, which writes the exact dataTransfer payload shape Foundry's own
+   *   sidebar produces for a dragged PlaylistSound, so a row dragged from here and a sound
+   *   dragged from the sidebar reach _onDropExternal() as the same thing;
+   * - a **palette chip**, which has no document behind it and writes PALETTE_DRAG_TYPE plus the
+   *   node type to create.
+   *
+   * `data-node-type` is what tells them apart, and only the chip carries it - a Tracks row is
+   * keyed by `data-sound-id`/`data-uuid` (playlist-mixer-render.mjs).
    * @param {DragEvent} event
    * @private
    */
   _onDragStartInternal(event) {
-    const row = event.target?.closest?.('[data-vg-drag]');
-    if (!row) return;
-    event.dataTransfer.setData('text/plain', JSON.stringify({ type: row.dataset.dragType, uuid: row.dataset.uuid }));
+    const source = event.target?.closest?.('[data-vg-drag]');
+    if (!source) return;
+    const payload = source.dataset.nodeType
+      ? { type: PALETTE_DRAG_TYPE, nodeType: source.dataset.nodeType }
+      : { type: source.dataset.dragType, uuid: source.dataset.uuid };
+    event.dataTransfer.setData('text/plain', JSON.stringify(payload));
   }
 
   /**
@@ -696,12 +722,15 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   }
 
   /**
-   * Handle a Playlist/PlaylistSound dropped onto the canvas - from the Foundry sidebar, or from
-   * this window's own Tracks pane (_onDragStartInternal emits the identical payload shape).
-   * Creates a Track node for a sound from the playlist being edited, a Playlist node for any
-   * other playlist, or rejects with an explanation - graph-drop.mjs#resolveGraphDrop carries the
-   * full rule matrix and the reasoning behind each case (in particular, why a sound from a
-   * DIFFERENT playlist is rejected rather than silently promoted to a Playlist node).
+   * Handle a drop onto the canvas. Two payloads arrive here:
+   *
+   * - a **palette chip** (PALETTE_DRAG_TYPE), which names the node type to create outright;
+   * - a **Playlist/PlaylistSound** - from the Foundry sidebar, or from this window's own Tracks
+   *   pane (_onDragStartInternal emits the identical payload shape). Creates a Track node for a
+   *   sound from the playlist being edited, a Playlist node for any other playlist, or rejects
+   *   with an explanation - graph-drop.mjs#resolveGraphDrop carries the full rule matrix and the
+   *   reasoning behind each case (in particular, why a sound from a DIFFERENT playlist is
+   *   rejected rather than silently promoted to a Playlist node).
    * @param {DragEvent} event
    * @private
    */
@@ -725,6 +754,17 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     } catch (error) {
       return; // not a Foundry drag (e.g. an OS file) - silent no-op, not an error toast
     }
+
+    // A palette chip carries its node type in the payload, so there is nothing to look up and
+    // this returns before the await below - which also means every synchronous value captured
+    // above is still the one the drop was aimed at. _addNodeOfType() answers null for a type it
+    // doesn't know, so a forged payload adds nothing rather than throwing.
+    if (data?.type === PALETTE_DRAG_TYPE) {
+      const paletteNodeId = this._addNodeOfType(data.nodeType, {}, point, { chain: !insertEdge });
+      if (paletteNodeId && insertEdge) this._insertNodeOnEdge(paletteNodeId, insertEdge);
+      return;
+    }
+
     if (!['Playlist', 'PlaylistSound'].includes(data?.type) || !data.uuid) return;
 
     const document = await fromUuid(data.uuid);

@@ -123,7 +123,7 @@ export class MoodWidget extends HandlebarsApplicationMixin(ApplicationV2) {
       activePhaseObj,
       suppression,
       activeResolution: pills.active,
-      layerResolution: pills.layer,
+      layerResolutions: pills.layers,
       isDocked: !!pos.isDocked
     };
   }

@@ -13,6 +13,8 @@ import {
   applyBindingPlaylist,
   applyBindingTrack,
   applyBindingPriority,
+  applyBindingLayer,
+  applyBindingDuck,
   clearBindingOverlay
 } from '../scripts/binding-store.mjs';
 import { CONST } from '../scripts/config.mjs';
@@ -160,6 +162,62 @@ describe('binding operations', () => {
 
       expect(store.data.music.combat.overlays.p1).toBeUndefined();
       expect(store.data.music.combat.overlays.p2).toEqual({ playlist: 'pl-2' });
+    });
+
+    it('takes layer and duck with it, so neither can outlive the binding', async () => {
+      // A cleared entry that kept `layer: true` would silently start layering again the next
+      // time a playlist was picked for it, for a reason nothing on screen explains.
+      const store = fakeStore({ music: { area: { overlays: { calm: { playlist: 'pl-1', layer: true, duck: 0.3 } } } } });
+      await clearBindingOverlay(store, 'area', 'calm');
+
+      expect(store.data.music.area.overlays.calm).toBeUndefined();
+    });
+  });
+
+  describe('applyBindingLayer', () => {
+    it('stores the flag when the overlay is made a layer', async () => {
+      const store = fakeStore({ music: { area: { overlays: { calm: { playlist: 'pl-1' } } } } });
+      await applyBindingLayer(store, 'music.area.overlays.calm', true);
+
+      expect(store.data.music.area.overlays.calm.layer).toBe(true);
+    });
+
+    it('unsets rather than storing false - replacing is the absent-value default', async () => {
+      const store = fakeStore({ music: { area: { overlays: { calm: { playlist: 'pl-1', layer: true } } } } });
+      await applyBindingLayer(store, 'music.area.overlays.calm', false);
+
+      expect('layer' in store.data.music.area.overlays.calm).toBe(false);
+    });
+
+    it('clears the duck alongside it, so a stale attenuation cannot come back', async () => {
+      const store = fakeStore({ music: { area: { overlays: { calm: { playlist: 'pl-1', layer: true, duck: 0.2 } } } } });
+      await applyBindingLayer(store, 'music.area.overlays.calm', false);
+
+      expect('duck' in store.data.music.area.overlays.calm).toBe(false);
+      expect(store.data.music.area.overlays.calm.playlist).toBe('pl-1');
+    });
+  });
+
+  describe('applyBindingDuck', () => {
+    it('stores the multiplier', async () => {
+      const store = fakeStore({ music: { area: { overlays: { calm: {} } } } });
+      await applyBindingDuck(store, 'music.area.overlays.calm', 0.35);
+
+      expect(store.data.music.area.overlays.calm.duck).toBe(0.35);
+    });
+
+    it('removes the key at 1, so "no ducking" stays the absent value', async () => {
+      const store = fakeStore({ music: { area: { overlays: { calm: { duck: 0.35 } } } } });
+      await applyBindingDuck(store, 'music.area.overlays.calm', 1);
+
+      expect('duck' in store.data.music.area.overlays.calm).toBe(false);
+    });
+
+    it('writes each change as one whole plan, never a path at a time', async () => {
+      const store = fakeStore({});
+      await applyBindingDuck(store, 'music.area.overlays.calm', 0.5);
+
+      expect(store.plans).toHaveLength(1);
     });
   });
 });

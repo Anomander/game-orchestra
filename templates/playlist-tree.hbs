@@ -20,12 +20,14 @@
       <span class="active-text">{{activeResolutionInfo.label}}</span>
     </div>
     {{/if}}
-    {{#if layerResolutionInfo}}
+    {{! One pill per additive layer: a combatant's turn theme and a mood/phase overlay marked as a
+        layer are independent of each other and can both be playing at once. }}
+    {{#each layerResolutionInfos}}
     <div class="active-resolution-pill layer-resolution-pill" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.LayerTooltip'}}">
       <span class="active-dot"><i class="fas fa-layer-group"></i></span>
-      <span class="active-text">{{layerResolutionInfo.label}}</span>
+      <span class="active-text">{{this.label}}</span>
     </div>
-    {{/if}}
+    {{/each}}
   </div>
 
   <div class="tree-nodes-container flexcol">
@@ -93,19 +95,34 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
-                {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{! What this row is actually doing right now, whichever way it lost or won
+                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
+                    "beaten" - it says so itself instead. }}
+                {{#if area.isLayerActive}}
+                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
+                {{/if}}
                 {{#if area.beatenBy}}
                 <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
                 {{/if}}
-                <details class="advanced-disclosure">
+                <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                  <div class="priority-row flexrow">
-                    <label>{{localize "GameOrchestra.Priority"}}</label>
-                    <input type="number" class="priority-input" data-change-action="updateSceneOverlayPriority" data-mood-id="{{this.moodId}}" data-context-type="area"
-                           value="{{area.priority}}" placeholder="{{area.priorityPlaceholder}}"
-                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  <label class="layer-toggle flexrow">
+                    <input type="checkbox" class="layer-input" data-change-action="updateSceneOverlayLayer" data-mood-id="{{this.moodId}}" data-context-type="area" {{checked area.isLayer}}>
+                    <span>{{localize "GameOrchestra.Layer.PlayAsOverlay"}}</span>
+                  </label>
+                  <p class="hint">{{localize "GameOrchestra.Layer.PlayAsOverlayHint"}}</p>
+                  {{! Ducking only means anything while something else is still playing underneath,
+                      which is exactly what an overlay is for and a replacement is not. }}
+                  {{#if area.isLayer}}
+                  <div class="duck-row flexrow">
+                    <label>{{localize "GameOrchestra.Layer.Duck"}}</label>
+                    <input type="range" class="duck-input" min="0" max="1" step="0.05" value="{{area.duck}}"
+                           data-change-action="updateSceneOverlayDuck" data-mood-id="{{this.moodId}}" data-context-type="area"
+                           aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=area.duckPercent}}">
+                    <output class="duck-readout">{{area.duckPercent}}%</output>
                   </div>
+                  <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
+                  {{/if}}
                 </details>
                 {{/if}}
               </div>
@@ -179,19 +196,34 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
-                {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{! What this row is actually doing right now, whichever way it lost or won
+                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
+                    "beaten" - it says so itself instead. }}
+                {{#if combat.isLayerActive}}
+                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
+                {{/if}}
                 {{#if combat.beatenBy}}
                 <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
                 {{/if}}
-                <details class="advanced-disclosure">
+                <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                  <div class="priority-row flexrow">
-                    <label>{{localize "GameOrchestra.Priority"}}</label>
-                    <input type="number" class="priority-input" data-change-action="updateSceneOverlayPriority" data-phase-id="{{this.phaseId}}" data-context-type="combat"
-                           value="{{combat.priority}}" placeholder="{{combat.priorityPlaceholder}}"
-                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  <label class="layer-toggle flexrow">
+                    <input type="checkbox" class="layer-input" data-change-action="updateSceneOverlayLayer" data-phase-id="{{this.phaseId}}" data-context-type="combat" {{checked combat.isLayer}}>
+                    <span>{{localize "GameOrchestra.Layer.PlayAsOverlay"}}</span>
+                  </label>
+                  <p class="hint">{{localize "GameOrchestra.Layer.PlayAsOverlayHint"}}</p>
+                  {{! Ducking only means anything while something else is still playing underneath,
+                      which is exactly what an overlay is for and a replacement is not. }}
+                  {{#if combat.isLayer}}
+                  <div class="duck-row flexrow">
+                    <label>{{localize "GameOrchestra.Layer.Duck"}}</label>
+                    <input type="range" class="duck-input" min="0" max="1" step="0.05" value="{{combat.duck}}"
+                           data-change-action="updateSceneOverlayDuck" data-phase-id="{{this.phaseId}}" data-context-type="combat"
+                           aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combat.duckPercent}}">
+                    <output class="duck-readout">{{combat.duckPercent}}%</output>
                   </div>
+                  <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
+                  {{/if}}
                 </details>
                 {{/if}}
               </div>
@@ -257,20 +289,12 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
-              {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
+                  default has no Advanced block: it is the thing overlays layer over, so the
+                  layer controls that live there for an overlay row would be inert here. }}
               {{#if sceneDefaults.area.beatenBy}}
               <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.area.beatenBy}}</p>
               {{/if}}
-              <details class="advanced-disclosure">
-                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                <div class="priority-row flexrow">
-                  <label>{{localize "GameOrchestra.Priority"}}</label>
-                  <input type="number" class="priority-input" data-change-action="updateSceneDefaultPriority" data-context-type="area"
-                         value="{{sceneDefaults.area.priority}}" placeholder="{{sceneDefaults.area.priorityPlaceholder}}"
-                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
-                </div>
-              </details>
               {{/if}}
             </div>
           </div>
@@ -311,20 +335,12 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
-              {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
+                  default has no Advanced block: it is the thing overlays layer over, so the
+                  layer controls that live there for an overlay row would be inert here. }}
               {{#if sceneDefaults.combat.beatenBy}}
               <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.combat.beatenBy}}</p>
               {{/if}}
-              <details class="advanced-disclosure">
-                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                <div class="priority-row flexrow">
-                  <label>{{localize "GameOrchestra.Priority"}}</label>
-                  <input type="number" class="priority-input" data-change-action="updateSceneDefaultPriority" data-context-type="combat"
-                         value="{{sceneDefaults.combat.priority}}" placeholder="{{sceneDefaults.combat.priorityPlaceholder}}"
-                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
-                </div>
-              </details>
               {{/if}}
             </div>
           </div>
@@ -398,19 +414,34 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
-                {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{! What this row is actually doing right now, whichever way it lost or won
+                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
+                    "beaten" - it says so itself instead. }}
+                {{#if area.isLayerActive}}
+                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
+                {{/if}}
                 {{#if area.beatenBy}}
                 <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
                 {{/if}}
-                <details class="advanced-disclosure">
+                <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                  <div class="priority-row flexrow">
-                    <label>{{localize "GameOrchestra.Priority"}}</label>
-                    <input type="number" class="priority-input" data-change-action="updateGlobalOverlayPriority" data-mood-id="{{this.moodId}}" data-context-type="area"
-                           value="{{area.priority}}" placeholder="{{area.priorityPlaceholder}}"
-                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  <label class="layer-toggle flexrow">
+                    <input type="checkbox" class="layer-input" data-change-action="updateGlobalOverlayLayer" data-mood-id="{{this.moodId}}" data-context-type="area" {{checked area.isLayer}}>
+                    <span>{{localize "GameOrchestra.Layer.PlayAsOverlay"}}</span>
+                  </label>
+                  <p class="hint">{{localize "GameOrchestra.Layer.PlayAsOverlayHint"}}</p>
+                  {{! Ducking only means anything while something else is still playing underneath,
+                      which is exactly what an overlay is for and a replacement is not. }}
+                  {{#if area.isLayer}}
+                  <div class="duck-row flexrow">
+                    <label>{{localize "GameOrchestra.Layer.Duck"}}</label>
+                    <input type="range" class="duck-input" min="0" max="1" step="0.05" value="{{area.duck}}"
+                           data-change-action="updateGlobalOverlayDuck" data-mood-id="{{this.moodId}}" data-context-type="area"
+                           aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=area.duckPercent}}">
+                    <output class="duck-readout">{{area.duckPercent}}%</output>
                   </div>
+                  <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
+                  {{/if}}
                 </details>
                 {{/if}}
               </div>
@@ -484,19 +515,34 @@
                   <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
                 </button>
                 {{/if}}
-                {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                    expert escape hatch behind it (docs/wiki/ux.md). }}
+                {{! What this row is actually doing right now, whichever way it lost or won
+                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
+                    "beaten" - it says so itself instead. }}
+                {{#if combat.isLayerActive}}
+                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
+                {{/if}}
                 {{#if combat.beatenBy}}
                 <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
                 {{/if}}
-                <details class="advanced-disclosure">
+                <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                  <div class="priority-row flexrow">
-                    <label>{{localize "GameOrchestra.Priority"}}</label>
-                    <input type="number" class="priority-input" data-change-action="updateGlobalOverlayPriority" data-phase-id="{{this.phaseId}}" data-context-type="combat"
-                           value="{{combat.priority}}" placeholder="{{combat.priorityPlaceholder}}"
-                           data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
+                  <label class="layer-toggle flexrow">
+                    <input type="checkbox" class="layer-input" data-change-action="updateGlobalOverlayLayer" data-phase-id="{{this.phaseId}}" data-context-type="combat" {{checked combat.isLayer}}>
+                    <span>{{localize "GameOrchestra.Layer.PlayAsOverlay"}}</span>
+                  </label>
+                  <p class="hint">{{localize "GameOrchestra.Layer.PlayAsOverlayHint"}}</p>
+                  {{! Ducking only means anything while something else is still playing underneath,
+                      which is exactly what an overlay is for and a replacement is not. }}
+                  {{#if combat.isLayer}}
+                  <div class="duck-row flexrow">
+                    <label>{{localize "GameOrchestra.Layer.Duck"}}</label>
+                    <input type="range" class="duck-input" min="0" max="1" step="0.05" value="{{combat.duck}}"
+                           data-change-action="updateGlobalOverlayDuck" data-phase-id="{{this.phaseId}}" data-context-type="combat"
+                           aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combat.duckPercent}}">
+                    <output class="duck-readout">{{combat.duckPercent}}%</output>
                   </div>
+                  <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
+                  {{/if}}
                 </details>
                 {{/if}}
               </div>
@@ -562,20 +608,12 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
-              {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
+                  default has no Advanced block: it is the thing overlays layer over, so the
+                  layer controls that live there for an overlay row would be inert here. }}
               {{#if globalDefaults.area.beatenBy}}
               <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.area.beatenBy}}</p>
               {{/if}}
-              <details class="advanced-disclosure">
-                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                <div class="priority-row flexrow">
-                  <label>{{localize "GameOrchestra.Priority"}}</label>
-                  <input type="number" class="priority-input" data-change-action="updateGlobalDefaultPriority" data-context-type="area"
-                         value="{{globalDefaults.area.priority}}" placeholder="{{globalDefaults.area.priorityPlaceholder}}"
-                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
-                </div>
-              </details>
               {{/if}}
             </div>
           </div>
@@ -616,20 +654,12 @@
                 <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
               </button>
               {{/if}}
-              {{! Beaten-by is the answer a GM actually needs; the priority number is the
-                  expert escape hatch behind it (docs/wiki/ux.md). }}
+              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
+                  default has no Advanced block: it is the thing overlays layer over, so the
+                  layer controls that live there for an overlay row would be inert here. }}
               {{#if globalDefaults.combat.beatenBy}}
               <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.combat.beatenBy}}</p>
               {{/if}}
-              <details class="advanced-disclosure">
-                <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
-                <div class="priority-row flexrow">
-                  <label>{{localize "GameOrchestra.Priority"}}</label>
-                  <input type="number" class="priority-input" data-change-action="updateGlobalDefaultPriority" data-context-type="combat"
-                         value="{{globalDefaults.combat.priority}}" placeholder="{{globalDefaults.combat.priorityPlaceholder}}"
-                         data-tooltip="{{localize 'GameOrchestra.PlaylistTree.PriorityHint'}}">
-                </div>
-              </details>
               {{/if}}
             </div>
           </div>

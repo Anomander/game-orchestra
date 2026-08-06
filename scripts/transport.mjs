@@ -156,7 +156,9 @@ export function localizeResolution(described) {
  * @param {string} params.activeOverlayId - The live overlay id on this row's axis
  * @param {boolean} params.inCombat
  * @param {boolean} [params.activeOverlayConfigured] - Whether this same scope's live
- *   overlay has a playlist; only consulted for a section default
+ *   overlay has a playlist *and replaces the section* (an overlay marked `layer` does not - it
+ *   plays over the section default, which therefore stays fully in the running). Only consulted
+ *   for a section default.
  * @returns {boolean}
  */
 export function isBindingEligible({ section, overlayId, activeOverlayId, inCombat, activeOverlayConfigured = false }) {
@@ -166,32 +168,39 @@ export function isBindingEligible({ section, overlayId, activeOverlayId, inComba
 }
 
 /**
- * Both status pills for a host: the winning context, and the additive layer.
+ * The status pills for a host: the winning context, and one per additive layer.
  *
- * The layer gets its own pill rather than being folded into the first, because
- * it plays *alongside* the winner rather than competing with it - see
- * MusicController#getCurrentLayerContext and architecture.md § Layers.
+ * A layer gets its own pill rather than being folded into the first, because it plays *alongside*
+ * the winner rather than competing with it - see MusicController#_collectLayerContexts and
+ * architecture.md § Layers. There can legitimately be more than one at a time (a combatant's turn
+ * theme and a phase overlay are two independent answers), so this returns a list.
+ *
+ * Each layer names its source through the same `describeResolution()` the winner uses, so a scene
+ * mood layer reads *"Scene Mood (calm)"* rather than falling back to a bare document name that
+ * says nothing about which overlay is responsible.
  * @param {object|null} referenceScene
- * @returns {{active: {label: string}|null, layer: {label: string}|null}}
+ * @returns {{active: {label: string}|null, layers: Array<{label: string}>, layer: {label: string}|null}}
  */
 export function resolutionPills(referenceScene) {
   const controller = game.gameOrchestra?.musicController;
+  const activeMood = game.settings.get(CONST.moduleId, CONST.settings.activeMood) || '';
+  const activePhase = game.settings.get(CONST.moduleId, CONST.settings.activePhase) || '';
   const label = localizeResolution(describeResolution({
     context: controller?.currentContext || null,
     referenceScene,
-    activeMood: game.settings.get(CONST.moduleId, CONST.settings.activeMood) || '',
-    activePhase: game.settings.get(CONST.moduleId, CONST.settings.activePhase) || ''
+    activeMood,
+    activePhase
   }));
 
-  const layerContext = controller?.currentLayerContext || null;
-  const layer = layerContext
-    ? {
-      label: game.i18n.format('GameOrchestra.PlaylistTree.LayerAudio', {
-        playlist: layerContext.playlist?.name || game.i18n.localize('GameOrchestra.None'),
-        source: layerContext.contextEntity?.name || game.i18n.localize('GameOrchestra.PlaylistTree.ActiveAudioTokenActor')
-      })
-    }
-    : null;
+  const layers = (controller?.currentLayerContexts || []).map((context) => ({
+    label: game.i18n.format('GameOrchestra.PlaylistTree.LayerAudio', {
+      playlist: context.playlist?.name || game.i18n.localize('GameOrchestra.None'),
+      source: localizeResolutionSource(describeResolution({ context, referenceScene, activeMood, activePhase }))
+        || game.i18n.localize('GameOrchestra.PlaylistTree.ActiveAudioTokenActor')
+    })
+  }));
 
-  return { active: label ? { label } : null, layer };
+  // `layer` is the first one, kept so a host that only has room for a single pill (or has not
+  // been updated to loop) still says *something* rather than silently dropping the feature.
+  return { active: label ? { label } : null, layers, layer: layers[0] ?? null };
 }

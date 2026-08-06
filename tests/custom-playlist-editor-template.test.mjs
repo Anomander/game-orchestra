@@ -81,6 +81,17 @@ describe('custom-playlist-editor.hbs structural invariants', () => {
       }
     });
 
+    it('every pane caret ships the SAME glyph, the expanded one - the collapsed state is a CSS rotation', () => {
+      // This shipped broken: the two panes that start collapsed carried fa-caret-right, and
+      // `.game-orchestra-collapsed .game-orchestra-pane-caret { rotate(-90deg) }` then turned an
+      // already-right-pointing caret UP. The glyph must not encode state - only the class does,
+      // and _applyPaneCollapsed() never rewrites the icon, so a per-pane glyph also freezes at
+      // whatever the pane's STARTING state was and is wrong in both states from the first toggle.
+      const carets = [...templateSource.matchAll(/<i class="fas (fa-caret-\w+) game-orchestra-pane-caret">/g)].map(([, glyph]) => glyph);
+      expect(carets).toHaveLength(3); // one per pane - a new pane must join this rule
+      expect(new Set(carets)).toEqual(new Set(['fa-caret-down']));
+    });
+
     it('the preset select sits at the TOP of the palette pane, above the per-node buttons', () => {
       const presetIndex = templateSource.indexOf('data-change-action="applyPreset"');
       const buttonsIndex = templateSource.indexOf('game-orchestra-palette-list');
@@ -91,8 +102,27 @@ describe('custom-playlist-editor.hbs structural invariants', () => {
       expect(presetIndex).toBeLessThan(buttonsIndex);
     });
 
-    it('every palette button is a plain fa-plus + label button, matching the old top palette strip', () => {
-      expect(templateSource).toMatch(/<button type="button" data-action="addNode" data-node-type="\{\{this\.type\}\}"[^>]*>\s*<i class="fas fa-plus"><\/i> \{\{localize this\.label\}\}/);
+    it('every palette chip is a drag source AND a click-to-add button', () => {
+      // Both gestures on one element, and the drag half is easy to lose: data-vg-drag is the
+      // selector DragDrop binds dragstart to (shared with the Tracks rows), and data-node-type is
+      // what _onDragStartInternal reads to tell a chip's payload from a track row's.
+      const chip = /<button type="button" class="game-orchestra-palette-item"([^>]*)>/.exec(templateSource);
+      expect(chip).not.toBeNull();
+      expect(chip[1]).toContain('draggable="true"');
+      expect(chip[1]).toContain('data-vg-drag');
+      expect(chip[1]).toContain('data-action="addNode"');
+      expect(chip[1]).toContain('data-node-type="{{this.type}}"');
+    });
+
+    it('every palette chip renders the node it adds - the type shape class and that type\'s own icon', () => {
+      // The swatch is styled by the SAME per-type CSS rules as the canvas node
+      // (.game-orchestra-node-swatch is joined into each of them), so this class pair is what
+      // makes the chip a preview rather than a grey box, and the icon comes from the palette
+      // entry - which reads it from NODE_ICONS, never a second list.
+      expect(templateSource).toMatch(/<span class="game-orchestra-node-swatch game-orchestra-node-\{\{this\.type\}\}">/);
+      expect(templateSource).toMatch(/<i class="fas \{\{this\.icon\}\} game-orchestra-node-icon"><\/i>/);
+      // The name sits under the shape, exactly where a canvas node wears its own.
+      expect(templateSource).toMatch(/<span class="game-orchestra-palette-label">\{\{localize this\.label\}\}<\/span>/);
     });
 
     it('the tracks pane IS the mixer - one pane doing both jobs, in its compact layout', () => {

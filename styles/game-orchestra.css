@@ -637,8 +637,24 @@
   gap: 4px;
 }
 
+/* The overlay counterpart to .beaten-by: a layering row never loses a contest, so it says what
+   it IS doing instead. Green rather than amber - this is the row working as configured. */
+.game-orchestra-playlist-tree .layering-now {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 4px 0 0;
+  font-size: 0.78em;
+  line-height: 1.35;
+  color: #9b59b6;
+}
+
+.game-orchestra-playlist-tree .layering-now i {
+  flex: 0 0 auto;
+}
+
 /* The answer a GM is actually looking for when the wrong thing is playing. Sits
-   inline on the losing row, above the Advanced disclosure that holds the knob. */
+   inline on the losing row, above the Advanced disclosure. */
 .game-orchestra-playlist-tree .beaten-by {
   display: flex;
   align-items: baseline;
@@ -654,9 +670,14 @@
   color: #fbbf24;
 }
 
-/* Priority is an expert escape hatch, not part of the everyday job, so it is folded
-   away by default (docs/wiki/ux.md). A native <details> - no collapse-state
-   bookkeeping, and it survives the window's frequent re-renders on its own. */
+/* Overlay layering is a deliberate, occasional choice rather than part of the everyday job, so
+   it is folded away by default (docs/wiki/ux.md).
+
+   A native <details>, but NOT a state-free one: this used to claim it "survives the window's
+   frequent re-renders on its own", and that was simply false. Open state lives in the DOM, and
+   HandlebarsApplicationMixin replaces the part wholesale on every render - so the first control
+   put inside it (the layer checkbox) slammed the block shut on every click. The open state is
+   mirrored in `openDisclosures` and re-rendered as the `open` attribute; see app-mixins.mjs. */
 .game-orchestra-playlist-tree .advanced-disclosure {
   margin-top: 4px;
 }
@@ -686,29 +707,52 @@
   opacity: 0.9;
 }
 
-.game-orchestra-playlist-tree .priority-row {
+.game-orchestra-playlist-tree .layer-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+  font-size: 0.8em;
+  cursor: pointer;
 }
 
-.game-orchestra-playlist-tree .priority-row label {
+.game-orchestra-playlist-tree .layer-toggle input {
   flex: 0 0 auto;
+  margin: 0;
+}
+
+.game-orchestra-playlist-tree .advanced-disclosure .hint {
+  margin: 2px 0 0;
+  font-size: 0.72em;
+  line-height: 1.3;
+  opacity: 0.7;
+}
+
+.game-orchestra-playlist-tree .duck-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
   font-size: 0.8em;
+}
+
+.game-orchestra-playlist-tree .duck-row label {
+  flex: 0 0 auto;
+  white-space: nowrap;
   opacity: 0.75;
 }
 
-/* Narrow and right-aligned: the value is a small signed integer, and the generic
-   `.game-orchestra-playlist-tree select` rule above would otherwise stretch this
-   to the full box width like a playlist dropdown. */
-.game-orchestra-playlist-tree .priority-row .priority-input {
-  flex: 0 0 4.5em;
-  width: 4.5em;
-  height: 24px;
-  padding: 2px 4px;
-  font-size: 0.85em;
+/* Explicit flex on the slider: the generic `.game-orchestra-playlist-tree select` sizing does
+   not reach it, and without this the readout is pushed off the end of a narrow context box. */
+.game-orchestra-playlist-tree .duck-row .duck-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.game-orchestra-playlist-tree .duck-readout {
+  flex: 0 0 3.5em;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .game-orchestra-playlist-tree select,
@@ -898,6 +942,10 @@
   width: 0.9em;
 }
 
+/* The ONLY thing that says "collapsed" on a caret. Every pane header ships fa-caret-down (the
+   expanded glyph) and nothing swaps it, so this rotation is the whole state indicator - down
+   becomes right. A header that shipped fa-caret-right instead, because that pane happens to start
+   collapsed, got rotated from right to UP by this rule; two panes did, and it shipped. */
 .game-orchestra-pane.game-orchestra-collapsed .game-orchestra-pane-caret {
   transform: rotate(-90deg);
 }
@@ -915,14 +963,143 @@
   display: none;
 }
 
-/* Plain flex-wrap button list - the same layout the old top palette strip used
-   (.game-orchestra-editor-palette, before it moved into this pane), just relocated. Buttons are
-   deliberately unstyled beyond that: Foundry's own base button styling is enough, matching
-   every other plain data-action button in this template (zoom controls, Save, etc). */
+/* The palette: one chip per node type, each a MINIATURE OF THE NODE IT ADDS - the same shape,
+   accent icon and chrome the canvas draws, with the type name as a caption underneath exactly
+   where a node wears its own name. It replaced a row of "+ Start" text buttons; a graph editor's
+   palette is read by shape, and the text list made you learn the mapping from the canvas instead
+   of showing it.
+
+   A grid rather than the old flex-wrap, so the chips line up in columns and every caption starts
+   on the same baseline - ragged rows of differently-sized shapes read as clutter.
+
+   The 88px floor is a MEASUREMENT, not a taste call: the widest chip is Playlist, whose 160px node
+   box paints at 80px (--game-orchestra-swatch-scale), and a chip spends 6px of its column on padding
+   and border - so a column below 86px starts clipping it against the slot below. 88px also still
+   fits three columns in the 300px panel (3*88 + 2 gaps = 272 <= 282 of content box), which is what
+   keeps the seven chips to three rows. */
 .game-orchestra-palette-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 4px;
+}
+
+/* Both a button and a drag handle: click adds at the canvas centre, drag places it where dropped.
+   Stripped back to a transparent tile so the SHAPE inside is what the eye lands on - Foundry's
+   default button chrome (a filled, bordered box) would put a second, louder rectangle around every
+   node outline. height:auto and the flex column undo the fixed-height inline-flex row that same
+   base styling applies. */
+.game-orchestra-palette-item {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  height: auto;
+  padding: 4px 2px 3px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: grab;
+  line-height: 1;
+}
+.game-orchestra-palette-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+}
+/* Feedback while the drag is actually being held, not just on press: the browser keeps painting
+   :active on the source element for the whole drag. */
+.game-orchestra-palette-item:active {
+  cursor: grabbing;
+}
+
+/* The swatch's SLOT, and the reason it has a fixed size and clips.
+ *
+ * The shape inside is a full-size node box (96px, 160px for Playlist...) scaled down by a
+ * transform - see .game-orchestra-node-swatch - and a transform scales what is PAINTED, never the
+ * layout box. So the box still measures its full unscaled size here and would otherwise (a) push
+ * the grid columns out to 160px and (b) spill scrollable overflow into .game-orchestra-pane-body,
+ * which is `overflow-y: auto` and would answer with a horizontal scrollbar across the whole pane -
+ * measured, both of them. Fixing the slot's size and clipping it solves both, and clips nothing
+ * visible: the widest painting is Playlist's 80px inside an 85px slot, and the tallest is Start's
+ * outline layer at 96 * 0.5 * 1.0722 = 51.5px inside 56px.
+ *
+ * pointer-events:none for the same overflow reason turned into a bug: the unscaled box hangs over
+ * the neighbouring chips, so without this a click near another chip's edge would land on THIS
+ * chip's swatch and add the wrong node type. The chip's own button is the only hit target. */
+.game-orchestra-palette-swatch {
+  position: relative;
+  width: 100%;
+  height: 56px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* A node rendered outside the canvas, at chip size. Every shape, colour and outline rule it uses
+ * is the canvas node's OWN rule, joined by selector (search for .game-orchestra-node-swatch in the
+ * node-shape section below) rather than copied - a per-type shape that existed twice would drift,
+ * and the whole point of the chip is that it looks like what it produces. Adding a node type means
+ * naming the swatch in that type's shape rules too; the palette is otherwise silently type-less.
+ *
+ * Scaled rather than given smaller dimensions, because every proportion inside a node is in
+ * absolute px - border widths, the Playlist ring's two inset bands, each type's content padding.
+ * A smaller box with those unchanged is not the same shape: at 52px, Start's 40px content padding
+ * alone leaves negative room for the icon. A transform keeps the node exactly itself, only
+ * smaller, which is also what the canvas does when you zoom out.
+ *
+ * --game-orchestra-node-neutral is redeclared because it is declared on .game-orchestra-drawflow-canvas,
+ * which is not an ancestor here. Without it the shared rules fall back to their own per-site
+ * defaults - and Playlist's inset ring defaults to #888, a visibly lighter grey than the #6b7280
+ * the same ring has on the canvas. */
+.game-orchestra-node-swatch {
+  --game-orchestra-node-neutral: #6b7280;
+  /* Centred by translate rather than by the slot, because the box being centred is BIGGER than
+     the slot: an over-sized grid/flex item is aligned to start instead of centre (the alignment
+     spec's overflow fallback, to avoid clipping the start edge), which put the Playlist chip
+     visibly off to the right of its own caption - seen in a render, not predicted. A translate
+     has no such fallback. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(var(--game-orchestra-swatch-scale, 0.5));
+  /* The shape layers are ::before/::after at z-index -1/-2 (they sit behind a node's content).
+     Without a stacking context of its own they would paint behind the CHIP's background instead
+     and vanish on hover. The transform above happens to create one too - this does not rely on
+     that, so removing the transform can't silently take the shapes with it. */
+  isolation: isolate;
+  display: flex;
+  padding: 0;
+  color: var(--color-text-light-primary, #eee);
+  /* Drawflow's own `.drawflow .drawflow-node { width: 160px }` is what sizes a node that declares
+     no width of its own - Track and Playlist, today. That rule needs the canvas ancestor, so out
+     here the swatch has to restate it or those two chips would be drawn narrower than the node
+     they produce (140px vs 160px, measured). Every type that sets an explicit width overrides
+     this from its own per-type rule below. */
+  width: 160px;
+  /* The icon is sized in em, so at chip scale it would land at 8.7px - and Fork, Random and
+     Condition share one silhouette and are told apart by icon and accent alone, which is exactly
+     the channel that would go. This is the one place a chip departs from node proportions, and it
+     departs into space the node itself spends on things a chip has none of: a detail line, a name
+     inside the shape, exit chips. 20px puts the glyph at ~13px painted. */
+  font-size: 20px;
+}
+
+/* The canvas's own hover lift, on the same layer for the same reason (filter on the shape
+   pseudo-element, never on an element with text descendants - see the .drawflow-node:hover rule). */
+.game-orchestra-palette-item:hover .game-orchestra-node-swatch::before {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5));
+}
+
+/* Echoes .game-orchestra-node-name (a node's caption below its shape) in size and weight, but cannot
+   reuse it: that class is absolutely positioned against the node it belongs to, and here the
+   caption is a normal-flow row of the chip. */
+.game-orchestra-palette-label {
+  max-width: 100%;
+  font-size: 0.75em;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* No max-height and no scroller of its own. It had both (220px) back when the pane sized to its
@@ -1266,7 +1443,18 @@
   transition: filter 0.1s ease;
 }
 
-.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node::before {
+/* Every shape rule from here down also names .game-orchestra-node-swatch - the palette chip, which
+ * is a node drawn outside the canvas (see its block up in the editor-panel section). The chip is
+ * joined into each rule by selector rather than given a parallel set of its own: two copies of a
+ * shape drift, and a palette that stops matching the canvas is worse than no palette. Its selector
+ * is short on purpose - outside the canvas there is no vendor rule to out-specify, and adding a
+ * second selector to a rule does not touch how the first one resolves (HR-C is about the canvas
+ * selectors, and they are unchanged).
+ *
+ * Rules NOT joined, deliberately: anything about state (validation, selection, playback, ports,
+ * badges) or size floors. A chip is always a node at rest. */
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node::before,
+.game-orchestra-node-swatch::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1434,12 +1622,19 @@
    back on the flat edge alone, which is the exact doubling this rule exists to
    remove. */
 .game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start.game-orchestra-node-start::before,
-.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end.game-orchestra-node-end::before {
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end.game-orchestra-node-end::before,
+.game-orchestra-node-swatch.game-orchestra-node-start::before,
+.game-orchestra-node-swatch.game-orchestra-node-end::before {
   border: none;
 }
 
+/* The palette chip joins this one too - it scales the whole node, so the outline scales with it
+   and stays the same fraction of the shape it is on the canvas. The incentre maths above is in
+   percentages and a ratio, both of which survive a uniform scale unchanged. */
 .game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::after,
-.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after {
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after,
+.game-orchestra-node-swatch.game-orchestra-node-start::after,
+.game-orchestra-node-swatch.game-orchestra-node-end::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1447,11 +1642,13 @@
   background: var(--game-orchestra-node-neutral, #6b7280);
   transform: scale(var(--game-orchestra-outline-scale, 1.0722));
 }
-.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::after {
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::after,
+.game-orchestra-node-swatch.game-orchestra-node-start::after {
   clip-path: polygon(0% 0%, 86.6% 50%, 0% 100%);
   transform-origin: 28.8675% 50%;
 }
-.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after {
+.game-orchestra-drawflow-canvas.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::after,
+.game-orchestra-node-swatch.game-orchestra-node-end::after {
   /* Mirrored: 100% - 28.8675%. */
   clip-path: polygon(100% 0%, 13.4% 50%, 100% 100%);
   transform-origin: 71.1325% 50%;
@@ -1543,7 +1740,8 @@
  * shape. The three-class form here beats both unconditionally, with no
  * dependency on stylesheet load order.
  */
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start,
+.game-orchestra-node-swatch.game-orchestra-node-start {
   --game-orchestra-node-accent: #4caf50;
   /* Equal width/height (a square box) is required for the clip-path below to
      draw an actual EQUILATERAL triangle, not just isosceles: for a triangle
@@ -1559,7 +1757,8 @@
   width: 96px;
   height: 96px;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-start::before,
+.game-orchestra-node-swatch.game-orchestra-node-start::before {
   clip-path: polygon(0% 0%, 86.6% 50%, 0% 100%);
 }
 .game-orchestra-node-start .game-orchestra-node-content {
@@ -1568,14 +1767,16 @@
   padding: 16px 40px 16px 14px;
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end,
+.game-orchestra-node-swatch.game-orchestra-node-end {
   --game-orchestra-node-accent: #ef4444;
   min-width: 96px;
   min-height: 96px;
   width: 96px;
   height: 96px;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-end::before,
+.game-orchestra-node-swatch.game-orchestra-node-end::before {
   /* Mirror of start: equilateral triangle pointing left instead of right
      (apex at 100% - 86.6% = 13.4%). */
   clip-path: polygon(100% 0%, 13.4% 50%, 100% 100%);
@@ -1584,10 +1785,16 @@
   padding: 16px 14px 16px 40px;
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track {
+/* Track is joined into the swatch rules like every other type even though the palette has no
+   Track chip (see NODE_PALETTE - a palette-created Track could never be given a sound). The
+   swatch is a general "draw a node here" element, and a type that opted out of it would be a
+   trap for whatever renders one next. */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track,
+.game-orchestra-node-swatch.game-orchestra-node-track {
   --game-orchestra-node-accent: #3b82f6;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-track::before,
+.game-orchestra-node-swatch.game-orchestra-node-track::before {
   border-radius: 999px;
 }
 .game-orchestra-node-track .game-orchestra-node-content {
@@ -1606,12 +1813,15 @@
    .selected::after outline rule of its own - the generic border treatment
    already works on any border-radius shape, and only Start and End need that
    second layer (see its comment for why). */
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist,
+.game-orchestra-node-swatch.game-orchestra-node-playlist {
   --game-orchestra-node-accent: #14b8a6;
+  /* 140px is also what sets the palette grid's column floor - see .game-orchestra-palette-list. */
   min-width: 140px;
   min-height: 74px;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-playlist::before,
+.game-orchestra-node-swatch.game-orchestra-node-playlist::before {
   border-radius: 14px;
   box-shadow: inset 0 0 0 4px var(--color-cool-4, #2a2a2a), inset 0 0 0 6px var(--game-orchestra-node-neutral, #888);
 }
@@ -1619,7 +1829,8 @@
   padding: 12px 16px;
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay,
+.game-orchestra-node-swatch.game-orchestra-node-delay {
   --game-orchestra-node-accent: #f59e0b;
   /* A circle needs a square box, and (as with start/end above) min-width alone
      loses to Drawflow's explicit width:160px - both have to be set. */
@@ -1628,7 +1839,8 @@
   width: 92px;
   height: 92px;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-delay::before,
+.game-orchestra-node-swatch.game-orchestra-node-delay::before {
   border-radius: 50%;
 }
 .game-orchestra-node-delay .game-orchestra-node-content {
@@ -1710,7 +1922,8 @@
   to { width: 0%; }
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition,
+.game-orchestra-node-swatch.game-orchestra-node-condition {
   --game-orchestra-node-accent: #00bcd4;
   /* The same 64px bar as Fork and Random. It was 150px wide back when its
      branch exits fanned along the bottom edge and needed the room; once they
@@ -1724,7 +1937,8 @@
   width: 64px;
   min-height: 64px;
 }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-condition::before,
+.game-orchestra-node-swatch.game-orchestra-node-condition::before {
   border-radius: 6px;
 }
 
@@ -1736,13 +1950,17 @@
    - most usefully - their exit chips: Random shows shares, Condition shows
    predicates, Fork shows none at all. */
 .game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork,
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random,
+.game-orchestra-node-swatch.game-orchestra-node-fork,
+.game-orchestra-node-swatch.game-orchestra-node-random {
   min-width: 64px;
   width: 64px;
   min-height: 64px;
 }
 .game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork::before,
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random::before {
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random::before,
+.game-orchestra-node-swatch.game-orchestra-node-fork::before,
+.game-orchestra-node-swatch.game-orchestra-node-random::before {
   border-radius: 10px;
 }
 /* Condition included: the shared .game-orchestra-node-content padding is 14px 26px,
@@ -1758,8 +1976,10 @@
   font-size: 0.7em;
 }
 
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork { --game-orchestra-node-accent: #9c27b0; }
-.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random { --game-orchestra-node-accent: #eab308; }
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-fork,
+.game-orchestra-node-swatch.game-orchestra-node-fork { --game-orchestra-node-accent: #9c27b0; }
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-random,
+.game-orchestra-node-swatch.game-orchestra-node-random { --game-orchestra-node-accent: #eab308; }
 
 /* The node's name, as a caption below the shape. Absolutely positioned rather
    than laid out inside it: most shapes clip their own corners away, leaving too

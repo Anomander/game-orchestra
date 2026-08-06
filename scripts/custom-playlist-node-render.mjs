@@ -34,7 +34,14 @@ export function escapeHtml(text) {
   return String(text ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
-const NODE_ICONS = {
+/**
+ * The glyph each node type wears on the canvas. Exported because the editor's
+ * palette renders each entry as a PREVIEW of the node it adds
+ * (custom-playlist-editor.mjs#NODE_PALETTE) and must read the icon from here
+ * rather than re-listing it: a second list is free to drift, and a chip showing
+ * a different glyph than the node it drops is a lie about what the button does.
+ */
+export const NODE_ICONS = {
   start: 'fa-play',
   end: 'fa-flag-checkered',
   track: 'fa-music',

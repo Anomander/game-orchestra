@@ -56,7 +56,7 @@ panel.
 
 | Pane | Content | Rendered by |
 |---|---|---|
-| `palette` | 7 node buttons + preset `<select>` | Handlebars, **static** |
+| `palette` | 7 node chips + preset `<select>` | Handlebars, **static** |
 | `properties` | The selected node's inspector | `_renderInspector()`, dynamic |
 | `tracks` | The track list **and** the mixer: usage counts, drag-to-canvas, volume, mute/solo | `_renderTracks()`, dynamic |
 
@@ -94,6 +94,47 @@ visible.
 
 The Tracks pane's `usedBy` count answers the single most common question in this window: *which
 of my tracks haven't I placed yet?*
+
+### The palette chips are node previews, and the second drag source
+
+Each palette entry is a **miniature of the node it adds** — the same silhouette, the same accent
+icon, the same neutral chrome, with the type name captioned underneath exactly where a node wears
+its own. It carries **both gestures**: click to add at the canvas centre, or drag it onto the canvas
+to place it where you drop it — including onto a *wire*, which splices it in (`_insertNodeOnEdge`),
+the same as dropping a Tracks row there.
+
+**The chip shares the canvas node's CSS rules; it does not copy them.** `.game-orchestra-node-swatch` is
+joined into each per-type rule's selector list (accent, `clip-path`/`border-radius`, the Playlist
+ring, Start/End's outline layer). A parallel set of shape rules would drift, and a palette that no
+longer matches the canvas is worse than a palette of text buttons — it would be *wrong* rather than
+merely plain. **Adding a node type means naming the swatch in that type's shape rules too.**
+
+Three things about it are measured, not reasoned — rendered in both Chromium and Firefox:
+
+- **It is a full-size node scaled by `transform`, not a small box.** Every proportion inside a node
+  is in absolute px (border widths, the Playlist ring's two bands, each type's content padding), so
+  a smaller box with those unchanged is a *different shape*: at 52px, Start's 40px content padding
+  alone leaves negative room for the icon.
+- **The swatch restates Drawflow's `width: 160px`.** That vendor rule needs the canvas ancestor, and
+  it is what sizes any node declaring no width of its own (Track, Playlist). Without it the Playlist
+  chip drew 140px against the real node's 160px.
+- **The slot is fixed-size, clips, and centres by `translate`.** A transform scales what is
+  *painted*, never the layout box — so the 160px box would otherwise push the grid columns out and
+  spill horizontal scroll into `.game-orchestra-pane-body`. And an over-sized grid item is aligned to
+  *start*, not centre (the alignment spec's overflow fallback), which visibly pushed the Playlist
+  chip right of its own caption until a `translate(-50%, -50%)` replaced it.
+
+The icon is the one deliberate departure from node proportions: at chip scale an em-sized glyph
+lands at ~8.7px, and Fork/Random/Condition share one silhouette and are told apart by icon and
+accent alone. The swatch's own `font-size` puts it back at ~13px, into interior space the node
+spends on a detail line, a name and exit chips — none of which a chip has.
+
+The chip is a `<button>`, so it keeps keyboard activation, and `draggable="true"` on a `<button>`
+was verified to fire `dragstart` and round-trip its payload in **both Chromium and Firefox** (the
+historically doubtful case). Its payload is `game-orchestra.PaletteNode` + a node type — deliberately
+not a Foundry document type, since `_onDropExternal()` has to recognise it *before* the `fromUuid()`
+lookup a Playlist/PlaylistSound takes. `data-node-type` is what tells the two drag sources apart in
+`_onDragStartInternal()`; only the chip carries it.
 
 ### The Tracks pane is also the mixer
 
@@ -158,7 +199,7 @@ and read-only is read-only — there would be no way, anywhere in this window, t
 sound. It could only sit on the canvas failing `TrackNoSound` until deleted. `NODE_DEFAULTS.track`
 stays, since both sound-carrying routes still go through `_addNodeOfType('track', { soundId })`.
 
-### The Tracks rows are a drag source, and must be rebound
+### The Tracks rows (and the palette chips) are drag sources, and must be rebound
 
 `_renderTracks()` calls `_setupDragDrop()` after writing its `innerHTML`. This is not optional and
 not defensive: **confirmed live**, dragging a track onto the canvas worked exactly once and then

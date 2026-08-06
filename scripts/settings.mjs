@@ -155,7 +155,7 @@ export function registerSettings() {
   });
 
   // Transient duck state, written by the head GM whenever an additive layer starts or stops
-  // (MusicController#_syncLayer) and read by every client's mix application. A WORLD setting
+  // (MusicController#_syncLayers) and read by every client's mix application. A WORLD setting
   // rather than engine state precisely because it has to reach every client: the engine is
   // head-GM-only, but volume is applied per client from the document (CLAUDE.md rule 5), so a
   // duck known only to the GM would duck only the GM. Same shape of solution as activeMood /

@@ -61,7 +61,7 @@ J1 has three axes of its own, and they are the source of most of the sprawl:
 | Surface | J1 Bind | J2 Vocab | J3 Behavior | J4 Levels | J5 Perform |
 |---|---|---|---|---|---|
 | `GameOrchestraConfig` | **token only** (+ `exclusive`/`duck`) | | | | |
-| `PlaylistTreeApp` | **scene + world**, full or scoped | links out | links out | | status pills |
+| `PlaylistTreeApp` | **scene + world**, full or scoped (+ overlay `layer`/`duck`) | links out | links out | | status pills |
 | `OverlayConfigApp` | | **yes** | | | |
 | `MoodWidget` | | | | | **mood/phase + refresh** |
 | Scene controls | | | | | **suppression only** |
@@ -101,22 +101,29 @@ Verified against the templates:
 |---|---|---|
 | Playlist per scope/section/overlay | scene, token | scene, world default |
 | `initialTrack` | yes | yes |
-| **`priority`** | yes (`allowPriority`, `app.mjs:348`) | **was missing — now present, behind `Advanced`** |
+| **`priority`** | **removed** — see D8 | added behind `Advanced`, then **removed again** — see D8 |
 | **World default music** | **no** | yes, only here |
-| `exclusive` / `duck` | token grid only | n/a — correctly so |
+| `exclusive` / `duck` (combatant) | token grid only | n/a — correctly so |
+| `layer` / `duck` (mood/phase overlay) | n/a | **yes, behind `Advanced`** |
 
 So the window named *"manage playlist hierarchy across scenes and world defaults"* could not set a
-priority — the single most confusing part of the model — and the window that can set priority
-cannot reach the world default at all. A GM tuning a priority conflict had to open both.
+priority — the single most confusing part of the model — and the window that could set priority
+could not reach the world default at all. A GM tuning a priority conflict had to open both. That
+gap is closed by removing the field from both rather than adding it to both; see D8.
 
-> **`exclusive` and `duck` are not part of this gap.** They are read only through
+> **A combatant's `exclusive`/`duck` are not part of this gap.** They are read only through
 > `_getCombatantMusicSources()` — token → actor → prototype token — and mean nothing on a scene or
 > on the world default. The tree has no token scope at all, so putting them there would have
 > created two inert controls. They are correctly where they are; what the hub is missing is the
 > **token scope** itself — UX-3's job, and the remaining half of step 6.
+>
+> A mood/phase overlay's `layer`/`duck` are the mirror image: they exist only on scene and
+> world-default overlay rows, which is exactly the scope the tree owns, so they live there and
+> nowhere else. One mechanism (`architecture.md` § Layers), two scopes, each control in its own
+> scope's window — UX-1 holds because the *scopes* are disjoint, not because the feature is.
 
-**Status: priority ships in the tree, folded behind an `Advanced` disclosure** — and that
-demotion is a correction of the first attempt. See *Priority is not the interface* below.
+**Status: priority was demoted behind `Advanced`, then dropped from the tree entirely** when
+overlay layering took that slot. See *Priority is not the interface* below.
 
 ### D3 — Modality contradicts the workflow *(fixed)*
 
@@ -183,12 +190,31 @@ The correction, in three parts:
    in the contest are labelled — `transport.mjs#isBindingEligible` mirrors the two rules that run
    before priority, because calling a row "beaten" when it was never eligible teaches the wrong
    model.
-2. **Demote the knob.** Priority sits in a collapsed native `<details>` per box. The escape hatch
-   survives (a "silence" scene that must beat everything is real, if rare); every other GM stops
+2. **Demote the knob.** Priority sat in a collapsed native `<details>` per box. The escape hatch
+   survived (a "silence" scene that must beat everything is real, if rare); every other GM stopped
    paying for it.
 3. **Fix the seeding.** `helpers.mjs#sectionBaselinePriority` applies the scope baseline at
    *resolution* time. Nothing writes it into a flag any more, so a stored `priority` now means
    exactly one thing: someone deliberately overrode the hierarchy.
+
+**Then the demotion went all the way.** Demoting the knob still left it as *a knob* — the GM was
+still expected to reason about an absolute number, just after one extra click. When mood/phase
+overlays gained `layer`/`duck`, those controls wanted exactly the same slot, and only one of the
+two belonged there: layering changes *what a GM hears* and has no other home, while priority is an
+absolute number for a relative problem the section ordering already answers.
+
+**So no surface exposes a priority input any more** — not the tree, not `GameOrchestraConfig`'s
+scene form (`allowPriority` and its two `<input type="number">` fields are gone, as are the
+`GameOrchestra.Priority` / `…PriorityHint` strings in both locale files).
+
+**The concept is untouched.** `priority` is still a stored field, still read by
+`_extractSectionConfig` as `config.priority ?? basePriority`, still offset `+10` for an overlay,
+still cleared alongside its binding by `applyBindingPlaylist`, and `applyBindingPriority` /
+`coercePriority` are still the write-ops for it. Resolution behaves exactly as before. What went is
+the expectation that a **user** sets the number by hand: it is now resolution-internal, reachable
+by a macro or by future code, and explained to the GM through *"Currently overridden by …"* rather
+than through a field. If a real need for hand-editing resurfaces, it comes back as a *second* row
+inside the existing `Advanced` disclosure, not as its own surface.
 
 > **The principle this violated was UX-7.** It was cited in support of the original change — but a
 > raw input number is not the resolution, it is an input to it. UX-7 asks *"is this the one
@@ -218,7 +244,7 @@ of the five jobs.
                        ┌──────────────────────────────┐
    Settings ──one door─│  HUB — the Orchestra panel   │  J1: bind, all scopes,
                        │  (PlaylistTreeApp, renamed)  │      both sections, both axes,
-                       │                              │      priority · exclusive · duck
+                       │                              │      overlay layering + duck
                        └──────┬────────────────┬──────┘
        scoped popout ─────────┘                └───────── links out
    (Scene / Token sheet button:                     ┌─────────────┴─────────────┐
@@ -237,8 +263,9 @@ of the five jobs.
 
 ### The hub absorbs J1 entirely
 
-`PlaylistTreeApp` becomes the canonical binding surface and gains what only
-`GameOrchestraConfig` has today: **priority**, **exclusive**, and **duck**. Its interaction model
+`PlaylistTreeApp` becomes the canonical binding surface. It already owns **`layer`/`duck` for
+mood and phase overlays**; what it still lacks is a combatant's **`exclusive`/`duck`**, which needs
+the token scope it does not yet have. Its interaction model
 wins the merge — immediate writes through `data-change-action`, non-modal, drag-in from the
 sidebar, live `is-resolving` feedback. That model is also what Foundry v13+ sheets do.
 
@@ -477,10 +504,11 @@ off). Sharing a partial with the hub therefore needs one of:
 
 - a redundant `data-context-type` alongside `data-section` on every box — one attribute duplicated
   purely to satisfy two conventions, or
-- **deleting the vestigial scene layout first** — the tabbed form, `selectOverlay`, the
-  `allowPriority` fields and the whole `.playlist-section` scene contract. Scenes no longer route
-  here, so it is dead weight; but `game.gameOrchestra.GameOrchestraConfig` is public API a user
-  macro can still call with a Scene, so removing it is its own change with its own migration note.
+- **deleting the vestigial scene layout first** — the tabbed form, `selectOverlay`, and the whole
+  `.playlist-section` scene contract. Scenes no longer route here, so it is dead weight; but
+  `game.gameOrchestra.GameOrchestraConfig` is public API a user macro can still call with a Scene,
+  so removing it is its own change with its own migration note. (Its `allowPriority` fields are
+  already gone — D8.)
 
 The second is correct and should come first. It is a deletion, which is exactly the kind of change
 that wants a live Foundry to confirm nothing else reaches the removed path — none of this work has

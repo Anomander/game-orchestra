@@ -309,20 +309,29 @@ overwrite its `AudioEndWatcher` listener and orphan the first node forever (the 
 tripped the circuit breaker, see that field's comment).
 
 **That map is per-engine.** It is created in the constructor and never shared, so it offers no
-protection at all *across* engine trees. Since the additive layer runs on a second root engine
-(`_layerEngine`) beside the base one (`_customEngine`), two independent engines driving one
-playlist is now physically expressible — and both would adopt, restart and steal each other's
-listeners on the same sounds.
+protection at all *across* engine trees. Every additive layer runs on its own root engine (an entry
+in `_layers`) beside the base one (`_customEngine`), so two independent engines driving one playlist
+is physically expressible — and both would adopt, restart and steal each other's listeners on the
+same sounds.
 
-`_syncLayer()` therefore refuses a layer whose playlist is:
+`_layerWouldCollide()` therefore refuses a layer whose playlist is:
 
-- the base context's own playlist (`currentContext.playlist.id`), or
+- the base context's own playlist (`currentContext.playlist.id`),
 - anywhere in the base engine tree (`_customEngine.isPlayingPlaylist(id)` — the `_registry` Set,
-  which a Playlist node's child engines share **by reference**, so it covers nested targets).
+  which a Playlist node's child engines share **by reference**, so it covers nested targets), or
+- anywhere in **another layer's** tree. This third case only became reachable when mood/phase
+  overlays gained `layer`: before that there was exactly one layer and nothing for it to collide
+  with but the base.
 
 Refusing is the only safe outcome, and costs nothing musically: a playlist layered over itself
 was never going to sound like anything but a stuttering doubling. The log line names the playlist
-and points at the `Play exclusively` checkbox, which is what the user actually wanted in that case.
+and points at the control that makes it replace instead — `Play exclusively` for a combatant,
+unticking `Play as overlay` for a mood or phase.
+
+**`_syncLayers()` retires every outgoing layer before starting any incoming one**, for this rule
+rather than for tidiness: a playlist moving from one layer key to another (a phase overlay naming
+what the outgoing combatant was already playing) would otherwise be refused against a layer that
+was on its way out anyway, and simply not start.
 
 The head-GM rule (rule 5 in CLAUDE.md) covers the layer unchanged — it starts inside
 `playCurrentTrack()`, which has already returned on every non-head client.
@@ -421,6 +430,21 @@ repeated calls never leak callbacks between windows.
 
 > By contrast, the delegated `change` and `dragleave` listeners bind **once**, on the persistent
 > root element. The asymmetry is intentional; `app-mixins.mjs` documents it inline.
+
+**Corollary: no UI state may live only in the DOM.** Wholesale replacement destroys anything the
+markup was holding for itself, and it happens on *every* render — which in these windows means on
+every write, since each `data-change-action` handler re-renders.
+
+This bit a native `<details class="advanced-disclosure">`, whose open state a comment claimed
+"survives the window's frequent re-renders on its own." It did not, and nobody noticed while the
+only thing inside it was a number field. The moment a checkbox went in, ticking it slammed its own
+disclosure shut — the write re-rendered, the fresh `<details>` came back without `open`. Confirmed
+live.
+
+The fix is the same shape as `expandedSections`/`collapsedSections`: mirror the state on the
+instance (`openDisclosures`), render it back as an attribute, and record changes from a delegated
+listener. Note that **`toggle` does not bubble**, so that listener binds in the **capture** phase —
+and `removeEventListener` must repeat the `true`, or it silently leaves the listener attached.
 
 ## HR-E — Both locale files, always
 

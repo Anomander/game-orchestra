@@ -9,7 +9,8 @@ import {
   setSuppression,
   describeResolution,
   localizeResolutionSource,
-  isBindingEligible
+  isBindingEligible,
+  resolutionPills
 } from '../scripts/transport.mjs';
 import { CONST } from '../scripts/config.mjs';
 
@@ -185,5 +186,51 @@ describe('suppression controls', () => {
   it('does not throw when the settings write is rejected', async () => {
     game.settings.set.mockRejectedValueOnce(new Error('nope'));
     await expect(setSuppression(CONST.settings.suppressArea)).resolves.toBeUndefined();
+  });
+});
+
+describe('resolutionPills', () => {
+  const scene = { documentName: 'Scene', name: 'Cavern' };
+
+  beforeEach(() => {
+    setupFoundryMocks();
+    game.gameOrchestra = { musicController: { currentContext: null, currentLayerContexts: [] } };
+  });
+
+  it('returns no pills at all when nothing is playing', () => {
+    const pills = resolutionPills(scene);
+    expect(pills.active).toBeNull();
+    expect(pills.layers).toEqual([]);
+  });
+
+  it('emits one pill per layer - a combatant theme and an overlay layer are independent', () => {
+    game.gameOrchestra.musicController.currentLayerContexts = [
+      { playlist: { name: 'Boss Theme' }, contextEntity: { name: 'Ogre' }, isOverlay: false },
+      { playlist: { name: 'Rain' }, contextEntity: scene, isOverlay: true, overlayAxis: 'mood', overlayId: 'calm' }
+    ];
+    setMockSetting('game-orchestra', 'activeMood', 'calm');
+
+    const { layers } = resolutionPills(scene);
+    expect(layers).toHaveLength(2);
+    expect(layers[0].label).toContain('Boss Theme');
+    expect(layers[1].label).toContain('Rain');
+  });
+
+  it('names an overlay layer by its overlay, not by a bare document name', () => {
+    // "Scene Mood (calm)" says which row is responsible; the scene's own name does not.
+    game.gameOrchestra.musicController.currentLayerContexts = [
+      { playlist: { name: 'Rain' }, contextEntity: scene, isOverlay: true, overlayAxis: 'mood', overlayId: 'calm' }
+    ];
+    setMockSetting('game-orchestra', 'activeMood', 'calm');
+
+    expect(resolutionPills(scene).layers[0].label).toContain('ActiveAudioSceneMood');
+  });
+
+  it('keeps `layer` pointing at the first one, for a host with room for a single pill', () => {
+    game.gameOrchestra.musicController.currentLayerContexts = [
+      { playlist: { name: 'Boss Theme' }, contextEntity: { name: 'Ogre' }, isOverlay: false }
+    ];
+    const pills = resolutionPills(scene);
+    expect(pills.layer).toBe(pills.layers[0]);
   });
 });

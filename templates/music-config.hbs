@@ -128,13 +128,13 @@
           exactly what "exclusive" turns off. }}
       {{#unless combatExclusive}}
       <div class="duck-row flexrow">
-        <label for="game-orchestra-layer-duck">{{localize "GameOrchestra.TokenConfig.Duck"}}</label>
+        <label for="game-orchestra-layer-duck">{{localize "GameOrchestra.Layer.Duck"}}</label>
         <input type="range" id="game-orchestra-layer-duck" min="0" max="1" step="0.05"
                value="{{combatDuck}}" data-change-action="updateDuck"
                aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combatDuckPercent}}">
         <output class="duck-readout">{{combatDuckPercent}}%</output>
       </div>
-      <p class="hint">{{localize "GameOrchestra.TokenConfig.DuckHint"}}</p>
+      <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
       {{/unless}}
     </div>
     {{/if}}
@@ -204,18 +204,11 @@
               {{/if}}
             </div>
           </div>
-          {{#if section.allowPriority}}
-            <div class="form-group">
-              <label>{{localize "GameOrchestra.Priority"}}</label>
-              <div class="form-fields">
-                {{#if section.selectedOverlay}}
-                <input type="number" name="music.{{section.id}}.overlays.{{section.selectedOverlay}}.priority" value="{{section.data.priority}}" placeholder="0">
-                {{else}}
-                <input type="number" name="music.{{section.id}}.priority" value="{{section.data.priority}}" placeholder="0">
-                {{/if}}
-              </div>
-            </div>
-          {{/if}}
+          {{! No priority field. The number is resolution-internal (docs/wiki/ux.md D8): the
+              hierarchy this window already displays IS the priority, and an absolute value nobody
+              can set correctly without knowing every other value in the world was a second,
+              disagreeing encoding of it. Stored priorities are still honoured - nothing here
+              writes one. }}
         {{else}}
           <div class="form-group">
             <div class="form-fields">

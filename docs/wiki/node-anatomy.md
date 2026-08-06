@@ -167,6 +167,10 @@ An `until` Track has three facts. R1 splits them without a special case:
 ## Adding a node type: the checklist
 
 1. **Shape + icon** in `NODE_ICONS`/`NODE_LABELS` and a per-type CSS rule. Never encode config here.
+   The per-type rule must name **`.game-orchestra-node-swatch` alongside the canvas selector** — the
+   editor's palette chip is the same node drawn outside the canvas and shares those rules by name
+   (see [editor.md](editor.md) § *The palette chips are node previews*). Skip it and the new type's
+   chip renders as a grey default box.
 2. **Detail line** — add a case to `computeNodeDetail()`. Node-level facts only (R1); must fit (R2);
    reuse the notation table (R4); localize through the injected `localize` (the module is
    deliberately Foundry-free).

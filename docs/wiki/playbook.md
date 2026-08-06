@@ -48,8 +48,10 @@ the safety nets that apply, and how idle detection sees it.
 4. `graph-validation.mjs` — exit arity and any field rules. New message keys.
 5. `custom-playlist-node-render.mjs` — icon, label, detail line, size.
 6. `custom-playlist-inspector.mjs` — the properties form.
-7. `custom-playlist-editor.mjs` — `_CHANGE_ACTIONS` entries + static handlers; palette button.
-8. `styles/game-orchestra.css` — a shape. **Match the existing selector depth exactly** (HR-C).
+7. `custom-playlist-editor.mjs` — `_CHANGE_ACTIONS` entries + static handlers; `NODE_DEFAULTS` +
+   `NODE_PALETTE` entry (the chip reads its icon from `NODE_ICONS`, never a second list).
+8. `styles/game-orchestra.css` — a shape. **Match the existing selector depth exactly** (HR-C), and
+   name `.game-orchestra-node-swatch` in the same rules so the palette chip gets the shape too.
 9. Both lang files.
 10. Tests: engine behavior, bridge round-trip, validation, render.
 
@@ -101,6 +103,38 @@ Touch: `getAllCurrentPlaylists` / `filterPlaylists` / `excludeAreaWhenCombatAppl
 "simplify" it into a priority number. The overlay `+10` offset is what makes a mood/phase override
 win; a change to base priorities in `config.mjs` can silently invert that. And any new context
 source must be reachable from `reconcileRestoredPlayback()` if it can involve a custom playlist.
+
+## Recipe: add a new source of additive layers
+
+Read: [architecture.md](architecture.md) § *Layers*, [invariants.md](invariants.md) H15,
+`music-controller.mjs`.
+
+A layer is **not** a context in the winner pool — it has no priority, never competes, and cannot be
+beaten. Adding one is therefore not a change to resolution at all; it is a new entry in
+`_collectLayerContexts()`.
+
+1. **A factory that returns the context**, or null. `PlaylistContext.layerFromDocument` is the
+   model: build with `isLayer: true` and priority `0`, and carry `overlayId` when the layer's
+   settings live on an overlay entry rather than on the section.
+2. **A stable key** in `_collectLayerContexts()` (`combatant`, `overlay:area`, `overlay:combat`).
+   The key is what makes a layer replaceable in place — two sources sharing one key would evict
+   each other on every re-resolution, silently.
+3. **Whatever hides the layer's playlist from base resolution.** For an overlay entry that is
+   `_extractSectionConfig` skipping it, so the section's own base still resolves and there is
+   something to play *over*. Get this wrong and the same playlist both replaces the base and
+   layers over its own replacement.
+4. **`_resolveDuckFactor`** — say where this source's `duck` is stored. Section level and entry
+   level are both already in use.
+5. **`_collectLayerPlaylists()`** — every playlist the new source *could* pick, so
+   `reconcileRestoredPlayback()` can clean up sounds a previous session left marked as playing.
+   Walk every candidate, not just the live one: last session's state is unknowable from here.
+6. **A UI surface that shows it is playing.** A layer never wins the base resolution, so the
+   `is-resolving` badge can never light up for it (UX-7) — the tree's `layering-now` line and the
+   `resolutionPills()` layer pills are the pattern.
+
+**How this breaks:** H15 is the sharp edge — a layer whose playlist is already in the base tree, or
+in another layer's tree, must be **refused**, not started. Two engines on one `PlaylistSound` steal
+each other's `AudioEndWatcher` and orphan a node forever, with no error.
 
 ## Recipe: add an overlay axis
 

@@ -5,6 +5,7 @@ setupFoundryMocks();
 
 import { CustomPlaylistEditor } from '../scripts/custom-playlist-editor.mjs';
 import { createEmptyGraph } from '../scripts/custom-playback-schema.mjs';
+import { NODE_ICONS } from '../scripts/custom-playlist-node-render.mjs';
 
 /**
  * A minimal fake of Drawflow's public surface, enough to drive
@@ -1347,6 +1348,16 @@ describe('CustomPlaylistEditor', () => {
       const live = editor._drawflow.getNodeFromId(a);
       expect(live.outputs.output_1.connections).toEqual([]);
       expect(live.outputs.output_2.connections).toEqual([{ node: inserted.id, output: 'input_1' }]);
+    });
+
+    it('splices a palette chip in too - the drop target is the wire, whatever was dragged', async () => {
+      const { editor, a, b } = editorWithWiredPair();
+
+      await editor._onDropExternal(dropOnEdge({ type: 'game-orchestra.PaletteNode', nodeType: 'delay' }, a, b));
+
+      const inserted = editor.graph.nodes.find((n) => n.type === 'delay');
+      expect(inserted).toBeTruthy();
+      expect(wires(editor)).toEqual([`${a}->${inserted.id}`, `${inserted.id}->${b}`]);
     });
 
     it('a rejected drop leaves the edge untouched', async () => {
@@ -4675,6 +4686,61 @@ describe('CustomPlaylistEditor', () => {
       expect(editor._drawflow._nodes[nodeId].pos_y).toBeCloseTo((90 - 5) / 2 - 40);
       expect(trackNode).toBeTruthy();
     });
+
+    // A palette chip is the second drag source through this same handler pair. It carries no
+    // document, so it must be recognised BEFORE the fromUuid() path a Playlist/PlaylistSound
+    // takes - the chip has nothing to resolve, and awaiting anything would strand the drop.
+    describe('a palette chip dragged onto the canvas', () => {
+      it('_onDragStartInternal writes the node type, not a document payload', () => {
+        const editor = editorWithSound();
+        const setData = vi.fn();
+        const chip = { dataset: { nodeType: 'delay' } };
+        const event = { target: { closest: (sel) => (sel === '[data-vg-drag]' ? chip : null) }, dataTransfer: { setData } };
+
+        editor._onDragStartInternal(event);
+
+        expect(setData).toHaveBeenCalledWith('text/plain', JSON.stringify({ type: 'game-orchestra.PaletteNode', nodeType: 'delay' }));
+      });
+
+      it('creates that node type at the drop point, without resolving any document', async () => {
+        const editor = editorWithSound();
+        editor._drawflow.precanvas = { getBoundingClientRect: () => ({ left: 10, top: 5 }) };
+        global.fromUuid = vi.fn();
+
+        await editor._onDropExternal(dropEvent({ type: 'game-orchestra.PaletteNode', nodeType: 'delay' }));
+
+        const delayNode = editor.graph.nodes.find((n) => n.type === 'delay');
+        expect(delayNode).toBeTruthy();
+        expect(global.fromUuid).not.toHaveBeenCalled();
+        const live = editor._drawflow._nodes[delayNode.id];
+        expect(live.pos_x).toBeCloseTo(150 - 10 - 70); // zoom 1, per _pointFromEvent()
+        expect(live.pos_y).toBeCloseTo(90 - 5 - 40);
+      });
+
+      it('starts the node fully configured, exactly as the click route does', () => {
+        // Same _addNodeOfType() path as handleAddNode, so a dragged-in Delay arrives with its
+        // default 1-1s window and a name rather than as a blank node needing a visit to the
+        // inspector before it means anything.
+        const editor = editorWithSound();
+
+        return editor._onDropExternal(dropEvent({ type: 'game-orchestra.PaletteNode', nodeType: 'delay' })).then(() => {
+          const delayNode = editor.graph.nodes.find((n) => n.type === 'delay');
+          expect(delayNode.delay).toEqual({ min: 1, max: 1 });
+          expect(delayNode.label).toBe('Delay 1');
+        });
+      });
+
+      it('adds nothing for a node type that does not exist', async () => {
+        // The payload is attacker-shaped text off the drag, not something this window wrote -
+        // _addNodeOfType() answering null is what keeps a forged type from throwing here.
+        const editor = editorWithSound();
+        const before = editor.graph.nodes.length;
+
+        await editor._onDropExternal(dropEvent({ type: 'game-orchestra.PaletteNode', nodeType: 'not-a-node' }));
+
+        expect(editor.graph.nodes).toHaveLength(before);
+      });
+    });
   });
 
   // The canvas "+" affordance (_refreshExitAdder): adds an exit to a
@@ -4796,6 +4862,18 @@ describe('CustomPlaylistEditor', () => {
 
       expect(types).not.toContain('track');
       expect(types).toEqual(['start', 'playlist', 'fork', 'delay', 'random', 'condition', 'end']);
+    });
+
+    // Each chip is a miniature of the node it adds, so its glyph has to be the glyph that node
+    // will wear on the canvas - read from NODE_ICONS rather than a second list in the palette,
+    // which could drift and leave a chip advertising the wrong node type.
+    it('every entry carries the canvas icon for its own type', () => {
+      const editor = new CustomPlaylistEditor(createMockPlaylist('pl1', 'Playlist', []));
+
+      for (const entry of editor._prepareContext({}).palette) {
+        expect(entry.icon).toBe(NODE_ICONS[entry.type]);
+        expect(entry.icon).toBeTruthy();
+      }
     });
   });
 

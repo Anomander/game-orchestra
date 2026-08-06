@@ -225,6 +225,85 @@ describe('helpers.mjs', () => {
       expect(config.priority).toBe(17);
       expect(config.isOverlay).toBe(true);
     });
+
+    it('falls through to the base section when the active overlay is marked as a layer', () => {
+      // The whole mechanism behind an overlay layer: it plays ON TOP of the section rather than
+      // instead of it, so the section still has to resolve or there is nothing underneath.
+      const section = {
+        playlist: 'base-pl',
+        initialTrack: 'base-tr',
+        overlays: { calm: { playlist: 'rain-pl', layer: true } }
+      };
+      const config = PlaylistContext._extractSectionConfig(section, 'calm');
+      expect(config.playlistId).toBe('base-pl');
+      expect(config.trackId).toBe('base-tr');
+      expect(config.isOverlay).toBe(false);
+    });
+
+    it('resolves to nothing when a layering overlay is the section\'s only binding', () => {
+      const section = { overlays: { calm: { playlist: 'rain-pl', layer: true } } };
+      expect(PlaylistContext._extractSectionConfig(section, 'calm').playlistId).toBeNull();
+    });
+  });
+
+  describe('PlaylistContext.layerFromDocument', () => {
+    let scene, rainPl;
+
+    beforeEach(() => {
+      rainPl = createMockPlaylist('rainP', 'Rain', []);
+      game.playlists.get = vi.fn((id) => (id === 'rainP' ? rainPl : null));
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      scene = new MockDocument({
+        name: 'Scene',
+        id: 'sc1',
+        getFlag: vi.fn((mod, key) => (key === 'music.area'
+          ? { playlist: 'baseP', overlays: { calm: { playlist: 'rainP', initialTrack: 'rt1', layer: true } } }
+          : null))
+      });
+    });
+
+    it('builds a layer context from the active overlay, flagged as such', () => {
+      const ctx = PlaylistContext.layerFromDocument(scene, 'area', scene);
+      expect(ctx.playlist).toBe(rainPl);
+      expect(ctx.trackId).toBe('rt1');
+      expect(ctx.isLayer).toBe(true);
+      expect(ctx.isOverlay).toBe(true);
+      expect(ctx.overlayId).toBe('calm');
+    });
+
+    it('carries no priority - a layer never competes, so the number is never read', () => {
+      expect(PlaylistContext.layerFromDocument(scene, 'area', scene).priority).toBe(0);
+    });
+
+    it('returns null for an overlay that replaces rather than layers', () => {
+      scene.getFlag = vi.fn((mod, key) => (key === 'music.area'
+        ? { overlays: { calm: { playlist: 'rainP' } } }
+        : null));
+      expect(PlaylistContext.layerFromDocument(scene, 'area', scene)).toBeNull();
+    });
+
+    it('returns null when the live overlay id is a different one', () => {
+      setMockSetting('game-orchestra', 'activeMood', 'tense');
+      expect(PlaylistContext.layerFromDocument(scene, 'area', scene)).toBeNull();
+    });
+
+    it('returns null when the named playlist no longer exists', () => {
+      game.playlists.get = vi.fn(() => null);
+      expect(PlaylistContext.layerFromDocument(scene, 'area', scene)).toBeNull();
+    });
+
+    it('returns null for a document category this module does not configure', () => {
+      expect(PlaylistContext.layerFromDocument({ some: 'object' }, 'area')).toBeNull();
+      expect(PlaylistContext.layerFromDocument(null, 'area')).toBeNull();
+    });
+
+    it('reads the phase axis for a combat section, not the mood one', () => {
+      setMockSetting('game-orchestra', 'activePhase', 'enrage');
+      scene.getFlag = vi.fn((mod, key) => (key === 'music.combat'
+        ? { overlays: { enrage: { playlist: 'rainP', layer: true } } }
+        : null));
+      expect(PlaylistContext.layerFromDocument(scene, 'combat', scene)?.playlist).toBe(rainPl);
+    });
   });
 
   describe('PlaylistContext._resolveTracks', () => {

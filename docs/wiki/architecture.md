@@ -138,42 +138,82 @@ scope entity used for position memory.
 
 ### Layers
 
-**A combatant's theme layers by default; it only *replaces* the winner if it sets
-`music.combat.exclusive`.** A layer is not in the candidate pool at all — it has no priority, it
-never competes, and it cannot be beaten. `getCurrentLayerContext()` returns it and
-`_syncLayer()` runs it on a **second, independent `CustomPlaybackEngine`** alongside the base one,
-so the base is never stopped, never restarts, and has nothing to resume (which matters: position
-memory can't help a graph — H9).
+A **layer** plays *alongside* the winner instead of against it. It is not in the candidate pool at
+all — it has no priority, it never competes, and it cannot be beaten. Each one runs on its **own
+independent `CustomPlaybackEngine`** beside the base one, so the base is never stopped, never
+restarts, and has nothing to resume (which matters: position memory can't help a graph — H9).
 
-| | Exclusive (opt-in) | Layer (default) |
+There are **two sources of layers, and both can be live at once.** `_collectLayerContexts()`
+returns them keyed by which one asked, and `_syncLayers()` reconciles that map against
+`_layers` — so a combatant's theme swapping as the turn passes never disturbs a phase overlay
+layering over the same fight.
+
+| Key | Source | Opt-in | Section |
+|---|---|---|---|
+| `combatant` | The current combatant's theme (`getCombatantLayerContext()`) | **opt-*out*** — `music.combat.exclusive` makes it replace instead | `combat` |
+| `overlay:area` | A **mood** entry marked `layer` (`getOverlayLayerContexts()`) | opt-in — `music.area.overlays.<moodId>.layer` | `area` |
+| `overlay:combat` | A **phase** entry marked `layer` | opt-in — `music.combat.overlays.<phaseId>.layer` | `combat` |
+
+| | Replacing | Layering |
 |---|---|---|
 | In the candidate pool | yes | **no** |
 | Base music while it plays | stopped and crossfaded out | **untouched, still playing** |
-| Filtered by `combat.started` / `suppressCombat` | yes | yes |
+| Filtered by `combat.started` / `suppressCombat` / `suppressArea` | yes | yes |
 | Sorted by priority | yes | n/a |
-| Engine | `_customEngine` | `_layerEngine` |
+| Engine | `_customEngine` | its own entry in `_layers` |
+
+The two opt-in directions are opposite on purpose and it is the one confusing part of this: a
+combatant's theme has layered by default since before overlays could, and flipping that would
+silently change every configured token. A mood or phase overlay has always *replaced* its section
+default, and flipping **that** would silently change every configured scene.
+
+#### Overlay layers
+
+**`PlaylistContext.fromDocument` skips a layering overlay entirely**, so the section's own base
+config resolves as if the overlay weren't there — that base is precisely what the layer then plays
+over. `PlaylistContext.layerFromDocument` is the separate factory that builds the layer context.
+Get this backwards and the overlay both replaces the base *and* layers over its own replacement.
+
+Scope is a **fallback chain, not a contest**: the active scene first, then the world default, and
+the first one whose live overlay is marked `layer` supplies that section's layer. Two scopes
+layering one section at once would be two streams over one base for a single mood. Only those two
+scopes are consulted — a token's combat section already has its own layering mechanism, and no
+surface writes `layer` on a token overlay.
+
+An **area** layer is additionally dropped once combat music has won the base resolution: moods are
+the area axis, and leaving an ambience layer running over a boss fight is not what "an overlay over
+the base area music" means.
+
+#### Shared mechanics
 
 `exclusive` is stored once per **section** (`music.combat.exclusive`), never per phase overlay —
 one flag governs whichever playlist the section resolves to for any phase. Absent means false, so
-an override configured before layering existed layers.
+an override configured before layering existed layers. `layer` is the opposite: it is stored per
+**overlay entry**, because each mood or phase independently decides whether it replaces or joins.
 
-A layer target may be a plain native playlist, so `_syncLayer()` passes an explicit
+A layer target may be a plain native playlist, so `_syncLayers()` passes an explicit
 `buildNativeModeGraph()` result to the engine — its own fallback for a playlist with no stored
 graph is an *empty* graph, which starts and goes idle in silence. Same pairing `_runPlaylistPass()`
 uses for a Playlist node's target.
 
-The layer is refused outright if its playlist is the base's, or is anywhere in the base engine
-tree (H15).
+A layer is refused outright if its playlist is the base's, is anywhere in the base engine tree, or
+is already running as *another* layer (H15).
 
-**Ducking.** `music.combat.duck` (section level, same as `exclusive`) is the multiplier
-*everything else* is taken to while the layer plays — 1/absent means no ducking, and it is stored
-and rendered exactly like the mixer's `gain`. It is published as the `activeDuck` **world
-setting** rather than held on the controller, because the engine is head-GM-only but volume is
-applied per client (rule 5) — a duck in memory would duck the GM and nobody else. Every client's
-`mixedVolume()` multiplies by `duckFactorFor(playlist)`; the setting's `onChange` calls
-`reassertDuck()`, which re-levels every playing sound gliding over the layer's crossfade value.
-The layer's **whole engine registry** is exempt, not just its root playlist, so a layer graph
-reaching another playlist through a Playlist node doesn't duck its own nested audio. See
+**Ducking.** `duck` is the multiplier *everything else* is taken to while a layer plays —
+1/absent means no ducking, and it is stored and rendered exactly like the mixer's `gain`. It is read
+at the level the flag lives at: **section** level for a combatant (`music.combat.duck`, same as
+`exclusive`), **entry** level for an overlay layer (`music.<section>.overlays.<id>.duck`).
+
+It is published as the `activeDuck` **world setting** rather than held on the controller, because
+the engine is head-GM-only but volume is applied per client (rule 5) — a duck in memory would duck
+the GM and nobody else. Every client's `mixedVolume()` multiplies by `duckFactorFor(playlist)`; the
+setting's `onChange` calls `reassertDuck()`, which re-levels every playing sound gliding over the
+layer's crossfade value.
+
+With several layers running, **the deepest duck wins and every layer's whole engine registry is
+exempt** — not just each root playlist, so a layer graph reaching another playlist through a
+Playlist node doesn't duck its own nested audio, and no layer ever ducks another. Taking the
+shallowest instead would let one layer quietly undo the dip another asked for. See
 [mixer.md](mixer.md) for where the duck sits in the volume chain.
 
 ### Turn scoping
@@ -221,6 +261,10 @@ to migrate around, so the asymmetric shape was never built). When the section's 
 overlay has a config with a playlist, that config replaces the section's base config **and gets a
 +10 priority offset** — this is how a mood- or phase-specific playlist outranks the same section's
 default without any explicit priority juggling.
+
+An overlay entry is `{ playlist, initialTrack, priority, layer?, duck? }`. **`layer: true` opts out
+of the replacement above**: the section resolves to its own base config as if the overlay weren't
+there, and the overlay plays over it instead — see § *Layers*.
 
 Baseline priorities live in `config.mjs`: scene area `-20`, scene combat `-15`, token combat
 `+20`.
@@ -351,7 +395,7 @@ Custom playlists never participate (H9).
 | Window | Entry point | Notes |
 |---|---|---|
 | `GameOrchestraConfig` | Scene Config button, Token Config (Identity tab) | Per-document area (mood) + combat (phase) overrides. Token documents only ever show a combat/phase grid — see `isTokenPhaseGrid` |
-| `PlaylistTreeApp` | Settings menu (the module's **one** menu door), keybinding (`Alt+O`), scene control, Mood Widget | Every scene's assignments in one tree, mood and phase rows both, plus per-entry priority |
+| `PlaylistTreeApp` | Settings menu (the module's **one** menu door), keybinding (`Alt+O`), scene control, Mood Widget | Every scene's assignments in one tree, mood and phase rows both, plus each overlay row's `layer`/`duck` behind `Advanced` |
 | `OverlayConfigApp` | Playlist tree footer | World mood **and** phase definitions — one window, two tabs. `MoodConfigApp`/`PhaseConfigApp` (`mood-config.mjs`) are doors that share its `id` and only pick the opening tab |
 | `MoodWidget` | Scene control, keybinding | Dockable switcher: moods when idle, phases once `game.combat?.started`. Shows **only** the active axis — the inactive one is not rendered at all, not even dimmed |
 | `CustomPlaylistEditor` | Playlist Config button, playlist directory context menu, tree, mood widget | The graph editor — see [editor.md](editor.md). Never mode-gated: saving forces `UNSEQUENCED` itself |

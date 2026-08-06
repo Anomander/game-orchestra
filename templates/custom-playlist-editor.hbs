@@ -14,7 +14,14 @@
         <section class="game-orchestra-pane game-orchestra-collapsed" data-pane="palette">
           <button type="button" class="game-orchestra-pane-header" data-action="togglePane" data-pane="palette"
                   aria-expanded="false" aria-controls="game-orchestra-pane-body-palette">
-            <i class="fas fa-caret-right game-orchestra-pane-caret"></i>
+            <!-- fa-caret-DOWN on every pane, whatever that pane's starting state is. The glyph is
+                 the EXPANDED state and nothing ever rewrites it: the collapsed state is drawn by
+                 rotating it -90deg in CSS (.game-orchestra-collapsed .game-orchestra-pane-caret), and
+                 _applyPaneCollapsed() toggles only that class. A pane that shipped fa-caret-right
+                 here because it starts collapsed got that rotation applied on top of a glyph
+                 already pointing right, and rendered pointing UP - reported live, and it was
+                 wrong in both states, just less obviously so when expanded. -->
+            <i class="fas fa-caret-down game-orchestra-pane-caret"></i>
             <span>{{localize "GameOrchestra.CustomEditor.Pane.Palette"}}</span>
           </button>
           <div class="game-orchestra-pane-body" id="game-orchestra-pane-body-palette">
@@ -30,10 +37,31 @@
               </option>
               {{/each}}
             </select>
+            <!-- Each entry is a miniature of the node it adds, and carries BOTH gestures: click to
+                 add at the canvas centre (data-action), or drag it to the canvas to place it where
+                 you drop it - and onto a wire to splice it into that wire, exactly like a Tracks
+                 row. data-vg-drag is the same selector the Tracks rows use, so both sources bind
+                 through the one DragDrop config (see _onDragStartInternal); data-node-type is what
+                 tells the two payloads apart there.
+
+                 draggable="true" is written out even though DragDrop#bind() sets it: the binding
+                 runs on render, and the attribute is what makes the chip look grabbable to the
+                 browser if that binding is ever missed.
+
+                 The swatch's markup mirrors a canvas node's own (a shape element wrapping
+                 .game-orchestra-node-content) because it SHARES that node's CSS rules by name -
+                 see the .game-orchestra-node-swatch block in game-orchestra.css. -->
             <div class="game-orchestra-palette-list">
               {{#each palette}}
-              <button type="button" data-action="addNode" data-node-type="{{this.type}}" title="{{localize this.label}}">
-                <i class="fas fa-plus"></i> {{localize this.label}}
+              <button type="button" class="game-orchestra-palette-item" draggable="true" data-vg-drag
+                      data-action="addNode" data-node-type="{{this.type}}"
+                      title="{{localize 'GameOrchestra.CustomEditor.Palette.ItemHint' label=(localize this.label)}}">
+                <span class="game-orchestra-palette-swatch" aria-hidden="true">
+                  <span class="game-orchestra-node-swatch game-orchestra-node-{{this.type}}">
+                    <span class="game-orchestra-node-content"><i class="fas {{this.icon}} game-orchestra-node-icon"></i></span>
+                  </span>
+                </span>
+                <span class="game-orchestra-palette-label">{{localize this.label}}</span>
               </button>
               {{/each}}
             </div>
@@ -55,7 +83,8 @@
         <section class="game-orchestra-pane game-orchestra-collapsed" data-pane="tracks">
           <button type="button" class="game-orchestra-pane-header" data-action="togglePane" data-pane="tracks"
                   aria-expanded="false" aria-controls="game-orchestra-pane-body-tracks">
-            <i class="fas fa-caret-right game-orchestra-pane-caret"></i>
+            <!-- fa-caret-down even though this pane starts collapsed - see the palette header. -->
+            <i class="fas fa-caret-down game-orchestra-pane-caret"></i>
             <span>{{localize "GameOrchestra.CustomEditor.Pane.Tracks"}}</span>
           </button>
           <!-- Populated exclusively via CustomPlaylistEditor#_renderTracks(), which renders the

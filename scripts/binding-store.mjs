@@ -165,8 +165,12 @@ export async function applyBindingPlaylist(store, path, playlistId, trackIdOverr
  * Deliberately different from `applyBindingPlaylist(store, path, null)`, which is
  * what a *section*-level clear uses: a section also carries `exclusive` and `duck`
  * (architecture.md § Layers), and those must survive having the playlist cleared.
- * An overlay carries nothing worth keeping once its playlist is gone, so removing
- * the entry avoids leaving an empty `{}` behind for every overlay ever assigned.
+ *
+ * An overlay entry carries `layer` and `duck` of its own, and those must **not** survive:
+ * a cleared entry that kept `layer: true` would silently start layering again the next time
+ * a playlist was picked for it, for a reason nothing on screen explains - exactly the failure
+ * mode that made `applyBindingPlaylist` clear `priority`. Removing the whole entry also avoids
+ * leaving an empty `{}` behind for every overlay ever assigned.
  * @param {BindingStore} store
  * @param {'area'|'combat'} section
  * @param {string} overlayId
@@ -190,7 +194,50 @@ export async function applyBindingTrack(store, path, trackId) {
 }
 
 /**
+ * Set (or clear) whether an overlay binding plays as an additive **layer** over its own
+ * section's base music, instead of replacing it (architecture.md § Layers).
+ *
+ * `false` UNSETS rather than storing `false`: replacing is the default and the absent value, so
+ * writing the negative would leave every overlay anyone ever toggled carrying a field that means
+ * exactly what its absence already meant. Clearing `duck` alongside it keeps a stale attenuation
+ * from being silently re-applied if the entry is later made a layer again - the same reasoning
+ * that has `applyBindingPlaylist` clear `priority`.
+ * @param {BindingStore} store
+ * @param {string} path - From {@link bindingPath}, overlay-scoped
+ * @param {boolean} layer
+ * @returns {Promise<void>}
+ */
+export async function applyBindingLayer(store, path, layer) {
+  return layer
+    ? store.apply({ set: { [`${path}.layer`]: true } })
+    : store.apply({ unset: [`${path}.layer`, `${path}.duck`] });
+}
+
+/**
+ * Set (or clear) how far a layer binding attenuates everything that is not itself while it plays.
+ *
+ * Stored as the resulting MULTIPLIER in [0, 1] (1 = untouched), matching the mixer's `gain` field.
+ * A factor of 1 removes the key rather than storing it, so "no ducking" stays the absent-value
+ * default - the same shape `GameOrchestraConfig` uses for a token's section-level duck.
+ * @param {BindingStore} store
+ * @param {string} path - From {@link bindingPath}
+ * @param {number} duck
+ * @returns {Promise<void>}
+ */
+export async function applyBindingDuck(store, path, duck) {
+  return duck < 1
+    ? store.apply({ set: { [`${path}.duck`]: duck } })
+    : store.apply({ unset: [`${path}.duck`] });
+}
+
+/**
  * Set (or clear) a binding's priority override.
+ *
+ * **No UI writes this any more.** Priority is resolution-internal (docs/wiki/ux.md D8): the field
+ * is still stored, still read by `_extractSectionConfig`, still offset `+10` for an overlay, and
+ * still cleared alongside its binding by {@link applyBindingPlaylist} - the GM just never types
+ * the number. This stays the canonical write-op for it, for a macro or for future code that needs
+ * to set one; do not delete it as "unused" without also deciding the field itself is going.
  *
  * A null value UNSETS rather than writing 0 - those are different states to
  * resolution. `helpers.mjs#_extractSectionConfig` reads

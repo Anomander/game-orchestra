@@ -16,10 +16,11 @@
 /**
  * Resolve and invoke the static handler registered for a delegated `change`
  * event's `data-change-action`, mirrored across all three apps. Matches on
- * `dataset.changeAction` alone (not element tag) since CustomPlaylistEditor's
- * inspector puts this attribute on checkboxes and text/number inputs, not
- * just `<select>` - app.mjs/playlist-tree.mjs's templates only ever put it on
- * `<select>`, so dropping that extra tag check changes nothing for them.
+ * `dataset.changeAction` alone (not element tag): CustomPlaylistEditor's inspector
+ * puts this attribute on checkboxes and text/number inputs, playlist-tree.hbs puts
+ * it on the overlay layer checkbox and duck slider, and music-config.hbs on the
+ * token's exclusive checkbox and duck slider - a `<select>`-only tag check would
+ * silently ignore every one of them.
  * @param {object} instance - The app instance dispatching (becomes `this` inside the handler).
  * @param {Event} event - The `change` event.
  */
@@ -44,6 +45,21 @@ export function dispatchChangeAction(instance, event) {
 export function GameOrchestraAppMixin(Base) {
   return class extends Base {
     /**
+     * Keys of the `<details data-disclosure-key>` blocks the user has opened.
+     *
+     * A native `<details>` holds its open state in the DOM and nowhere else, and
+     * HandlebarsApplicationMixin replaces a part's DOM **wholesale** on every render (the same
+     * property HR-D is about). So a control *inside* a disclosure closes the disclosure the
+     * instant it writes, because writing re-renders - confirmed live with the tree's
+     * `Play as overlay` checkbox, which slammed its own Advanced block shut on every click.
+     *
+     * Mirroring the open state here and rendering `open` from it is what makes the block survive.
+     * A class field rather than a constructor line so neither consuming class has to remember it.
+     * @type {Set<string>}
+     */
+    openDisclosures = new Set();
+
+    /**
      * Helper to evaluate if a section or card is collapsed
      * @param {string} key - Section or card identifier key
      * @param {boolean} hasOverride - Whether the item has active overrides configured
@@ -65,6 +81,21 @@ export function GameOrchestraAppMixin(Base) {
       dispatchChangeAction(this, event);
     }
 
+    /**
+     * Record a `<details>` opening or closing, so the next render can restore it.
+     *
+     * Deliberately does NOT re-render: the DOM already shows what the user just did, and
+     * re-rendering here would replace the very element they clicked mid-interaction.
+     * @param {Event} event - The `toggle` event; its target is the `<details>`.
+     * @private
+     */
+    _onDisclosureToggle(event) {
+      const key = event.target?.dataset?.disclosureKey;
+      if (!key) return;
+      if (event.target.open) this.openDisclosures.add(key);
+      else this.openDisclosures.delete(key);
+    }
+
     /** @override */
     _onRender(context, options) {
       super._onRender(context, options);
@@ -77,6 +108,15 @@ export function GameOrchestraAppMixin(Base) {
         this._onDragLeaveHandler = (event) => this._onDragLeaveExternal(event);
         this.element.addEventListener('dragleave', this._onDragLeaveHandler);
         this._dragLeaveListenerBound = true;
+      }
+      // CAPTURE phase, and that is not a style choice: `toggle` is one of the few DOM events
+      // that does NOT bubble, so a delegated listener on the root element never sees it during
+      // the bubble phase. Capturing listeners still fire on ancestors for non-bubbling events.
+      // Bound once like the two above - it is delegated, so it survives the part being replaced.
+      if (this.element && !this._disclosureListenerBound) {
+        this._onDisclosureToggleHandler = (event) => this._onDisclosureToggle(event);
+        this.element.addEventListener('toggle', this._onDisclosureToggleHandler, true);
+        this._disclosureListenerBound = true;
       }
       // Rebind on every render, deliberately not guarded like the two blocks
       // above: `change`/`dragleave` are delegated listeners on the persistent
@@ -108,6 +148,12 @@ export function GameOrchestraAppMixin(Base) {
         this.element.removeEventListener('dragleave', this._onDragLeaveHandler);
       }
       this._dragLeaveListenerBound = false;
+      if (this.element && this._onDisclosureToggleHandler) {
+        // The `true` has to match the addEventListener above: capture is part of the listener's
+        // identity, so removing without it silently leaves the listener attached.
+        this.element.removeEventListener('toggle', this._onDisclosureToggleHandler, true);
+      }
+      this._disclosureListenerBound = false;
     }
   };
 }

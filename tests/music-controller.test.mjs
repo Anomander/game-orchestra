@@ -195,13 +195,16 @@ describe('MusicController', () => {
       return combatant;
     }
 
+    /** The engine running under one layer key; layers are keyed by what asked for them. */
+    const layerEngine = (key = 'combatant') => controller._layers.get(key)?.engine ?? null;
+
     it('keeps a layering combatant out of the winner pool and exposes it as the layer', () => {
       const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
       combatWith(combatSource({ playlist: 'bossP', priority: 20 }));
 
       expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).not.toContain(bossPl);
-      expect(controller.getCurrentLayerContext()?.playlist).toBe(bossPl);
+      expect(controller.getCombatantLayerContext()?.playlist).toBe(bossPl);
     });
 
     it('puts an exclusive combatant in the winner pool and produces no layer', () => {
@@ -210,7 +213,7 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP', priority: 20, exclusive: true }));
 
       expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).toContain(bossPl);
-      expect(controller.getCurrentLayerContext()).toBeNull();
+      expect(controller.getCombatantLayerContext()).toBeNull();
     });
 
     it('suppresses the layer under the same rules as any combat context', () => {
@@ -219,11 +222,11 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP' }));
 
       setMockSetting('game-orchestra', 'suppressCombat', true);
-      expect(controller.getCurrentLayerContext()).toBeNull();
+      expect(controller.getCombatantLayerContext()).toBeNull();
 
       setMockSetting('game-orchestra', 'suppressCombat', false);
       game.combats.active.started = false;
-      expect(controller.getCurrentLayerContext()).toBeNull();
+      expect(controller.getCombatantLayerContext()).toBeNull();
     });
 
     it('starts the layer on a second engine, over a graph synthesized from a native playlist', async () => {
@@ -232,14 +235,14 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP' }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
 
-      await controller._syncLayer();
+      await controller._syncLayers();
 
-      expect(controller._layerEngine).not.toBeNull();
-      expect(controller._layerEngine.playlist).toBe(bossPl);
-      expect(controller._layerEngine.start).toHaveBeenCalled();
+      expect(layerEngine()).not.toBeNull();
+      expect(layerEngine().playlist).toBe(bossPl);
+      expect(layerEngine().start).toHaveBeenCalled();
       // The empty-graph default would start and go idle in silence - a native layer target has
       // no stored graph, so one has to be synthesized for it.
-      expect(controller._layerEngine.graph.nodes.length).toBeGreaterThan(0);
+      expect(layerEngine().graph.nodes.length).toBeGreaterThan(0);
       // The base engine is untouched: a layer is additive, never a transition.
       expect(controller._customEngine).toBeNull();
     });
@@ -250,9 +253,9 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'sharedP' }));
       controller.currentContext = { playlist: sharedPl };
 
-      await controller._syncLayer();
+      await controller._syncLayers();
 
-      expect(controller._layerEngine).toBeNull();
+      expect(layerEngine()).toBeNull();
     });
 
     it('refuses to layer a playlist already in flight inside the base engine tree', async () => {
@@ -262,9 +265,9 @@ describe('MusicController', () => {
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
       controller._customEngine = { isRunning: true, isPlayingPlaylist: vi.fn(() => true) };
 
-      await controller._syncLayer();
+      await controller._syncLayers();
 
-      expect(controller._layerEngine).toBeNull();
+      expect(layerEngine()).toBeNull();
     });
 
     it('leaves a layer that resolved to the same playlist running rather than restarting it', async () => {
@@ -273,11 +276,11 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP' }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
 
-      await controller._syncLayer();
-      const first = controller._layerEngine;
-      await controller._syncLayer();
+      await controller._syncLayers();
+      const first = layerEngine();
+      await controller._syncLayers();
 
-      expect(controller._layerEngine).toBe(first);
+      expect(layerEngine()).toBe(first);
       expect(first.stop).not.toHaveBeenCalled();
       expect(first.start).toHaveBeenCalledTimes(1);
     });
@@ -289,18 +292,18 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP' }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
 
-      await controller._syncLayer();
-      const engine = controller._layerEngine;
+      await controller._syncLayers();
+      const engine = layerEngine();
       const layerSound = createMockSound('b1', 'Horns', { playing: true });
       engine.activeSounds = [layerSound];
 
       // Turn passes to a combatant with nothing configured.
       combatWith(combatSource({}));
-      await controller._syncLayer();
+      await controller._syncLayers();
 
       expect(engine.stop).toHaveBeenCalledWith({ stopAudio: false });
       expect(layerSound.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
-      expect(controller._layerEngine).toBeNull();
+      expect(layerEngine()).toBeNull();
       expect(controller.currentLayerContext).toBeNull();
     });
 
@@ -310,25 +313,29 @@ describe('MusicController', () => {
       combatWith(combatSource({ playlist: 'bossP', duck: 0.3 }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
 
-      await controller._syncLayer();
+      await controller._syncLayers();
       // Stand in for a Playlist node inside the layer graph having entered a nested target.
-      controller._layerEngine._registry = new Set(['bossP', 'nestedP']);
-      await controller._syncLayer();
+      layerEngine()._registry = new Set(['bossP', 'nestedP']);
+      await controller._syncLayers();
 
       const stored = game.settings.get('game-orchestra', 'activeDuck');
       expect(stored.factor).toBe(0.3);
       expect(stored.exemptPlaylistIds).toEqual(['bossP', 'nestedP']);
     });
 
-    it('publishes nothing when the layer asks for no ducking', async () => {
+    it('writes nothing at all when the layer asks for no ducking', async () => {
       const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
       combatWith(combatSource({ playlist: 'bossP' }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
 
-      await controller._syncLayer();
+      await controller._syncLayers();
 
-      expect(game.settings.get('game-orchestra', 'activeDuck')).toEqual({});
+      // Not merely "stores an empty object": a settings write is broadcast to every client and
+      // its onChange re-glides audio that is already at the right level. With no duck asked for
+      // and none applied, there is nothing to say.
+      expect(game.settings.set.mock.calls.filter((c) => c[1] === 'activeDuck')).toHaveLength(0);
+      expect(game.settings.get('game-orchestra', 'activeDuck') ?? {}).toEqual({});
     });
 
     it('lifts the duck when the layer is retired', async () => {
@@ -336,10 +343,10 @@ describe('MusicController', () => {
       game.playlists.get = vi.fn((id) => (id === 'bossP' ? bossPl : null));
       combatWith(combatSource({ playlist: 'bossP', duck: 0.3 }));
       controller.currentContext = { playlist: createMockPlaylist('baseP', 'Base', []) };
-      await controller._syncLayer();
+      await controller._syncLayers();
 
       combatWith(combatSource({}));
-      await controller._syncLayer();
+      await controller._syncLayers();
 
       expect(game.settings.get('game-orchestra', 'activeDuck')).toEqual({});
     });
@@ -360,7 +367,7 @@ describe('MusicController', () => {
       game.playlists.playing = [createMockPlaylist('mixedP', 'Playing', [layerSound, baseSound])];
       controller._managedSoundIds.add('layer1');
       controller._managedSoundIds.add('old1');
-      controller._layerEngine = { isRunning: true, activeSounds: [layerSound] };
+      controller._layers.set('combatant', { engine: { isRunning: true, activeSounds: [layerSound] }, context: {} });
 
       const newSound = createMockSound('new1', 'New Track');
       vi.spyOn(controller, 'playTrack').mockResolvedValue();
@@ -373,6 +380,214 @@ describe('MusicController', () => {
       expect(baseSound.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
       expect(layerSound.sound.fade).not.toHaveBeenCalled();
       expect(layerSound.playing).toBe(true);
+    });
+  });
+
+  describe('overlay layers (a mood or phase playing over its section default)', () => {
+    let basePl, overlayPl;
+
+    /** A scene whose `music.<section>` flag is exactly `section`. */
+    function sceneWith(sections) {
+      const scene = new MockDocument({
+        name: 'Test Scene',
+        id: 'sc1',
+        getFlag: vi.fn((mod, key) => {
+          if (key === 'music.area') return sections.area ?? null;
+          if (key === 'music.combat') return sections.combat ?? null;
+          return null;
+        })
+      });
+      game.scenes.active = scene;
+      return scene;
+    }
+
+    const layerEngine = (key) => controller._layers.get(key)?.engine ?? null;
+
+    beforeEach(() => {
+      basePl = createMockPlaylist('baseP', 'Scene Ambience', []);
+      overlayPl = createMockPlaylist('overlayP', 'Rain', []);
+      const map = { baseP: basePl, overlayP: overlayPl };
+      game.playlists.get = vi.fn((id) => map[id] || null);
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      setMockSetting('game-orchestra', 'activePhase', 'p1');
+    });
+
+    it('leaves the section default resolving instead of being replaced, and layers the overlay', () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+
+      const winners = controller.getAllCurrentPlaylists();
+      // The whole mechanism: without the `layer` skip in _extractSectionConfig the overlay would
+      // replace the base here and there would be nothing left for it to play over.
+      expect(winners.map((c) => c.playlist)).toEqual([basePl]);
+      expect(winners[0].isOverlay).toBe(false);
+
+      const layers = controller.getOverlayLayerContexts();
+      expect(layers).toHaveLength(1);
+      expect(layers[0].playlist).toBe(overlayPl);
+      expect(layers[0].isLayer).toBe(true);
+      expect(layers[0].overlayId).toBe('calm');
+    });
+
+    it('still replaces the section default when the overlay is not marked as a layer', () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP' } } } });
+
+      expect(controller.getAllCurrentPlaylists().map((c) => c.playlist)).toEqual([overlayPl]);
+      expect(controller.getOverlayLayerContexts()).toEqual([]);
+    });
+
+    it('ignores an overlay on an id that is not the live one for its axis', () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { tense: { playlist: 'overlayP', layer: true } } } });
+
+      expect(controller.getOverlayLayerContexts()).toEqual([]);
+    });
+
+    it('takes the scene over the world default rather than layering both', () => {
+      const globalPl = createMockPlaylist('globalP', 'Global Rain', []);
+      game.playlists.get = vi.fn((id) => ({ baseP: basePl, overlayP: overlayPl, globalP: globalPl })[id] || null);
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      setMockSetting('game-orchestra', 'defaultMusic', {
+        documentName: 'DefaultMusic',
+        data: { 'game-orchestra': { music: { area: { overlays: { calm: { playlist: 'globalP', layer: true } } } } } }
+      });
+
+      // Scope is a fallback chain, not a contest - two scopes layering one section at once
+      // would be two streams over one base for a single mood.
+      const layers = controller.getOverlayLayerContexts();
+      expect(layers.map((c) => c.playlist)).toEqual([overlayPl]);
+    });
+
+    it('falls back to the world default when the scene marks no layer of its own', () => {
+      const globalPl = createMockPlaylist('globalP', 'Global Rain', []);
+      game.playlists.get = vi.fn((id) => ({ baseP: basePl, globalP: globalPl })[id] || null);
+      sceneWith({ area: { playlist: 'baseP' } });
+      setMockSetting('game-orchestra', 'defaultMusic', {
+        documentName: 'DefaultMusic',
+        data: { 'game-orchestra': { music: { area: { overlays: { calm: { playlist: 'globalP', layer: true } } } } } }
+      });
+
+      expect(controller.getOverlayLayerContexts().map((c) => c.playlist)).toEqual([globalPl]);
+    });
+
+    it('suppresses an overlay layer under the same rules as any context of its section', () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+
+      setMockSetting('game-orchestra', 'suppressArea', true);
+      expect(controller.getOverlayLayerContexts()).toEqual([]);
+    });
+
+    it('drops an area layer once combat music has won the base resolution', () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+
+      expect(controller.getOverlayLayerContexts()).toHaveLength(1);
+      // Moods are the area axis: an ambience layer left running over a boss fight is not what
+      // "an overlay over the base area music" means.
+      controller.currentContext = { context: 'combat', playlist: basePl };
+      expect(controller.getOverlayLayerContexts()).toEqual([]);
+    });
+
+    it('requires combat to have started before a phase layer applies', () => {
+      sceneWith({ combat: { playlist: 'baseP', overlays: { p1: { playlist: 'overlayP', layer: true } } } });
+
+      game.combats = { active: { started: false } };
+      expect(controller.getOverlayLayerContexts()).toEqual([]);
+
+      game.combats = { active: { started: true, combatant: null, combatants: [] } };
+      expect(controller.getOverlayLayerContexts().map((c) => c.playlist)).toEqual([overlayPl]);
+    });
+
+    it('runs the overlay layer on its own engine, keyed by section', async () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+
+      await controller._syncLayers();
+
+      expect(layerEngine('overlay:area')?.playlist).toBe(overlayPl);
+      expect(layerEngine('overlay:area').start).toHaveBeenCalled();
+      // A native layer target has no stored graph, so one has to be synthesized - the engine's
+      // own empty-graph default would start and go idle in silence.
+      expect(layerEngine('overlay:area').graph.nodes.length).toBeGreaterThan(0);
+      expect(controller._customEngine).toBeNull();
+    });
+
+    it('reads the duck off the overlay entry, not the section', async () => {
+      sceneWith({
+        area: {
+          playlist: 'baseP',
+          duck: 0.9,
+          overlays: { calm: { playlist: 'overlayP', layer: true, duck: 0.25 } }
+        }
+      });
+      controller.currentContext = { context: 'area', playlist: basePl };
+
+      await controller._syncLayers();
+
+      const stored = game.settings.get('game-orchestra', 'activeDuck');
+      expect(stored.factor).toBe(0.25);
+      expect(stored.exemptPlaylistIds).toEqual(['overlayP']);
+    });
+
+    it('runs a combatant layer and an overlay layer side by side, ducking to the deeper of the two', async () => {
+      const bossPl = createMockPlaylist('bossP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => ({ baseP: basePl, overlayP: overlayPl, bossP: bossPl })[id] || null);
+      sceneWith({ combat: { playlist: 'baseP', overlays: { p1: { playlist: 'overlayP', layer: true, duck: 0.5 } } } });
+      function PrototypeToken() {
+        this.flags = { 'game-orchestra': { music: { combat: { playlist: 'bossP', duck: 0.2 } } } };
+      }
+      const combatant = { token: new PrototypeToken(), isDefeated: false };
+      game.combats = { active: { started: true, combatant, combatants: [combatant] } };
+      controller.currentContext = { context: 'combat', playlist: basePl };
+
+      await controller._syncLayers();
+
+      expect(layerEngine('combatant')?.playlist).toBe(bossPl);
+      expect(layerEngine('overlay:combat')?.playlist).toBe(overlayPl);
+      const stored = game.settings.get('game-orchestra', 'activeDuck');
+      // The deeper duck wins, and BOTH layers are exempt - one layer must never duck another.
+      expect(stored.factor).toBe(0.2);
+      expect(stored.exemptPlaylistIds.sort()).toEqual(['bossP', 'overlayP']);
+    });
+
+    it('refuses an overlay layer whose playlist is the base it would play over (H15)', async () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'baseP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+
+      await controller._syncLayers();
+
+      expect(layerEngine('overlay:area')).toBeNull();
+    });
+
+    it('retires the overlay layer, and only it, when the mood changes', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+      await controller._syncLayers();
+
+      const engine = layerEngine('overlay:area');
+      const layerSound = createMockSound('r1', 'Rain', { playing: true });
+      engine.activeSounds = [layerSound];
+
+      setMockSetting('game-orchestra', 'activeMood', 'tense');
+      await controller._syncLayers();
+
+      expect(engine.stop).toHaveBeenCalledWith({ stopAudio: false });
+      expect(layerSound.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
+      expect(controller._layers.size).toBe(0);
+      expect(controller.currentLayerContexts).toEqual([]);
+    });
+
+    it('collects overlay-layer playlists for the stale-playback sweep, every overlay id', async () => {
+      sceneWith({
+        area: {
+          overlays: {
+            calm: { playlist: 'overlayP', layer: true },
+            tense: { playlist: 'baseP', layer: true }
+          }
+        }
+      });
+
+      // Which overlay was live in the PREVIOUS session is unknowable from here, so all of them
+      // are candidates for having left a sound marked as playing.
+      expect(controller._collectLayerPlaylists().map((p) => p.id).sort()).toEqual(['baseP', 'overlayP']);
     });
   });
 

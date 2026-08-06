@@ -121,7 +121,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
    * (`music.combat.exclusive`), never under the selected phase overlay - one flag governs
    * whichever playlist the section resolves to for any phase. Unticked (the default) means the
    * theme plays as an additive layer over the winning context instead of replacing it; see
-   * MusicController#getCurrentLayerContext.
+   * MusicController#getCombatantLayerContext.
    */
   static async handleToggleExclusive(event, target) {
     const checkbox = target.closest('input[type="checkbox"]') || target;
@@ -356,8 +356,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
           enabled: !!playlist,
           playlist,
           tracks,
-          data: effectiveData,
-          allowPriority: true
+          data: effectiveData
         };
       });
       this.config.sort((a, b) => a.order - b.order);

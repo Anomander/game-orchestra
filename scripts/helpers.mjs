@@ -270,8 +270,15 @@ export class PlaylistContext {
    * @param {number} priority - Priority level for sorting
    * @param {Document|null} scopeEntity - Entity for progress tracking
    * @param {boolean} [isOverlay] - Whether this context resolved through a mood/phase override.
+   * @param {object} [options]
+   * @param {string|null} [options.overlayId] - The overlay entry this context resolved through,
+   *   when `isOverlay`. Carried so a UI row can ask "is *this* entry the one playing" without
+   *   re-deriving it, and so a layer can find its own `duck` (MusicController#_resolveDuckFactor).
+   * @param {boolean} [options.isLayer] - Whether this context plays as an additive LAYER over its
+   *   own section's base music rather than as the section's resolved winner. A layer never enters
+   *   the candidate pool - see {@link PlaylistContext.layerFromDocument}.
    */
-  constructor(context, contextEntity, playlist, trackId, priority = 0, scopeEntity = null, isOverlay = false) {
+  constructor(context, contextEntity, playlist, trackId, priority = 0, scopeEntity = null, isOverlay = false, { overlayId = null, isLayer = false } = {}) {
     this.context = context;
     this.contextEntity = contextEntity;
     this.playlist = playlist;
@@ -279,6 +286,8 @@ export class PlaylistContext {
     this.priority = priority;
     this.scopeEntity = scopeEntity;
     this.isOverlay = isOverlay;
+    this.overlayId = isOverlay ? overlayId : null;
+    this.isLayer = isLayer;
     // Which overlay axis this context's section resolves against ('mood' for
     // area, 'phase' for combat - config.mjs#sectionAxis), so UI consumers can
     // tell which axis is currently "resolving" without re-deriving it.
@@ -399,6 +408,20 @@ export class PlaylistContext {
   }
 
   /**
+   * The overlay entry a section holds for one overlay id, when it carries a playlist.
+   *
+   * An entry with no playlist is not an override at all - it is the residue of a cleared
+   * binding - so it is treated as absent here rather than by every caller separately.
+   * @param {object|null} section
+   * @param {string} overlayId
+   * @returns {object|null}
+   * @private
+   */
+  static _overlayEntry(section, overlayId) {
+    return (overlayId && section?.overlays?.[overlayId]?.playlist) ? section.overlays[overlayId] : null;
+  }
+
+  /**
    * Extract playlist context data from a music section config object. The
    * overlay axis (mood vs phase) is the caller's responsibility - see
    * fromDocument() - this only needs the id to look up.
@@ -409,7 +432,12 @@ export class PlaylistContext {
    */
   static _extractSectionConfig(section, overlayId, baseline = 0) {
     if (!section) return { playlistId: null, trackId: null, priority: baseline, isOverlay: false };
-    const overlay = (overlayId && section.overlays?.[overlayId]?.playlist) ? section.overlays[overlayId] : null;
+    const entry = this._overlayEntry(section, overlayId);
+    // An overlay marked `layer` deliberately does NOT replace the section's own config: it plays
+    // ON TOP of whatever the section resolves to (MusicController#getOverlayLayerContexts), so the
+    // base still has to resolve normally or there would be nothing underneath it. Falling through
+    // to `section` here is the entire mechanism - see architecture.md § Layers.
+    const overlay = entry?.layer === true ? null : entry;
     const isOverlay = !!overlay;
     const config = overlay || section;
     // `baseline` is the scope's inherent standing - scene area -20, scene combat -15,
@@ -468,7 +496,43 @@ export class PlaylistContext {
       return null;
     }
 
-    return new this(type, document, playlist, trackId, priority, scopeEntity, isOverlay);
+    return new this(type, document, playlist, trackId, priority, scopeEntity, isOverlay, { overlayId });
+  }
+
+  /**
+   * The context an overlay entry marked `layer` contributes: it plays as an additive LAYER over
+   * whatever its own section resolves to, instead of replacing it (a mood over the area music, a
+   * phase over the combat music - config.mjs#sectionAxis).
+   *
+   * Deliberately a separate factory from {@link PlaylistContext.fromDocument}, which skips a
+   * layering overlay entirely so the base underneath it still resolves. A layer is never in the
+   * candidate pool, has no priority, and cannot be beaten - so the priority it is built with is
+   * `0` and is never read (architecture.md § Layers).
+   *
+   * Returns null unless the section's active overlay exists, carries a playlist, is marked
+   * `layer`, and that playlist still exists.
+   * @param {Document|object} document - Source document or data model
+   * @param {'area'|'combat'} type
+   * @param {Document|null} [scopeEntity]
+   * @param {string} [overlayId] - Reads the matching axis setting when omitted.
+   * @returns {PlaylistContext|null}
+   */
+  static layerFromDocument(document, type = 'area', scopeEntity = null, overlayId = undefined) {
+    if (!document) return null;
+    overlayId = overlayId ?? getActiveOverlayId(CONST.sectionAxis[type]);
+    // Both `undefined` (unsupported category) and `null` (supported, unset) mean "no layer here";
+    // unlike fromDocument there is nothing useful to log about the difference.
+    const section = readMusicSection(document, type);
+    if (!section) return null;
+    const entry = this._overlayEntry(section, overlayId);
+    if (entry?.layer !== true) return null;
+
+    const playlist = game.playlists.get(entry.playlist);
+    if (!playlist) {
+      log(3, `PlaylistContext.layerFromDocument: overlay '${overlayId}' on section '${type}' names a playlist that no longer exists`);
+      return null;
+    }
+    return new this(type, document, playlist, entry.initialTrack || null, 0, scopeEntity, true, { overlayId, isLayer: true });
   }
 }
 

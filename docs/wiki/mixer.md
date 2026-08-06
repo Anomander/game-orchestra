@@ -126,8 +126,13 @@ So:
 | The layer duck | `activeDuck` **world setting**, written by the head GM; its `onChange` runs `reassertDuck()` **on every client** |
 
 The duck row is the same inversion for the same reason, and it is why the duck is a *setting* at
-all rather than a field on `MusicController`: `_syncLayer()` runs only on the head GM, so a duck
+all rather than a field on `MusicController`: `_syncLayers()` runs only on the head GM, so a duck
 held in memory there would duck the GM and leave the table at full volume.
+
+Several layers can be live at once — a combatant's turn theme and a phase overlay, say. The
+published duck is then the **deepest** factor any of them asks for, with **every** layer's engine
+registry exempt, so no layer ducks another and one layer cannot quietly undo the dip another asked
+for.
 
 This also rules out the tempting shortcut of `sound.updateSource({volume})` before playback: that
 is a **local-only** source mutation (it is what core uses for its own immediate slider feedback),

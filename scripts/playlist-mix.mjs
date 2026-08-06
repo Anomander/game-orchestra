@@ -133,7 +133,7 @@ export function effectiveVolume(soundVolume, mix, soundId) {
 
 /**
  * Coerce a duck factor - the multiplier applied to everything that is NOT the layer while an
- * additive layer plays (MusicController#_syncLayer). 1 is "no ducking", 0 is silence.
+ * additive layer plays (MusicController#_syncLayers). 1 is "no ducking", 0 is silence.
  *
  * Deliberately NOT part of `PlaylistMix` and not applied inside effectiveVolume(): a duck is
  * transient, external, and belongs to no playlist, so folding it into the mix would make the

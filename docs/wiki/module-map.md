@@ -20,7 +20,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layer (`_layerEngine`, a second root engine beside `_customEngine`). |
+| `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layers (`_layers`, one independent root engine per layer beside `_customEngine`). |
 | `scripts/helpers.mjs` | 525 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `sectionBaselinePriority()` (the scope hierarchy, applied at resolution time — never written to a flag), `log`. The Foundry-touching side of several pure modules. |
 
 ## Graph engine
@@ -78,7 +78,7 @@ second copy of it (docs/wiki/ux.md UX-2). `playlist-mixer-controller.mjs` above 
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/app.mjs` | 660 | `GameOrchestraConfig` — **token/prototype-token** music config, and the only home for `exclusive`/`duck`. Renders a phase card grid (`isTokenPhaseGrid`); writes through `binding-store.mjs`. Non-modal. Scenes now open the scoped hub instead (`hooks.mjs`); the Scene tabbed layout in `music-config.hbs` is vestigial. |
+| `scripts/app.mjs` | 660 | `GameOrchestraConfig` — **token/prototype-token** music config, and the only home for a combatant's `exclusive`/`duck` (a mood/phase overlay's `layer`/`duck` live in the tree). Renders a phase card grid (`isTokenPhaseGrid`); writes through `binding-store.mjs`. Non-modal. Scenes now open the scoped hub instead (`hooks.mjs`); the Scene tabbed layout in `music-config.hbs` is vestigial. |
 | `scripts/playlist-tree.mjs` | 820 | `PlaylistTreeApp` — the hub: every scene's assignments in one tree, mood and phase rows both, plus per-entry **priority**. `_ENTRY_SPECS` × `_handleEntryAction` generate all sixteen update/clear handlers from three axes (scope, field, overlay-scoped). |
 | `scripts/mood-widget.mjs` | 351 | `MoodWidget` — dockable switcher: moods when idle, phases during combat, showing only the active axis. |
 | `scripts/mood-config.mjs` | 330 | `OverlayConfigApp` — the world's overlay dictionary as **one window with a Moods tab and a Phases tab**. `MoodConfigApp`/`PhaseConfigApp` remain as doors sharing its `id`, choosing only the opening tab. Holds both lists in `itemsByAxis`; one Save commits both. Refuses to delete the axis's currently active entry. |
