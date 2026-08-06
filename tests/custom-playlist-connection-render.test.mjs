@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCurvePath, buildSelfLoopPath, uncertainEdges, buildRoutedPath, parsePathEndpoints, connectionPortSelectors } from '../scripts/custom-playlist-connection-render.mjs';
+import { parseCurvePath, buildSelfLoopPath, uncertainEdges, buildRoutedPath, parsePathEndpoints, connectionPortSelectors, connectionEndpoints } from '../scripts/custom-playlist-connection-render.mjs';
 
 /** Pull every coordinate out of a `d` string, in order, as numbers. */
 const coords = (d) => d.match(/-?\d*\.?\d+/g).map(Number);
@@ -292,6 +292,43 @@ describe('uncertainEdges', () => {
   it('ignores an edge whose source node is not in the graph', () => {
     const orphan = { nodes: [{ id: 'r1', type: 'random' }], edges: [{ id: 'ghost:output_1->t1', from: 'ghost', to: 't1' }] };
     expect(uncertainEdges(orphan)).toEqual([]);
+  });
+});
+
+describe('connectionEndpoints', () => {
+  it('resolves ids and ports, with Drawflow\'s node- DOM prefix stripped', () => {
+    // The ids have to match the ones used everywhere else (GraphNode#id, getNodeFromId), because
+    // this feeds a rewire (graph-splice.mjs), not a CSS selector.
+    expect(connectionEndpoints(['connection', 'node_in_node-7', 'node_out_node-3', 'output_2', 'input_1'])).toEqual({
+      from: '3',
+      to: '7',
+      outputPort: 'output_2',
+      inputPort: 'input_1'
+    });
+  });
+
+  it('does not depend on class order', () => {
+    expect(connectionEndpoints(['input_3', 'connection', 'node_out_node-a', 'output_1', 'node_in_node-b'])).toEqual({
+      from: 'a',
+      to: 'b',
+      outputPort: 'output_1',
+      inputPort: 'input_3'
+    });
+  });
+
+  it('reads a self-loop as both endpoints on the same node', () => {
+    expect(connectionEndpoints(['connection', 'node_in_node-4', 'node_out_node-4', 'output_1', 'input_1'])).toMatchObject({
+      from: '4',
+      to: '4'
+    });
+  });
+
+  it('returns null for the in-progress wire Drawflow draws mid-drag', () => {
+    expect(connectionEndpoints(['connection'])).toBeNull();
+  });
+
+  it('returns null for a missing class list', () => {
+    expect(connectionEndpoints(undefined)).toBeNull();
   });
 });
 

@@ -50,6 +50,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/custom-playlist-connection-render.mjs` | 313 | Wire routing (`buildRoutedPath`), self-loop SVG path override, `uncertainEdges()`, `connectionPortSelectors()`. **Pure.** |
 | `scripts/graph-activity-highlight.mjs` | 126 | Activity payload → node/edge highlight sets + selectors. **Pure.** |
 | `scripts/graph-drop.mjs` | 42 | Drag-in rule matrix. **Pure.** |
+| `scripts/graph-splice.mjs` | 96 | Rewiring plans for the two gestures that change a graph's shape with no wire drawn by hand: `planEdgeInsertion()` (drop onto an edge) and `planNodeBypass()` (delete heals the chain). **Pure.** Documents Drawflow's asymmetric connection-record naming, where both `input` and `output` name the *far* end. |
 | `scripts/graph-decorations.mjs` | 92 | The editor's marker attributes for Drawflow **ports and wires**, plus `setMarker()`/`clearMarkers()`. A class here breaks the vendor's positional `classList` reads — HR-K, and the file opens with the delete-an-exit bug that proved it. |
 | `scripts/graph-history.mjs` | 175 | Undo/redo past/present/future stack over editor snapshots; `snapshotKey()` decides what counts as the same state — including the pane's **levels**. **Pure.** |
 

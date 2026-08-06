@@ -146,6 +146,7 @@ already shipped:
 | `lang.test.mjs` | Locale key parity in **both** directions, plus no empty values. `pt-BR.json` once fell 73 keys behind. |
 | `module-manifest.test.mjs` | `drawflow.min.css` loads before `game-orchestra.css` (equal specificity — every node once rendered flat cyan). Drawflow loads as a classic script, not an esmodule. |
 | `custom-playlist-editor-template.test.mjs` | Template structure the editor's DOM queries depend on. |
+| `template-compile.test.mjs` | Every shipped `.hbs` actually **compiles** (real Handlebars), plus no block syntax inside an HTML comment — HR-L. The other two template files assert on source with regexes, which cannot catch a file that will not parse; the editor once failed to open at all with the whole suite green. |
 
 ---
 
@@ -170,6 +171,7 @@ already shipped:
 | `graph-activity-highlight.test.mjs` | 17 | Highlight sets |
 | `custom-playback-schema.test.mjs` | 14 | `resolveLoop()` normalization for all three modes |
 | `engine-clock.test.mjs` / `graph-drop.test.mjs` | 10 each | Scheduler / drop matrix |
+| `graph-splice.test.mjs` | 13 | Edge-insertion and delete-healing rewire plans — including Drawflow's asymmetric connection-record naming, which is the easiest thing here to get backwards |
 | `audio-end-watcher.test.mjs`, `custom-playlist-connection-render.test.mjs`, `custom-playlist-editor-template.test.mjs` | 9 each | — |
 | `native-mode-graph.test.mjs` | 8 | — |
 | `itest-analysis.test.mjs` | 17 | The audio harness's timeline analysis, against synthetic frames |

@@ -137,13 +137,20 @@ standalone window sets. **The pane body is the only scroll container in the stac
 strands the list at that height inside a taller pane, which is exactly what `.game-orchestra-track-list`
 did once and was reported live (see § *Window layout* above).
 
-### A Track node's sound is fixed at creation
+### A Track node's sound is set by dragging, never by a form field
 
 The Properties pane shows it **read-only**. A Track node is placed *per sound* — drag a row out of
-the Tracks pane, or use its `+` button — and never repointed afterwards. The editable `<select>`
-that used to live here made the two routes disagree about what a Track node is (one graph position
-per sound, versus a slot you repoint), and the Tracks pane's `usedBy` counts are built around the
-first reading. `handleUpdateTrackSound` and its `updateTrackSound` change-action are gone.
+the Tracks pane, or use its `+` button. The editable `<select>` that used to live here made the two
+routes disagree about what a Track node is (one graph position per sound, versus a slot you
+repoint), and the Tracks pane's `usedBy` counts are built around the first reading.
+`handleUpdateTrackSound` and its `updateTrackSound` change-action are gone, and must not come back.
+
+**Changing a placed node's sound is a drag, not a field.** Dropping a Tracks row onto an existing
+Track node repoints it in place, keeping its wires, position and name
+(`_repointTrackNode()`). That does not reopen the question the read-only field settled: it is still
+the drag route, the counts still recompute, and there is still no way to *invent* a Track node
+without a sound. What it removes is the cost of a misdrag, which used to be a delete, a re-drag and
+two rewires — for a mistake made with the very gesture that now fixes it.
 
 **Which is why the palette has no Track button, and must not regain one.** Every other type can be
 added from the palette; Track cannot, because a palette-created Track starts with `soundId: null`
@@ -633,8 +640,23 @@ the badge on the node always agree about what "unset" means, whitespace included
 4. `hooks.mjs#handleUpdatePlaylist` observes the flag change and triggers the H8 engine rebuild.
    That hook is the **single designed trigger** — do not call `onCustomGraphChanged()` directly
    from the editor.
+5. **Leave the window open.**
 
 `handleRemoveCustomPlayback()` unsets the flag (`-=customPlayback`), which the same hook catches.
+That one *does* close — there is nothing left to edit.
+
+### Save does not close the window
+
+It used to, and that quietly made the live activity highlight unreachable. Step 4 is the only way
+to *hear* a graph, and the highlight only paints while this window is open — so closing on save put
+the whole feature (`editor-highlight-mixin.mjs`: drains, pulses, active-edge markers) behind the one
+action that dismissed it. Every edit→listen→edit turn cost a full reopen through the playlist sheet.
+
+The footer's **Remove** button is the one wrinkle. It is gated on `hasExistingGraph`, which is
+computed once at mount, and HR-A forbids re-rendering to update it — so it is **always in the
+markup**, `disabled` when there is no graph, and `_enableRemoveButton()` flips that one property
+after the first successful save. A `{{#if}}` there would strand a freshly-saved graph with no way
+to remove it until the window was closed and reopened.
 
 ---
 
@@ -646,6 +668,72 @@ adds don't stack exactly on top of one another. `_addCascade` is per-window inst
 
 A node created by **drop** uses `_pointFromEvent()` instead.
 
+### Auto-chaining — `_chainAnchor()`
+
+A new node **wires itself onto the chain anchor** and lands one `COLUMN_WIDTH_PX` (220 px, the same
+pitch the presets use) to its right. Building a five-track sequence by hand was ten gestures — place,
+wire, place, wire — and is now five.
+
+`_chainAnchorId` is **not** `selectedNodeId`, and the distinction is load-bearing: `_addNodeOfType()`
+deliberately does not select what it creates (that would collapse the Tracks pane mid-flow), so
+anchoring on the Drawflow selection would wire every node in a run onto the same source. The anchor
+**advances to each new node** instead, which is what makes add-add-add build a chain. Clicking a node
+re-points it, clicking empty canvas (`nodeUnselected`) clears it, and a node with no output — `end` —
+terminates it.
+
+Anchoring is deliberately conservative, because a wrong guess is worse than no guess. The anchor must
+have **exactly one output port**, and that port must be **unconnected**. That excludes precisely the
+ambiguous cases — a Fork, a Random or Condition with extra exits, and any node whose single exit is
+already spoken for — and leaves the linear spine where there is only one thing "connect this" could
+mean. A node with no input (`start`) is never chained *into*.
+
+Adding and wiring happen in the same synchronous task, so `_recordHistory()`'s end-of-task capture
+makes them **one undo step**, which is what Ctrl+Z is expected to undo.
+
+### Splicing onto an edge — `planEdgeInsertion()`
+
+Dropping onto a **wire** inserts the new node into it: `A -> B` becomes `A -> N -> B`. While a drag
+is over the canvas, `_onDragOverExternal()` marks the wire under the pointer with
+`INSERT_EDGE_ATTR` (`_setInsertTargetEdge`) — a wire is a thin target and "which one am I over" is
+not answerable from the cursor alone.
+
+The incoming half is unconditional. The outgoing half needs the node to have **exactly one exit**,
+the same reasoning the chain anchor uses: a Fork would need us to pick a branch. Both halves keep
+the *original* ports — splicing into a Random's second exit must not quietly move the wire onto its
+first.
+
+Auto-chaining is **suppressed** for this path (`_addNodeOfType(..., { chain: false })`): the edge
+already says where the node belongs, and the chain anchor would wire it a second time from
+somewhere else entirely.
+
+Nodes win ties over wires in the hit test (`_edgeUnderPointer`). A drop aimed at a node — which
+repoints a Track — is the more specific gesture, and a wire passing beneath a node is still
+hit-testable at its edges.
+
+### Deleting heals the chain — `planNodeBypass()`
+
+Removing a node with **exactly one incoming and one outgoing connection** re-links its neighbours,
+so deleting the Delay out of `A -> Delay -> B` leaves `A -> B` rather than two loose ends. Anything
+else — a junction several nodes feed into, a branch point — is left as loose ends, which is honest
+about what was lost.
+
+This **wraps `removeNodeId()`** (`_installRemovalHealing`) rather than listening for `nodeRemoved`,
+for two reasons:
+
+- By the time `nodeRemoved` fires the connections are **already gone**. The neighbours have to be
+  read while the node still knows about them.
+- Wrapping is the only place that catches every removal path. Drawflow's own Delete/Backspace
+  handler calls `this.removeNodeId()` internally and we never see that keypress — `_onKeyDown`
+  deliberately stays out of its way for a single selection — while `_deleteMultiSelection()` calls
+  the same public method. Changing our own call site would have missed the first.
+
+Deleting a contiguous run composes, one healing per removal: with `A->B->C->D` and both B and C
+selected, removing B gives `A->C` and removing C then gives `A->D`.
+
+Guarded on `_historySuspended`, so an undo/redo restore never heals its way into a shape the
+snapshot did not have. (`_restoreSnapshot()` goes through `editor.import()` and not `removeNodeId()`,
+so this is belt-and-braces rather than load-bearing.)
+
 ---
 
 ## Drag-in from the sidebar
@@ -655,7 +743,9 @@ caller does the async `fromUuid()` lookup and hands in a flattened `{type, playl
 
 | Dropped | Outcome |
 |---|---|
-| `PlaylistSound` from **this** playlist | Create a `track` node |
+| `PlaylistSound` from **this** playlist, onto open canvas | Create a `track` node |
+| `PlaylistSound` from **this** playlist, onto an existing **Track node** | Repoint that node's sound |
+| Either, onto an **edge** | Create the node and splice it into that edge |
 | `PlaylistSound` from **another** playlist | **Reject** (`ForeignSound`) |
 | `Playlist`, not the one being edited | Create a `playlist` node |
 | `Playlist`, the one being edited | **Reject** (`SelfPlaylist`) |
@@ -668,6 +758,11 @@ edited.)
 
 The Tracks pane's own rows emit an **identical payload shape**, so internal drag and sidebar drag
 share one code path.
+
+`_trackNodeUnderDrop()` decides between the first two rows, and like the drop point it must read
+`event.target` **synchronously**, before the `fromUuid()` await — the event is not reliable to read
+from once a handler has yielded. `resolveGraphDrop()` runs first either way, so a foreign sound
+dropped onto a Track node is still rejected rather than used to repoint it.
 
 ---
 

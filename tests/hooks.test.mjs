@@ -247,7 +247,7 @@ describe('hooks.mjs', () => {
       expect(html.querySelector).toHaveBeenCalledWith('select[name="mode"]');
     });
 
-    describe('availability (the graph editor only works on unsequenced playlists - H1)', () => {
+    describe('availability (the button is never mode-gated; the hint announces the mode switch)', () => {
       /** A DOM element stand-in with just the surface handlePlaylistConfigRender touches. */
       function fakeElement(tag) {
         const listeners = {};
@@ -317,38 +317,43 @@ describe('hooks.mjs', () => {
         expect(hint.textContent).toBe('GameOrchestra.CustomEditor.PlaylistConfigHint');
       });
 
-      it('disables it on a sequenced playlist and explains why', () => {
+      it('leaves it enabled on a sequenced playlist, warning that saving switches the mode', () => {
+        // The gate that used to live here was a FALSE unavailability:
+        // CustomPlaylistEditor.handleSave forces UNSEQUENCED itself, so the button always
+        // worked - it just refused to be pressed until the GM found the mode dropdown.
         const { button, hint } = renderSheet(SHUFFLE);
-        expect(button.disabled).toBe(true);
-        expect(hint.textContent).toBe('GameOrchestra.CustomEditor.UnsequencedOnlyHint');
+        expect(button.disabled).toBe(false);
+        expect(hint.textContent).toBe('GameOrchestra.CustomEditor.WillSwitchModeHint');
       });
 
       it('keeps it enabled for a playlist that already has a graph, whatever its mode says', () => {
         // Otherwise a mode change made elsewhere would strand the graph: no way
         // back into the editor to edit it, and no way to remove it.
-        const { button } = renderSheet(SHUFFLE, { version: 1, nodes: [], edges: [] });
+        const { button, hint } = renderSheet(SHUFFLE, { version: 1, nodes: [], edges: [] });
         expect(button.disabled).toBe(false);
+        // ...and no mode-switch warning, because there is nothing to switch: this
+        // playlist already runs a graph.
+        expect(hint.textContent).toBe('GameOrchestra.CustomEditor.PlaylistConfigHint');
       });
 
-      it('re-evaluates as the mode select changes, before the sheet is saved', () => {
-        const { button, hint, modeSelect } = renderSheet(SHUFFLE);
-        expect(button.disabled).toBe(true);
+      it('re-evaluates the hint as the mode select changes, before the sheet is saved', () => {
+        const { hint, modeSelect } = renderSheet(SHUFFLE);
+        expect(hint.textContent).toBe('GameOrchestra.CustomEditor.WillSwitchModeHint');
 
         modeSelect.value = String(UNSEQUENCED);
         modeSelect.fire('change');
 
-        expect(button.disabled).toBe(false);
         expect(hint.textContent).toBe('GameOrchestra.CustomEditor.PlaylistConfigHint');
       });
 
       it('falls back to the saved mode when the select has no value of its own', () => {
-        const { button, modeSelect } = renderSheet(UNSEQUENCED);
+        const { hint, modeSelect } = renderSheet(UNSEQUENCED);
         modeSelect.value = '';
         modeSelect.fire('change');
-        expect(button.disabled).toBe(false);
+        expect(hint.textContent).toBe('GameOrchestra.CustomEditor.PlaylistConfigHint');
       });
 
-      it('does not open the editor when clicked while disabled', () => {
+      it('opens the editor when clicked on a sequenced playlist', () => {
         const { button } = renderSheet(SHUFFLE);
         expect(() => button.fire('click')).not.toThrow();
       });
@@ -379,15 +384,30 @@ describe('hooks.mjs', () => {
   });
 
   describe('handlePlaylistContextMenu', () => {
-    it('adds one mixer entry to the playlist directory menu', () => {
+    it('adds a graph entry and a mixer entry, in the same order the config sheet injects them', () => {
       game.user = { isGM: true };
       const entries = [];
 
       handlePlaylistContextMenu({}, entries);
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0].label).toBe('GameOrchestra.Mixer.MenuEntry');
-      expect(typeof entries[0].onClick).toBe('function');
+      expect(entries.map((e) => e.label)).toEqual([
+        'GameOrchestra.CustomEditor.MenuEntry',
+        'GameOrchestra.Mixer.MenuEntry'
+      ]);
+      for (const entry of entries) expect(typeof entry.onClick).toBe('function');
+    });
+
+    it('opens the graph editor for the clicked playlist, whatever its mode', () => {
+      // No mode gate here either - the editor's save path forces UNSEQUENCED itself.
+      game.user = { isGM: true };
+      const playlist = createMockPlaylist('pl1', 'Playlist', [], 1 /* SHUFFLE */);
+      game.playlists.get = vi.fn((id) => (id === 'pl1' ? playlist : null));
+      const entries = [];
+      handlePlaylistContextMenu({}, entries);
+
+      const header = { closest: vi.fn(() => ({ dataset: { entryId: 'pl1' } })) };
+      expect(() => entries[0].onClick({}, header)).not.toThrow();
+      expect(header.closest).toHaveBeenCalledWith('[data-entry-id]');
     });
 
     it('adds nothing for a non-GM', () => {
@@ -408,7 +428,7 @@ describe('hooks.mjs', () => {
       handlePlaylistContextMenu({}, entries);
 
       const header = { closest: vi.fn(() => ({ dataset: { entryId: 'pl1' } })) };
-      expect(() => entries[0].onClick({}, header)).not.toThrow();
+      expect(() => entries[1].onClick({}, header)).not.toThrow();
       expect(header.closest).toHaveBeenCalledWith('[data-entry-id]');
     });
 
@@ -486,6 +506,19 @@ describe('hooks.mjs', () => {
       expect(controls.sounds.tools['mood-widget']).toBeDefined();
     });
 
+    it('puts the hub on the control bar too, so it is one click from the canvas', () => {
+      // Its only other doors are the settings tab (four actions deep) and the Mood
+      // Widget header, which is only useful if the widget already happens to be open.
+      const controls = { sounds: { tools: {} } };
+
+      getSceneControlButtons(controls);
+
+      const hub = controls.sounds.tools['game-orchestra-hub'];
+      expect(hub).toBeDefined();
+      expect(hub.button).toBe(true);
+      expect(typeof hub.onChange).toBe('function');
+    });
+
     it('gracefully handles missing sounds tools object', () => {
       expect(() => getSceneControlButtons({})).not.toThrow();
     });
@@ -510,6 +543,7 @@ describe('hooks.mjs', () => {
       expect(controls.sounds.tools['suppress-area-music']).toBeUndefined();
       expect(controls.sounds.tools['suppress-combat-music']).toBeUndefined();
       expect(controls.sounds.tools['mood-widget']).toBeUndefined();
+      expect(controls.sounds.tools['game-orchestra-hub']).toBeUndefined();
     });
   });
 

@@ -348,7 +348,14 @@ function createFakeDrawflowClass() {
      * field named `output` holds the TARGET's input port (its own naming).
      */
     addConnection(outId, inId, outputClass, inputClass) {
-      this._nodes[outId].outputs[outputClass].connections.push({ node: String(inId), output: inputClass });
+      // Re-adding a wire that already exists between the same two ports is a NO-OP, matching
+      // the vendor build: its addConnection() scans the source port's connections first and
+      // only pushes `if(!1===l)`. This fake used to push unconditionally, which made a
+      // duplicate call look like two wires here and one wire in Foundry - the fake diverging
+      // from the real thing in the direction that hides a bug rather than surfacing one.
+      const outs = this._nodes[outId].outputs[outputClass].connections;
+      if (outs.some((c) => c.node === String(inId) && c.output === inputClass)) return;
+      outs.push({ node: String(inId), output: inputClass });
       this._nodes[inId].inputs[inputClass].connections.push({ node: String(outId), input: outputClass });
     }
     removeSingleConnection(outId, inId, outputClass, inputClass) {
@@ -1165,6 +1172,417 @@ describe('CustomPlaylistEditor', () => {
     });
   });
 
+  describe('deleting a node out of a chain heals the gap', () => {
+    /** A -> B -> C, wired, with the fake mounted. Returns the three ids. */
+    function chainOfThree() {
+      global.Drawflow = createFakeDrawflowClass();
+      const editor = new CustomPlaylistEditor(createMockPlaylist('pl1', 'Playlist', []));
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      const a = editor._addNodeOfType('track');
+      const b = editor._addNodeOfType('delay'); // auto-chained a -> b
+      const c = editor._addNodeOfType('track'); // auto-chained b -> c
+      return { editor, a, b, c };
+    }
+
+    afterEach(() => {
+      delete global.Drawflow;
+    });
+
+    const wires = (editor) => editor.graph.edges.map((e) => `${e.from}->${e.to}`);
+    const pressDelete = () => ({ key: 'Delete', ctrlKey: false, metaKey: false, preventDefault: vi.fn(), target: document.body });
+
+    it('re-links the neighbours when the middle node is removed', () => {
+      const { editor, a, b, c } = chainOfThree();
+      expect(wires(editor)).toEqual([`${a}->${b}`, `${b}->${c}`]);
+
+      editor._drawflow.removeNodeId(`node-${b}`);
+      editor._syncFromDrawflow(editor._drawflow);
+
+      expect(wires(editor)).toEqual([`${a}->${c}`]);
+    });
+
+    it('heals through Drawflow\'s OWN delete path, not just our multi-select one', () => {
+      // Drawflow's key handler calls removeNodeId() internally and we never see that keypress -
+      // which is why the healing wraps the method rather than listening for nodeRemoved.
+      const { editor, a, b, c } = chainOfThree();
+
+      // Exactly what the vendor's key(e) handler does for a single selection.
+      editor._drawflow.removeNodeId(`node-${b}`);
+      editor._syncFromDrawflow(editor._drawflow);
+
+      expect(wires(editor)).toEqual([`${a}->${c}`]);
+    });
+
+    it('composes across a multi-node delete, healing the run end to end', () => {
+      const { editor, a, b, c } = chainOfThree();
+      const d = editor._addNodeOfType('track'); // c -> d
+      editor._multiSelectedNodeIds = new Set([b, c]);
+
+      editor._onKeyDown(pressDelete());
+
+      expect(editor.graph.nodes.map((n) => n.id)).not.toContain(b);
+      expect(wires(editor)).toEqual([`${a}->${d}`]);
+    });
+
+    it('leaves loose ends when the node was an endpoint, not a link', () => {
+      const { editor, a, b, c } = chainOfThree();
+
+      editor._drawflow.removeNodeId(`node-${c}`); // no outgoing connection
+      editor._syncFromDrawflow(editor._drawflow);
+
+      expect(wires(editor)).toEqual([`${a}->${b}`]);
+    });
+
+    it('does not heal a branch point, where there is no single chain to rejoin', () => {
+      global.Drawflow = createFakeDrawflowClass();
+      const editor = new CustomPlaylistEditor(createMockPlaylist('pl1', 'Playlist', []));
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      const a = editor._addNodeOfType('track');
+      const fork = editor._addNodeOfType('fork'); // a -> fork
+      // Cleared before each: otherwise the second branch auto-chains onto the first, which is
+      // correct behaviour but not the shape this test is about.
+      editor._chainAnchorId = null;
+      const left = editor._addNodeOfType('track', {}, { x: 0, y: 0 });
+      editor._chainAnchorId = null;
+      const right = editor._addNodeOfType('track', {}, { x: 0, y: 200 });
+      editor._drawflow.addConnection(fork, left, 'output_1', 'input_1');
+      editor._drawflow.addConnection(fork, right, 'output_2', 'input_1');
+      editor._syncFromDrawflow(editor._drawflow);
+
+      editor._drawflow.removeNodeId(`node-${fork}`);
+      editor._syncFromDrawflow(editor._drawflow);
+
+      expect(wires(editor)).toEqual([]);
+      expect(editor.graph.nodes.map((n) => n.id)).toEqual(expect.arrayContaining([a, left, right]));
+    });
+
+    it('does not heal while a history restore is rewriting the canvas', () => {
+      const { editor, a, b, c } = chainOfThree();
+      editor._historySuspended = true;
+
+      editor._drawflow.removeNodeId(`node-${b}`);
+      editor._syncFromDrawflow(editor._drawflow);
+
+      expect(wires(editor)).toEqual([]);
+      expect(a && c).toBeTruthy();
+    });
+  });
+
+  describe('dropping a node onto an edge splices it in', () => {
+    /** A -> B, wired, plus a sound to drop. */
+    function editorWithWiredPair() {
+      global.Drawflow = createFakeDrawflowClass();
+      const playlist = createMockPlaylist('pl1', 'Playlist', [createMockSound('s1', 'One'), createMockSound('s2', 'Two')]);
+      const editor = new CustomPlaylistEditor(playlist);
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      const a = editor._addNodeOfType('track', { soundId: 's1' });
+      const b = editor._addNodeOfType('track', { soundId: 's1' }); // auto-chained a -> b
+      return { editor, a, b };
+    }
+
+    /** A drop event whose pointer is over the wire joining `from` and `to`. */
+    function dropOnEdge(payload, from, to, { outputPort = 'output_1', inputPort = 'input_1' } = {}) {
+      const connection = {
+        classList: ['connection', `node_in_node-${to}`, `node_out_node-${from}`, outputPort, inputPort],
+        closest(sel) {
+          return sel === '.connection' ? this : null;
+        }
+      };
+      return {
+        preventDefault: vi.fn(),
+        currentTarget: { classList: { remove: vi.fn(), add: vi.fn() } },
+        clientX: 150,
+        clientY: 90,
+        target: { closest: (sel) => (sel === '.connection' ? connection : null) },
+        dataTransfer: { getData: () => JSON.stringify(payload), types: ['text/plain'] }
+      };
+    }
+
+    afterEach(() => {
+      delete global.Drawflow;
+      delete global.fromUuid;
+    });
+
+    const wires = (editor) => editor.graph.edges.map((e) => `${e.from}->${e.to}`);
+
+    it('rewires A -> B into A -> N -> B', async () => {
+      const { editor, a, b } = editorWithWiredPair();
+      global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+
+      await editor._onDropExternal(dropOnEdge({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }, a, b));
+
+      const inserted = editor.graph.nodes.find((n) => n.soundId === 's2');
+      expect(inserted).toBeTruthy();
+      expect(wires(editor)).toEqual([`${a}->${inserted.id}`, `${inserted.id}->${b}`]);
+    });
+
+    it('does not ALSO auto-chain the spliced node from the selection', () => {
+      // The edge already says where the node belongs; chaining would wire it a second time.
+      const { editor, a, b } = editorWithWiredPair();
+      global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+      editor._chainAnchorId = a;
+
+      return editor._onDropExternal(dropOnEdge({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }, a, b)).then(() => {
+        expect(editor.graph.edges).toHaveLength(2);
+      });
+    });
+
+    it('keeps the source exit port it was dropped on', async () => {
+      // Splicing into a Random's second exit must not move the wire onto its first.
+      const { editor, a, b } = editorWithWiredPair();
+      global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+      editor._drawflow.addNodeOutput(a);
+      editor._drawflow.removeSingleConnection(a, b, 'output_1', 'input_1');
+      editor._drawflow.addConnection(a, b, 'output_2', 'input_1');
+      editor._syncFromDrawflow(editor._drawflow);
+
+      await editor._onDropExternal(
+        dropOnEdge({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }, a, b, { outputPort: 'output_2' })
+      );
+
+      const inserted = editor.graph.nodes.find((n) => n.soundId === 's2');
+      const live = editor._drawflow.getNodeFromId(a);
+      expect(live.outputs.output_1.connections).toEqual([]);
+      expect(live.outputs.output_2.connections).toEqual([{ node: inserted.id, output: 'input_1' }]);
+    });
+
+    it('a rejected drop leaves the edge untouched', async () => {
+      const { editor, a, b } = editorWithWiredPair();
+      global.fromUuid = vi.fn().mockResolvedValue({ id: 'other', parent: { id: 'pl-other' } });
+
+      await editor._onDropExternal(dropOnEdge({ type: 'PlaylistSound', uuid: 'Playlist.pl-other.PlaylistSound.other' }, a, b));
+
+      expect(wires(editor)).toEqual([`${a}->${b}`]);
+    });
+  });
+
+  describe('the insert-target edge highlight', () => {
+    function mountedEditor() {
+      global.Drawflow = createFakeDrawflowClass();
+      const editor = new CustomPlaylistEditor(createMockPlaylist('pl1', 'Playlist', []));
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      return editor;
+    }
+
+    afterEach(() => {
+      delete global.Drawflow;
+    });
+
+    /** A dragover event over `element` (or over nothing). */
+    function dragOver(element) {
+      return {
+        preventDefault: vi.fn(),
+        currentTarget: { classList: { add: vi.fn(), remove: vi.fn() } },
+        target: { closest: (sel) => (element?.matches === sel ? element : null) },
+        dataTransfer: { types: ['text/plain'] }
+      };
+    }
+
+    const wireEl = () => ({ matches: '.connection', attrs: {}, setAttribute(k) { this.attrs[k] = ''; }, removeAttribute(k) { delete this.attrs[k]; } });
+
+    it('marks the wire under the pointer', () => {
+      const editor = mountedEditor();
+      const wire = wireEl();
+
+      editor._onDragOverExternal(dragOver(wire));
+
+      expect('data-go-edge-insert' in wire.attrs).toBe(true);
+    });
+
+    it('moves the marker as the drag crosses to another wire', () => {
+      const editor = mountedEditor();
+      const first = wireEl();
+      const second = wireEl();
+
+      editor._onDragOverExternal(dragOver(first));
+      editor._onDragOverExternal(dragOver(second));
+
+      expect('data-go-edge-insert' in first.attrs).toBe(false);
+      expect('data-go-edge-insert' in second.attrs).toBe(true);
+    });
+
+    it('clears the marker over open canvas', () => {
+      const editor = mountedEditor();
+      const wire = wireEl();
+
+      editor._onDragOverExternal(dragOver(wire));
+      editor._onDragOverExternal(dragOver(null));
+
+      expect('data-go-edge-insert' in wire.attrs).toBe(false);
+    });
+
+    it('never offers an insert while the pointer is over a node', () => {
+      // A node drop is the more specific gesture (it repoints a Track), so nodes win ties.
+      const editor = mountedEditor();
+      const wire = wireEl();
+      const event = dragOver(wire);
+      event.target.closest = (sel) => (sel === '.drawflow-node' ? {} : sel === '.connection' ? wire : null);
+
+      editor._onDragOverExternal(event);
+
+      expect('data-go-edge-insert' in wire.attrs).toBe(false);
+    });
+
+    it('clears the marker when the drag leaves the canvas entirely', () => {
+      const editor = mountedEditor();
+      const wire = wireEl();
+      editor._onDragOverExternal(dragOver(wire));
+
+      const box = { classList: { remove: vi.fn() }, contains: () => false };
+      editor._onDragLeaveCanvas({ target: { closest: (sel) => (sel === '.game-orchestra-drawflow-canvas' ? box : null) }, relatedTarget: null });
+
+      expect('data-go-edge-insert' in wire.attrs).toBe(false);
+    });
+  });
+
+  describe('auto-chaining new nodes onto the selection', () => {
+    /** A mounted editor with an empty canvas (no Start - these tests wire their own). */
+    function mountedEditor() {
+      global.Drawflow = createFakeDrawflowClass();
+      const editor = new CustomPlaylistEditor(createMockPlaylist('pl1', 'Playlist', []));
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      return editor;
+    }
+
+    afterEach(() => {
+      delete global.Drawflow;
+    });
+
+    /** Edges as plain from->to pairs, ignoring generated edge ids. */
+    const wires = (editor) => editor.graph.edges.map((e) => `${e.from}->${e.to}`);
+
+    it('wires each new node onto the previous one, so a run of adds builds a chain', () => {
+      // The whole point: building a five-track sequence used to be ten gestures (place,
+      // wire, place, wire, ...) and is now five.
+      const editor = mountedEditor();
+      const a = editor._addNodeOfType('track');
+      const b = editor._addNodeOfType('track');
+      const c = editor._addNodeOfType('delay');
+
+      expect(wires(editor)).toEqual([`${a}->${b}`, `${b}->${c}`]);
+    });
+
+    it('leaves the first node an orphan when nothing is selected', () => {
+      const editor = mountedEditor();
+      editor._addNodeOfType('track');
+
+      expect(wires(editor)).toEqual([]);
+    });
+
+    it('chains from a node the user clicked, not from the last one added', () => {
+      const editor = mountedEditor();
+      const a = editor._addNodeOfType('track');
+      const b = editor._addNodeOfType('track');
+      // Re-selecting `a` is how a user branches off an earlier point... except `a`'s single
+      // exit is already spoken for by `b`, so there is nothing unambiguous to connect.
+      editor._chainAnchorId = a;
+      const c = editor._addNodeOfType('track');
+
+      expect(wires(editor)).toEqual([`${a}->${b}`]);
+      expect(editor.graph.nodes.map((n) => n.id)).toContain(c);
+    });
+
+    it('does not chain out of a Fork, where which branch is meant is ambiguous', () => {
+      const editor = mountedEditor();
+      const fork = editor._addNodeOfType('fork');
+      expect(editor._chainAnchorId).toBe(fork);
+
+      editor._addNodeOfType('track');
+
+      expect(wires(editor)).toEqual([]);
+    });
+
+    it('never chains INTO a Start node, which has no input', () => {
+      const editor = mountedEditor();
+      editor._addNodeOfType('track');
+      editor._addNodeOfType('start');
+
+      expect(wires(editor)).toEqual([]);
+    });
+
+    it('stops the chain at an End node, which has no exit to continue from', () => {
+      const editor = mountedEditor();
+      const track = editor._addNodeOfType('track');
+      const end = editor._addNodeOfType('end');
+
+      expect(wires(editor)).toEqual([`${track}->${end}`]);
+      expect(editor._chainAnchorId).toBeNull();
+    });
+
+    it('places a chained node one column right of its anchor, not at the viewport centre', () => {
+      const editor = mountedEditor();
+      const a = editor._addNodeOfType('track');
+      const b = editor._addNodeOfType('track');
+
+      const anchor = editor._drawflow.getNodeFromId(a);
+      const chained = editor._drawflow.getNodeFromId(b);
+      expect(chained.pos_x).toBe(anchor.pos_x + 220); // COLUMN_WIDTH_PX (graph-builder.mjs)
+      expect(chained.pos_y).toBe(anchor.pos_y);
+    });
+
+    it('respects an explicit drop point while still wiring the node up', () => {
+      const editor = mountedEditor();
+      const a = editor._addNodeOfType('track');
+      const b = editor._addNodeOfType('track', {}, { x: 900, y: 700 });
+
+      expect(editor._drawflow.getNodeFromId(b).pos_x).toBe(900);
+      expect(wires(editor)).toEqual([`${a}->${b}`]);
+    });
+  });
+
+  describe('handleSave keeps the window open', () => {
+    /** A saveable graph plus a stubbed footer, so the save path has something to enable. */
+    function editorReadyToSave() {
+      const playlist = createMockPlaylist('pl1', 'Playlist', []);
+      const editor = new CustomPlaylistEditor(playlist);
+      editor.graph = {
+        version: 1,
+        nodes: [{ id: 'start', type: 'start' }, { id: 'end', type: 'end' }],
+        edges: [{ id: 'e1', from: 'start', to: 'end' }]
+      };
+      editor.close = vi.fn();
+      const removeButton = { disabled: true };
+      editor.element = { querySelector: (sel) => (sel === '[data-action="removeCustomPlayback"]' ? removeButton : null) };
+      return { editor, playlist, removeButton };
+    }
+
+    it('does not close after a successful save', async () => {
+      // The engine rebuilds off the 'updatePlaylist' hook setFlag() fires, so saving is the
+      // only way to hear the graph - and the live activity highlight only paints while this
+      // window is open. Closing on save put the feature behind the action that dismissed it.
+      const { editor, playlist } = editorReadyToSave();
+
+      await CustomPlaylistEditor.handleSave.call(editor, { preventDefault: vi.fn() }, {});
+
+      expect(playlist.setFlag).toHaveBeenCalled();
+      expect(editor.close).not.toHaveBeenCalled();
+    });
+
+    it('enables the footer Remove button on the first save, without re-rendering (HR-A)', async () => {
+      const { editor, removeButton } = editorReadyToSave();
+      expect(removeButton.disabled).toBe(true);
+
+      await CustomPlaylistEditor.handleSave.call(editor, { preventDefault: vi.fn() }, {});
+
+      expect(removeButton.disabled).toBe(false);
+    });
+
+    it('does not close when validation rejects the graph', async () => {
+      const { editor } = editorReadyToSave();
+      // An edgeless Start is not a runnable graph.
+      editor.graph = { version: 1, nodes: [{ id: 'start', type: 'start' }], edges: [] };
+
+      await CustomPlaylistEditor.handleSave.call(editor, { preventDefault: vi.fn() }, {});
+
+      expect(editor.close).not.toHaveBeenCalled();
+    });
+  });
+
   describe('handleSave / handleRemoveCustomPlayback do not directly rebuild the engine (regression: double rebuild)', () => {
     // setFlag()/unsetFlag() firing Foundry's 'updatePlaylist' hook - and hooks.mjs's
     // handleUpdatePlaylist() forwarding that to onCustomGraphChanged() - is the
@@ -1183,7 +1601,6 @@ describe('CustomPlaylistEditor', () => {
 
       expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'customPlayback', editor.graph);
       expect(onCustomGraphChanged).not.toHaveBeenCalled();
-      expect(editor.close).toHaveBeenCalled();
     });
 
     it('handleRemoveCustomPlayback does not call musicController.onCustomGraphChanged directly', async () => {
@@ -4108,6 +4525,76 @@ describe('CustomPlaylistEditor', () => {
 
       const trackNode = editor.graph.nodes.find((n) => n.type === 'track');
       expect(trackNode?.soundId).toBe('s1');
+    });
+
+    describe('dropping a sound onto an existing Track node repoints it', () => {
+      /** A drop event aimed at a specific node's DOM element rather than at open canvas. */
+      function dropOnNode(payload, nodeId) {
+        const event = dropEvent(payload);
+        event.target = { closest: (sel) => (sel === '.drawflow-node' ? { id: `node-${nodeId}` } : null) };
+        return event;
+      }
+
+      it('changes the sound in place, keeping the node and its wires', async () => {
+        // The inspector's sound field is read-only by design, so fixing a misdrag used to mean
+        // deleting the node, dragging the right sound in, and redrawing both wires.
+        const editor = editorWithSound();
+        const before = editor._addNodeOfType('track', { soundId: 's1' });
+        const after = editor._addNodeOfType('track', { soundId: 's1' });
+        expect(editor.graph.edges).toHaveLength(1); // auto-chained before -> after
+
+        global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+        await editor._onDropExternal(dropOnNode({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }, after));
+
+        expect(editor.graph.nodes.filter((n) => n.type === 'track')).toHaveLength(2); // no third node
+        expect(editor.graph.nodes.find((n) => n.id === after).soundId).toBe('s2');
+        expect(editor.graph.nodes.find((n) => n.id === before).soundId).toBe('s1'); // untouched
+        expect(editor.graph.edges).toHaveLength(1); // wire survived
+      });
+
+      it('still adds a new node when the drop lands on open canvas', async () => {
+        const editor = editorWithSound();
+        editor._addNodeOfType('track', { soundId: 's1' });
+
+        global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+        await editor._onDropExternal(dropEvent({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }));
+
+        expect(editor.graph.nodes.filter((n) => n.type === 'track')).toHaveLength(2);
+      });
+
+      it('does not repoint a non-Track node dropped onto (a Delay is not a sound slot)', async () => {
+        const editor = editorWithSound();
+        const delay = editor._addNodeOfType('delay');
+
+        global.fromUuid = vi.fn().mockResolvedValue({ id: 's2', parent: { id: 'pl1' } });
+        await editor._onDropExternal(dropOnNode({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s2' }, delay));
+
+        expect(editor.graph.nodes.find((n) => n.id === delay).type).toBe('delay');
+        expect(editor.graph.nodes.filter((n) => n.type === 'track')).toHaveLength(1); // added as new
+      });
+
+      it('is a no-op when the sound dropped is the one already on that node', async () => {
+        const editor = editorWithSound();
+        const node = editor._addNodeOfType('track', { soundId: 's1' });
+
+        global.fromUuid = vi.fn().mockResolvedValue({ id: 's1', parent: { id: 'pl1' } });
+        await editor._onDropExternal(dropOnNode({ type: 'PlaylistSound', uuid: 'Playlist.pl1.PlaylistSound.s1' }, node));
+
+        expect(editor.graph.nodes.filter((n) => n.type === 'track')).toHaveLength(1);
+        expect(editor.graph.nodes.find((n) => n.id === node).soundId).toBe('s1');
+      });
+
+      it('a foreign playlist dropped onto a Track node is still rejected, not used to repoint it', async () => {
+        const editor = editorWithSound();
+        const node = editor._addNodeOfType('track', { soundId: 's1' });
+        const warn = vi.spyOn(ui.notifications, 'warn');
+
+        global.fromUuid = vi.fn().mockResolvedValue({ id: 'other', parent: { id: 'pl-other' } });
+        await editor._onDropExternal(dropOnNode({ type: 'PlaylistSound', uuid: 'Playlist.pl-other.PlaylistSound.other' }, node));
+
+        expect(editor.graph.nodes.find((n) => n.id === node).soundId).toBe('s1');
+        expect(warn).toHaveBeenCalledWith('GameOrchestra.CustomEditor.Drop.ForeignSound');
+      });
     });
 
     it('a sound dropped from a DIFFERENT playlist is rejected with a warning, not silently turned into a Playlist node', async () => {

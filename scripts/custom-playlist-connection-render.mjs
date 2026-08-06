@@ -286,6 +286,32 @@ export function connectionPortSelectors(classNames) {
 }
 
 /**
+ * The same four classes as `connectionPortSelectors()`, resolved to bare **ids and port names**
+ * rather than CSS selectors - what a rewire needs (graph-splice.mjs), as opposed to what a
+ * highlight needs.
+ *
+ * Node ids are stripped of Drawflow's `node-` DOM prefix, so they match the ids used everywhere
+ * else in this module (`GraphNode#id`, `_liveNode()`, `getNodeFromId()`).
+ * @param {Iterable<string>} classNames - The connection element's `classList`.
+ * @returns {{from: string, to: string, outputPort: string, inputPort: string}|null} null for
+ *   anything that isn't a completed connection, exactly as above.
+ */
+export function connectionEndpoints(classNames) {
+  const classes = Array.from(classNames || []).filter((name) => typeof name === 'string');
+  const outNode = classes.find((name) => name.startsWith('node_out_node-'));
+  const inNode = classes.find((name) => name.startsWith('node_in_node-'));
+  const outputPort = classes.find((name) => /^output_\d+$/.test(name));
+  const inputPort = classes.find((name) => /^input_\d+$/.test(name));
+  if (!outNode || !inNode || !outputPort || !inputPort) return null;
+  return {
+    from: outNode.slice('node_out_node-'.length),
+    to: inNode.slice('node_in_node-'.length),
+    outputPort,
+    inputPort
+  };
+}
+
+/**
  * Parse the start and end points out of an SVG path `d` string in the exact
  * format Drawflow's own createCurvature() produces: "M x y C x1 y1 x2 y2 x y".
  * @param {string} d

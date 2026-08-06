@@ -13,7 +13,7 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **1596 tests, 38 files, all passing.** ~4s. |
+| `npm test` | Full vitest suite. Baseline: **1656 tests, 40 files, all passing.** ~4s. |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
 | `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~5 min, 13 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
@@ -92,7 +92,7 @@ code it guards, update the comment to match.
 - **Purity boundary.** Modules with no `game`/`ui`/DOM/Drawflow dependency are deliberately
   Foundry-free so they can be unit-tested directly: `playlist-ref.mjs`, `graph-validation.mjs`,
   `graph-drawflow-bridge.mjs`, `graph-presets.mjs`, `native-mode-graph.mjs`, `graph-builder.mjs`,
-  `graph-activity-highlight.mjs`, `graph-drop.mjs`, `graph-history.mjs`,
+  `graph-activity-highlight.mjs`, `graph-drop.mjs`, `graph-splice.mjs`, `graph-history.mjs`,
   `playlist-mix.mjs`, `playlist-mixer-render.mjs`, `custom-playlist-inspector.mjs`,
   `custom-playlist-node-render.mjs`,
   `custom-playlist-connection-render.mjs`, `custom-playback-schema.mjs`.

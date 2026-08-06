@@ -2380,6 +2380,34 @@
   stroke-opacity: 1;
 }
 
+/* The wire a drag is hovering, which dropping would splice the new node into
+ * (_setInsertTargetEdge). LAST of the .connection rules on purpose: same specificity as
+ * [data-go-edge-hover]/[data-go-edge-active]/[data-go-edge-uncertain], so document order decides,
+ * and an offer to rewire has to be readable over any state the wire already had.
+ *
+ * Dashed and animated rather than merely a different colour - the marker appears only mid-drag,
+ * when the pointer is moving and the eye is not resting on the canvas, and motion reads at a
+ * glance where a hue change does not. */
+.game-orchestra-drawflow-canvas .connection[data-go-edge-insert] .main-path {
+  stroke: #22d3ee;
+  stroke-width: 6px;
+  stroke-opacity: 1;
+  stroke-dasharray: 10 6;
+  animation: game-orchestra-edge-insert-march 0.5s linear infinite;
+}
+
+@keyframes game-orchestra-edge-insert-march {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-orchestra-drawflow-canvas .connection[data-go-edge-insert] .main-path {
+    animation: none;
+  }
+}
+
 /* Fixed (non-removable) exits: a Condition's fallback, a Random's last one.
  * Occupies the same slot the remove button would, so rows stay aligned. */
 .game-orchestra-editor-inspector .game-orchestra-fixed-exit {

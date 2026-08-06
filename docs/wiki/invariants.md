@@ -555,3 +555,22 @@ Attribute selectors carry the same specificity as a class, so the CSS ordering r
 **Node** elements keep their classes (`game-orchestra-node-active`, the issue-state classes, …):
 Drawflow only reads `classList[0]` there, and never rewrites it — that one is
 [HR-B](#hr-b--data-drawflow-mount-must-stay-class-free)'s territory.
+
+## HR-L — Never write Handlebars block syntax inside an HTML comment
+
+Handlebars parses the **whole** `.hbs` file. It does not skip `<!-- ... -->`. A prose note
+mentioning `{{#if}}` or `{{#each}}` is therefore a real opening block with no matching close, and
+the template fails to compile — at render time, in Foundry, with a parse error pointing at EOF
+rather than at the comment that caused it.
+
+This shipped broken: a comment in `custom-playlist-editor.hbs` explaining *why* the Remove button
+is not wrapped in a conditional block cited that block by name. Every attempt to open the graph
+editor threw `Expecting 'OPEN_ENDBLOCK', got 'EOF'` and rendered nothing. The full suite was green
+throughout — 1616 tests, none of which compiled a template.
+
+Write the prose without the syntax ("a conditional block here would…"), or use a Handlebars
+comment `{{!-- --}}`, which *is* skipped by the parser.
+
+`tests/template-compile.test.mjs` now precompiles every shipped template and separately flags
+Handlebars blocks found inside HTML comments, so the failure names its cause instead of pointing
+at the last line of the file.

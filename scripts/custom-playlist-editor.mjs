@@ -18,7 +18,8 @@ import {
   zoomTier,
   EXPANDABLE_EXIT_NODE_TYPES
 } from './custom-playlist-node-render.mjs';
-import { parseCurvePath, buildSelfLoopPath, uncertainEdges, buildRoutedPath, parsePathEndpoints, connectionPortSelectors } from './custom-playlist-connection-render.mjs';
+import { parseCurvePath, buildSelfLoopPath, uncertainEdges, buildRoutedPath, parsePathEndpoints, connectionPortSelectors, connectionEndpoints } from './custom-playlist-connection-render.mjs';
+import { planEdgeInsertion, planNodeBypass } from './graph-splice.mjs';
 import { GRAPH_PRESETS, getPreset } from './graph-presets.mjs';
 import { edgeSelector, portFromEdgeId } from './graph-activity-highlight.mjs';
 import { dispatchChangeAction } from './app-mixins.mjs';
@@ -27,6 +28,7 @@ import { EditorHighlightMixin } from './editor-highlight-mixin.mjs';
 import { createDefaultPlaylistRef, normalizePlaylistRef, describePlaylistRef } from './playlist-ref.mjs';
 import { resolveGraphDrop } from './graph-drop.mjs';
 import { GraphHistory } from './graph-history.mjs';
+import { COLUMN_WIDTH_PX } from './graph-builder.mjs';
 import {
   setMarker,
   clearMarkers,
@@ -34,7 +36,8 @@ import {
   EDGE_HOVER_ATTR,
   PORT_REVEAL_ATTR,
   UNCERTAIN_EDGE_ATTR,
-  ISSUE_EDGE_ATTR
+  ISSUE_EDGE_ATTR,
+  INSERT_EDGE_ATTR
 } from './graph-decorations.mjs';
 
 /** Minimum vertical clearance (px) a self-loop's arc keeps above a node. */
@@ -248,6 +251,10 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     // The rendered <svg class="connection"> the pointer is currently over, kept
     // so its two ports can be un-revealed again when the pointer moves off it.
     this._hoveredWire = null;
+    // The wire a drag is currently offering to splice into (_setInsertTargetEdge). Separate from
+    // _hoveredWire: that one tracks the mouse and reveals ports, this one exists only while
+    // something draggable is over the canvas and promises a rewire on drop.
+    this._insertTargetEdge = null;
     // Node ids currently marquee-selected via left-drag rect-select - distinct
     // from selectedNodeId/Drawflow's own single-node selection (see
     // _onCanvasMouseDown's class doc for why the two never mix).
@@ -256,6 +263,14 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     // click, Tracks pane "+" button) so repeated adds don't stack exactly on top
     // of one another - see _defaultNodePoint().
     this._addCascade = -1;
+    // The node a newly-added node auto-wires itself onto, and the reason building a
+    // sequence costs one gesture per track instead of two - see _chainAnchor().
+    //
+    // Distinct from selectedNodeId, and deliberately: _addNodeOfType() does not select
+    // what it creates (that would collapse the Tracks pane mid-flow), so anchoring on
+    // the Drawflow selection would wire every node in a run onto the same source. This
+    // advances to each new node instead, so add-add-add builds a chain.
+    this._chainAnchorId = null;
     // Issue balloon (_toggleIssueBalloon): the open balloon's element and the
     // node it belongs to, plus the localized messages per node that
     // _refreshIssueBadges() last computed - the balloon opens on a click long
@@ -624,7 +639,44 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
    */
   _onDragOverExternal(event) {
     event.preventDefault(); // required for 'drop' to fire at all
-    if (event.dataTransfer.types.includes('text/plain')) event.currentTarget.classList.add('drop-hover');
+    if (!event.dataTransfer.types.includes('text/plain')) return;
+    event.currentTarget.classList.add('drop-hover');
+    // Live, per-frame, because a wire is a thin target and "which one am I over" is not
+    // answerable from the cursor alone. Dropping is what commits it - see _onDropExternal.
+    this._setInsertTargetEdge(this._edgeUnderPointer(event));
+  }
+
+  /**
+   * The wire under a drag, or null. Nodes win ties: a wire passing beneath a node is still
+   * hit-testable at its edges, and a drop aimed at a node (which repoints a Track, or lands on
+   * open canvas) is the more specific gesture of the two.
+   *
+   * `.connection` carries `pointer-events: none` and only its `.main-path` child is hit-testable,
+   * so `event.target` during a dragover lands on the path and this walks up to the `<svg>` that
+   * owns the endpoint classes - the same traversal _onWireHover() does for the mouse.
+   * @param {DragEvent} event
+   * @returns {Element|null}
+   * @private
+   */
+  _edgeUnderPointer(event) {
+    if (event.target?.closest?.('.drawflow-node')) return null;
+    return event.target?.closest?.('.connection') || null;
+  }
+
+  /**
+   * Mark (or unmark) the wire a drop would splice into. Idempotent per element so the marker is
+   * not rewritten on every dragover frame.
+   * @param {Element|null} connectionEl
+   * @private
+   */
+  _setInsertTargetEdge(connectionEl) {
+    const next = connectionEl || null;
+    if (this._insertTargetEdge === next) return;
+    // Lifted from the OLD element even if Drawflow has since detached it, for the same reason
+    // _setHoveredWire() does: a detached <svg> is harmless, a stranded marker is not.
+    setMarker(this._insertTargetEdge, INSERT_EDGE_ATTR, false);
+    this._insertTargetEdge = next;
+    setMarker(next, INSERT_EDGE_ATTR, true);
   }
 
   /**
@@ -638,6 +690,9 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (!box) return;
     if (event.relatedTarget && box.contains(event.relatedTarget)) return;
     box.classList.remove('drop-hover');
+    // Leaving the canvas ends the insertion offer too - otherwise a drag abandoned outside the
+    // window leaves a wire lit up with nothing driving it.
+    this._setInsertTargetEdge(null);
   }
 
   /**
@@ -653,9 +708,14 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   async _onDropExternal(event) {
     event.preventDefault();
     event.currentTarget.classList.remove('drop-hover');
-    // Captured synchronously, before the fromUuid() await below - the event object is not
-    // reliable to read from once an event handler has yielded.
+    // All three captured synchronously, before the fromUuid() await below - the event object is
+    // not reliable to read from once an event handler has yielded.
     const point = this._pointFromEvent(event);
+    const dropTargetNodeId = this._trackNodeUnderDrop(event);
+    const insertEdge = connectionEndpoints(this._edgeUnderPointer(event)?.classList);
+    // The offer is consumed by the drop whether or not it ends up applying (a rejected drop
+    // leaves nothing lit).
+    this._setInsertTargetEdge(null);
 
     let data;
     try {
@@ -680,11 +740,80 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       ui.notifications?.warn(game.i18n.localize(result.reasonKey));
       return;
     }
-    if (result.action === 'track') {
-      this._addNodeOfType('track', { soundId: result.soundId }, point);
-    } else if (result.action === 'playlist') {
-      this._addNodeOfType('playlist', { playlistRef: { source: 'direct', playlistId: result.playlistId } }, point);
-    }
+    // Dropped ON an existing Track node: repoint that node instead of creating a second one.
+    if (result.action === 'track' && dropTargetNodeId) return this._repointTrackNode(dropTargetNodeId, result.soundId);
+
+    // Dropped on a WIRE: the new node is spliced into it, so auto-chaining is suppressed - the
+    // edge already says where this node belongs, and the chain anchor would wire it a second
+    // time from somewhere else entirely.
+    const [type, overrides] =
+      result.action === 'track'
+        ? ['track', { soundId: result.soundId }]
+        : ['playlist', { playlistRef: { source: 'direct', playlistId: result.playlistId } }];
+    const nodeId = this._addNodeOfType(type, overrides, point, { chain: !insertEdge });
+    if (nodeId && insertEdge) this._insertNodeOnEdge(nodeId, insertEdge);
+  }
+
+  /**
+   * Splice a just-created node into the edge it was dropped on: `A -> B` becomes `A -> N -> B`.
+   *
+   * The plan (which wires to drop, which to make) is graph-splice.mjs#planEdgeInsertion - pure and
+   * unit-tested there. This half is only the Drawflow calls and the refresh, in the order the plan
+   * gives them: removals first, so the source's output port is never momentarily holding both its
+   * old wire and the new one.
+   * @param {string} nodeId
+   * @param {import('./graph-splice.mjs').GraphEdgeEnds} edge
+   * @private
+   */
+  _insertNodeOnEdge(nodeId, edge) {
+    if (!this._drawflow) return;
+    const node = this._liveNode(nodeId);
+    if (!node) return;
+    const plan = planEdgeInsertion(edge, nodeId, { outputCount: Object.keys(node.outputs || {}).length });
+    for (const wire of plan.remove) this._drawflow.removeSingleConnection(wire.from, wire.to, wire.outputPort, wire.inputPort);
+    for (const wire of plan.connect) this._drawflow.addConnection(wire.from, wire.to, wire.outputPort, wire.inputPort);
+    // Every call above fires its own connection event, each of which resyncs - this is the one
+    // that reflects the finished shape. All still inside the same task, so _recordHistory()'s
+    // end-of-task capture makes the whole splice ONE undo step.
+    this._syncFromDrawflow(this._drawflow);
+    this._refreshNodeDisplay(nodeId);
+    this._renderInspector();
+  }
+
+  /**
+   * The id of the Track node a drop landed on, or null for a drop onto open canvas.
+   *
+   * Must be read synchronously, before _onDropExternal's fromUuid() await - `event.target` is
+   * not reliable once a handler has yielded, the same reason the drop point is captured early.
+   * @param {DragEvent} event
+   * @returns {string|null}
+   * @private
+   */
+  _trackNodeUnderDrop(event) {
+    const element = event.target?.closest?.('.drawflow-node');
+    const nodeId = element?.id?.startsWith?.('node-') ? element.id.slice(5) : null;
+    if (!nodeId) return null;
+    return this._liveNode(nodeId)?.name === 'track' ? nodeId : null;
+  }
+
+  /**
+   * Point an existing Track node at a different sound, keeping its wires, position and name.
+   *
+   * A Track node's sound is deliberately read-only in the inspector
+   * (custom-playlist-inspector.mjs): a Track node IS a sound's position in the graph, not a slot
+   * you repoint, and that is what the Tracks pane's per-sound usage counts are built around.
+   * That concept is intact here - this is still the drag route, and the counts still recompute -
+   * but fixing a misdrag no longer costs a delete, a re-drag and two rewires. Dropping the right
+   * sound onto the wrong node is the same gesture that created it.
+   * @param {string} nodeId
+   * @param {string} soundId
+   * @private
+   */
+  _repointTrackNode(nodeId, soundId) {
+    const node = this._liveNode(nodeId);
+    if (!node) return;
+    if (node.data?.soundId === soundId) return; // dropped a sound onto the node already playing it
+    this._patchNodeData(nodeId, { ...node.data, soundId });
   }
 
   /**
@@ -732,22 +861,80 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
    *   soundId, or a Playlist's playlistRef) before the node is created, so it never flashes onto
    *   the canvas unconfigured.
    * @param {{x: number, y: number}} [point]
+   * @param {object} [options]
+   * @param {boolean} [options.chain] - Pass false to suppress auto-chaining, for a caller that is
+   *   about to wire this node up itself (dropping onto an edge - see _insertNodeOnEdge).
    * @returns {string|null} The new node's id, or null if the type is unknown or no canvas is mounted.
    * @private
    */
-  _addNodeOfType(type, dataOverrides = {}, point) {
+  _addNodeOfType(type, dataOverrides = {}, point, { chain = true } = {}) {
     const defaults = NODE_DEFAULTS[type];
     if (!this._drawflow || !defaults) return null;
-    const { x, y } = point || this._defaultNodePoint();
+    // Resolved before the node exists, so the new node can never be its own anchor.
+    const anchor = chain && defaults.inputs > 0 ? this._chainAnchor() : null;
+    const { x, y } = point || this._chainPoint(anchor) || this._defaultNodePoint();
     // Named on creation rather than left blank, so every node has something
     // stable to be referred to by (on the canvas, and in validation messages)
     // before anyone gets around to renaming it.
     const data = { ...foundry.utils.deepClone(defaults.data), ...dataOverrides, label: this._nextNodeLabel(type) };
     const nodeId = String(this._drawflow.addNode(type, defaults.inputs, defaults.outputs, x, y, `game-orchestra-node-${type}`, data, type));
+    if (anchor) {
+      // Fires 'connectionCreated', which resyncs and re-renders on its own; the calls below
+      // are still unconditional because the unanchored path needs them. Both land in the same
+      // synchronous task, so _recordHistory()'s end-of-task capture makes add-and-wire ONE
+      // undo step rather than two - which is what a user pressing Ctrl+Z expects to undo.
+      this._drawflow.addConnection(anchor.id, nodeId, 'output_1', 'input_1');
+    }
+    // Advance the chain so a run of adds builds a run of nodes. An End node has no output,
+    // so it terminates the chain rather than leaving a dead anchor behind.
+    this._chainAnchorId = defaults.outputs > 0 ? nodeId : null;
     this._syncFromDrawflow(this._drawflow);
     this._refreshNodeDisplay(nodeId);
     this._renderInspector();
     return nodeId;
+  }
+
+  /**
+   * The node a new node should wire itself onto, or null to create an orphan as before.
+   *
+   * Building a sequence by hand used to cost two gestures per track - place the node, then
+   * drag a wire to it - and the wire is pure ceremony when the node was just added onto the
+   * end of a chain. Anchoring is deliberately conservative, because a wrong guess is worse
+   * than no guess: the anchor must have **exactly one output port** and that port must be
+   * **unconnected**.
+   *
+   * That excludes precisely the cases where the intended branch is ambiguous - a Fork (two
+   * outputs from the start), a Random or Condition that has been given extra exits, and any
+   * node whose single exit is already spoken for. It leaves the linear spine (Start, Track,
+   * Delay, Playlist, and a fresh Random/Condition) where there is only one thing "connect
+   * this" could mean.
+   * @returns {{id: string}|null}
+   * @private
+   */
+  _chainAnchor() {
+    if (!this._chainAnchorId) return null;
+    const node = this._liveNode(this._chainAnchorId);
+    if (!node) return null;
+    const ports = Object.keys(node.outputs || {});
+    if (ports.length !== 1) return null;
+    if ((node.outputs[ports[0]]?.connections || []).length > 0) return null;
+    return { id: this._chainAnchorId };
+  }
+
+  /**
+   * Canvas position one column to the right of the chain anchor, so an auto-wired node lands
+   * where the wire can actually be read instead of at the viewport centre with its connection
+   * doubling back across the canvas. Same column pitch the presets lay their graphs out on
+   * (graph-builder.mjs), so a hand-built chain and a generated one look alike.
+   * @param {{id: string}|null} anchor
+   * @returns {{x: number, y: number}|null}
+   * @private
+   */
+  _chainPoint(anchor) {
+    if (!anchor) return null;
+    const node = this._liveNode(anchor.id);
+    if (!node) return null;
+    return { x: (node.pos_x ?? 0) + COLUMN_WIDTH_PX, y: node.pos_y ?? 0 };
   }
 
   /**
@@ -1380,6 +1567,10 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     editor.on('nodeSelected', (id) => {
       this._clearMultiSelection(); // a real single-select supersedes any marquee selection
       this.selectedNodeId = String(id);
+      // Clicking a node re-points the chain (_chainAnchor): "select this, then add" is the
+      // one gesture that says where the next node belongs, and it is also how a user breaks
+      // out of a chain to start a new branch elsewhere.
+      this._chainAnchorId = this.selectedNodeId;
       // The one automatic pane move in this window: a newly-selected node's
       // properties should be visible without an extra click. Under the single-open
       // accordion (handleTogglePane) this does now collapse whatever the user had
@@ -1392,6 +1583,9 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     });
     editor.on('nodeUnselected', () => {
       this.selectedNodeId = null;
+      // Clicking empty canvas ends the chain: the next node added is an orphan again. Without
+      // this, deselecting would leave adds silently wiring onto a node nothing is highlighting.
+      this._chainAnchorId = null;
       this._renderInspector();
     });
     const resync = () => this._syncFromDrawflow(editor);
@@ -1409,6 +1603,8 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       this._restyleNodeWires(draggedId);
     });
 
+    this._installRemovalHealing(editor);
+
     editor.on('nodeMoved', (id) => {
       resync();
       this._closeIssueBalloon(); // the node it points at has moved out from under it
@@ -1420,6 +1616,10 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     });
     editor.on('nodeRemoved', () => {
       this.selectedNodeId = null;
+      // The removed node may well BE the anchor (Delete acts on the selection, and selecting
+      // is what sets the anchor). _chainAnchor() re-looks-up the node and would return null
+      // anyway, but clearing here keeps the two fields telling the same story.
+      this._chainAnchorId = null;
       resync();
       this._renderInspector();
     });
@@ -1461,6 +1661,38 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     // is actually looking at.
     this._history.reset(this._captureSnapshot());
     this._updateHistoryButtons();
+  }
+
+  /**
+   * Make deleting a node out of the middle of a chain heal the gap: removing the Delay from
+   * `A -> Delay -> B` leaves `A -> B` instead of two loose ends.
+   *
+   * Implemented by **wrapping `removeNodeId()`** rather than listening for `nodeRemoved`, because
+   * by the time that event fires the node's connections are already gone - the neighbours have to
+   * be read while the node still knows about them.
+   *
+   * Wrapping is also what makes this cover every removal path from one place. Drawflow's own
+   * Delete/Backspace handler calls `this.removeNodeId(this.node_selected.id)` internally and we
+   * never see that keypress (HR-A's cousin: we deliberately stay out of its way for a single
+   * selection - see _onKeyDown), and _deleteMultiSelection() calls the same public method. A
+   * listener would have missed the first; a change at our own call site would have missed it too.
+   *
+   * Deleting a contiguous run composes correctly, one healing per removal: with `A->B->C->D` and
+   * both B and C selected, removing B gives `A->C` and removing C then gives `A->D`.
+   *
+   * `removeNodeId()` takes the DOM id ('node-<n>'); everything else here uses the bare id.
+   * @param {object} editor - The mounted Drawflow instance.
+   * @private
+   */
+  _installRemovalHealing(editor) {
+    const original = editor.removeNodeId.bind(editor);
+    editor.removeNodeId = (domId) => {
+      const bypass = this._historySuspended ? null : planNodeBypass(this._liveNode(String(domId).slice(5)));
+      original(domId);
+      // After the removal, so the wire is drawn between two nodes that still exist and no port is
+      // briefly holding a connection to a node on its way out.
+      if (bypass) editor.addConnection(bypass.from, bypass.to, bypass.outputPort, bypass.inputPort);
+    };
   }
 
   /**
@@ -2724,11 +2956,31 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       // exact race two overlapping stop/start pairs can hit).
       await this.playlist.setFlag(CONST.moduleId, 'customPlayback', this.graph);
       ui.notifications.info(game.i18n.localize('GameOrchestra.CustomEditor.Saved'));
-      this.close();
+      // Deliberately does NOT close. Saving is the only way to hear the graph - the engine
+      // rebuilds off the 'updatePlaylist' hook this setFlag() just fired - so closing on save
+      // meant the live activity highlight (editor-highlight-mixin.mjs: the drains, the pulses,
+      // the active-edge markers) could only ever be seen by reopening the window afterwards.
+      // The whole feature was gated behind the one action that dismissed it. Iterating on a
+      // graph while listening to it is now one click; the window closes from its own header.
+      this._enableRemoveButton();
     } catch (error) {
       log(1, 'Error saving custom playback graph:', error);
       ui.notifications.error(game.i18n.localize('GameOrchestra.CustomEditor.SaveFailed'));
     }
+  }
+
+  /**
+   * Enable the footer's Remove button after the first successful save.
+   *
+   * The footer is Handlebars-rendered and this window must never re-render itself (HR-A), so
+   * the button is always in the markup and starts `disabled` when the playlist has no graph -
+   * flipping one property here is the whole update. Rendering it conditionally instead would
+   * leave a freshly-saved graph with no way to remove it until the window was reopened.
+   * @private
+   */
+  _enableRemoveButton() {
+    const button = this.element?.querySelector?.('[data-action="removeCustomPlayback"]');
+    if (button) button.disabled = false;
   }
 
   /**

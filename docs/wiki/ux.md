@@ -20,10 +20,10 @@ Seven window classes, reached through roughly two dozen entry points.
 | Surface | File | Opened from | Modal |
 |---|---|---|---|
 | `GameOrchestraConfig` | `app.mjs` | Token Config (Identity), Prototype Token Config | no |
-| `PlaylistTreeApp` | `playlist-tree.mjs` | Settings menu, keybinding, Mood Widget header, **Scene Config button (scoped)** | no |
+| `PlaylistTreeApp` | `playlist-tree.mjs` | Settings menu, keybinding, **scene control (sounds)**, Mood Widget header, **Scene Config button (scoped)** | no |
 | `OverlayConfigApp` | `mood-config.mjs` | Tree footer (two doors: Moods tab, Phases tab) | no |
 | `MoodWidget` | `mood-widget.mjs` | Scene control (sounds), keybinding, restored on `ready` | no |
-| `CustomPlaylistEditor` | `custom-playlist-editor.mjs` | Playlist Config button, tree card button | no |
+| `CustomPlaylistEditor` | `custom-playlist-editor.mjs` | Playlist Config button, **directory context menu**, tree card button | no |
 | `PlaylistMixerApp` | `playlist-mixer.mjs` | Playlist Config button, directory context menu, editor Tracks pane | no |
 
 Plus non-window surfaces: two scene-control toggles (`hooks.mjs#getSceneControlButtons`), four
@@ -384,9 +384,18 @@ with vanilla DOM, `insertAdjacentElement('afterend')`, and wraps the whole thing
 logging at `log(1, …)`. A core rename produces a missing button and a console warning — never a
 thrown error, and never a half-built form group.
 
-Unavailability is **shown disabled with a reason**, not hidden: the graph button in a non-`UNSEQUENCED`
-playlist is the reference (`hooks.mjs:239`). A button that silently isn't there reads as a broken
-module.
+Unavailability is **shown disabled with a reason**, not hidden: the editor footer's *Remove* button
+before a graph exists is the reference (`custom-playlist-editor.hbs`). A button that silently isn't
+there reads as a broken module.
+
+> **Disabled is for what genuinely cannot work.** The old reference for this rule was the graph
+> button on a non-`UNSEQUENCED` playlist, and it was the wrong example: `handleSave` forces the mode
+> itself, so the button always *would* have worked. The gate only charged the GM a click and taught
+> them "Soundboard" — a Foundry concept the graph makes irrelevant. A disabled control that would
+> have succeeded is not a helpful explanation, it is a false one. Before disabling something, check
+> that pressing it would actually fail; if the code downstream already handles the case, say what
+> will happen (the hint now reads *"saving switches this playlist to Soundboard mode"*) and let them
+> press it.
 
 ---
 

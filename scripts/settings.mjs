@@ -233,27 +233,44 @@ export function registerKeybindings() {
   // All four actions either mutate world-scoped settings or open GM-only management
   // apps, so every binding is restricted - a player pressing one should see nothing
   // happen, not a swallowed permission error.
+  //
+  // All four also ship BOUND. They previously registered with no `editable` default,
+  // which meant every keybinding route the docs advertise was dead on arrival: the
+  // binding existed in the Configure Controls list and did nothing until the GM
+  // assigned a key by hand. A play-time shortcut nobody has bound is not a shortcut.
+  //
+  // Alt+<letter> throughout: Foundry core reserves plain letters (canvas tools) and
+  // Ctrl+<letter> (undo, copy, paste, save), but leaves Alt+<letter> combinations
+  // alone - core's only Alt use is the bare Alt held down to highlight objects, which
+  // takes no letter with it. These are defaults, not decrees; Foundry flags any
+  // collision with another module in Configure Controls and the GM can rebind.
+  const alt = (key) => [{ key, modifiers: ['Alt'] }];
+
   game.keybindings.register(CONST.moduleId, 'toggleAreaMusic', {
     name: 'GameOrchestra.Keybindings.ToggleAreaMusic',
     restricted: true,
+    editable: alt('KeyA'),
     onDown: () => toggleAreaMusic()
   });
 
   game.keybindings.register(CONST.moduleId, 'toggleCombatMusic', {
     name: 'GameOrchestra.Keybindings.ToggleCombatMusic',
     restricted: true,
+    editable: alt('KeyC'),
     onDown: () => toggleCombatMusic()
   });
 
   game.keybindings.register(CONST.moduleId, 'toggleMoodWidget', {
     name: 'GameOrchestra.Keybindings.ToggleMoodWidget',
     restricted: true,
+    editable: alt('KeyM'),
     onDown: () => MoodWidget.toggle()
   });
 
   game.keybindings.register(CONST.moduleId, 'togglePlaylistTree', {
     name: 'GameOrchestra.Keybindings.TogglePlaylistTree',
     restricted: true,
+    editable: alt('KeyO'),
     onDown: () => PlaylistTreeApp.toggle()
   });
 }

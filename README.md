@@ -26,6 +26,8 @@
 
 Any playlist can be given its own playback graph, built with a visual node editor (Start, Track, Fork, Delay, Random, Condition, and Playlist nodes) instead of using Foundry's built-in Sequential/Shuffle/Simultaneous modes.
 
+Open it by right-clicking the playlist in the Playlists sidebar and choosing **Playback Graph**, or from the button on the playlist's config sheet. Saving applies the graph immediately and keeps the editor open, so you can watch playback move through the nodes and keep editing. Select a node before adding another and the new one wires itself on; drop a track onto an existing Track node to swap that node's sound.
+
 A **Playlist** node plays another playlist by that playlist's own rules — its own graph if it has one, or its native Foundry mode otherwise — and moves on once that playlist finishes a full pass. The target can be a **direct** reference to a specific playlist, or an **indirect** one that resolves at playback time to the current scene's (or world default's) area or combat playlist.
 
 ## Installation
@@ -44,6 +46,17 @@ https://github.com/Anomander/game-orchestra/releases/latest/download/module.json
 4. **Default music** — set a world-level fallback in module settings
 5. **Moods & Phases** — configure custom moods and per-mood overrides from settings, or manage everything at once from the Playlist Hierarchy Tree
 6. **Settings** — configure fade duration and suppression hotkeys
+
+## Keyboard Shortcuts
+
+All GM-only, and all rebindable in *Configure Controls*.
+
+| Shortcut | Action |
+|---|---|
+| `Alt+O` | Open/close the Game Orchestra panel |
+| `Alt+M` | Open/close the Mood Widget |
+| `Alt+A` | Toggle area music suppression |
+| `Alt+C` | Toggle combat music suppression |
 
 ## Settings
 

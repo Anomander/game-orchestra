@@ -66,6 +66,14 @@ export const ACTIVE_EDGE_ATTR = 'data-go-edge-active';
 export const PULSE_EDGE_ATTR = 'data-go-edge-pulse';
 
 /**
+ * Applied to the wire a drag is currently over, while something draggable is being held above
+ * the canvas - the "drop here to splice this node into this edge" affordance
+ * (_setInsertTargetEdge). Loud on purpose: unlike every other marker here it appears only during
+ * a drag, and it is promising a rewire rather than reporting a state.
+ */
+export const INSERT_EDGE_ATTR = 'data-go-edge-insert';
+
+/**
  * Add or remove one marker attribute on a port/connection element.
  *
  * Optional-chained throughout for the same reason the classList calls it

@@ -44,6 +44,24 @@ export function getSceneControlButtons(controls) {
           MoodWidget.toggle();
         }
       };
+      // The hub, one click from the canvas. D6 (docs/wiki/ux.md) is about the settings tab
+      // being used as an app launcher; collapsing three menu entries into one fixed the
+      // launcher half but left the module's PRIMARY authoring surface four actions deep
+      // (Settings -> Module Settings -> scroll -> Open Game Orchestra) while the transport
+      // beside it was already one. UX-4 puts world-scoped surfaces behind ONE settings door -
+      // that door still exists and is still the only one; this is the same shortcut the Mood
+      // Widget has had here all along, not a second home (UX-1).
+      controls.sounds.tools['game-orchestra-hub'] = {
+        name: 'game-orchestra-hub',
+        order: 13,
+        title: 'GameOrchestra.PlaylistTree.Label',
+        icon: 'fas fa-music',
+        button: true,
+        visible: true,
+        onChange: () => {
+          PlaylistTreeApp.toggle();
+        }
+      };
     } else {
       // A core rename/removal of the 'sounds' scene-control group would
       // otherwise fail silently here - no button, no error, nothing to go on.
@@ -188,11 +206,18 @@ export function handleUserConnected() {
  * Handle Playlist config sheet render to inject a "Custom Playback" button
  * opening the visual graph editor for that playlist.
  *
- * The button is only usable on UNSEQUENCED (Soundboard) playlists - the one
- * Foundry mode that neither auto-advances a finished sound nor stops one to
- * start another, both of which the graph engine requires (H1). It's rendered
- * disabled rather than hidden in the other modes, with a hint saying why: a
- * button that silently isn't there reads as a broken module.
+ * A graph requires UNSEQUENCED (Soundboard) mode - the one Foundry mode that
+ * neither auto-advances a finished sound nor stops one to start another, both
+ * of which the graph engine requires (H1). This button used to be DISABLED
+ * until the GM set that mode by hand, which was a false unavailability: the
+ * editor's own save path already forces the mode itself
+ * (CustomPlaylistEditor.handleSave), so the gate only ever taught the GM an
+ * unrelated concept ("Soundboard") and charged them a click to get past it.
+ * UX-9's disable-with-a-reason rule is about things that genuinely cannot
+ * work; this always could.
+ *
+ * The hint still says what saving will do when the mode is about to change, so
+ * the mode switch is announced rather than silent.
  *
  * NOTE: anchored on the mode <select> since Playlist#mode is a stable,
  * version-spanning field every config sheet renders - unlike the scene/token
@@ -228,26 +253,24 @@ export function handlePlaylistConfigRender(app, html) {
     existingFormGroup.insertAdjacentElement('afterend', newFormGroup);
 
     const unsequencedMode = globalThis.CONST?.PLAYLIST_MODES?.UNSEQUENCED ?? -1;
-    // A playlist that already HAS a graph stays editable whatever its mode says,
-    // so a graph can never be stranded (and left unremovable) by someone
-    // switching the mode out from under it. Save re-forces UNSEQUENCED anyway.
+    // A playlist that already HAS a graph is already in the right mode for
+    // practical purposes, and saying "saving will switch the mode" about it
+    // would be a lie - the mode is only re-forced if something changed it.
     const hasGraph = isCustomPlaylist(app.document);
-    const applyAvailability = (rawMode) => {
+    const applyHint = (rawMode) => {
       const mode = rawMode === '' || rawMode == null ? app.document.mode : rawMode;
-      const available = Number(mode) === unsequencedMode || hasGraph;
-      button.disabled = !available;
-      hint.textContent = _loc(available ? 'GameOrchestra.CustomEditor.PlaylistConfigHint' : 'GameOrchestra.CustomEditor.UnsequencedOnlyHint');
+      const modeAlreadyRight = Number(mode) === unsequencedMode || hasGraph;
+      hint.textContent = _loc(modeAlreadyRight ? 'GameOrchestra.CustomEditor.PlaylistConfigHint' : 'GameOrchestra.CustomEditor.WillSwitchModeHint');
     };
 
-    applyAvailability(modeSelect.value);
+    applyHint(modeSelect.value);
     // The <select> is unsaved UI state, so document.mode alone would leave the
-    // button stale until the sheet is saved and reopened - re-evaluate as the
+    // hint stale until the sheet is saved and reopened - re-evaluate as the
     // user changes it.
-    modeSelect.addEventListener('change', () => applyAvailability(modeSelect.value));
+    modeSelect.addEventListener('change', () => applyHint(modeSelect.value));
 
     button.addEventListener('click', (event) => {
       event.preventDefault();
-      if (button.disabled) return;
       new CustomPlaylistEditor(app.document).render(true);
     });
 
@@ -311,8 +334,14 @@ export function handleUpdatePlaylistSound(sound, updateData) {
 }
 
 /**
- * Add a "Mixer" entry to each playlist's sidebar context menu. The fastest route to the window -
- * no sheet to open first - and the entry point that works identically for every playlist type.
+ * Add "Playback Graph" and "Mixer" entries to each playlist's sidebar context menu. The fastest
+ * route to either window - no sheet to open first - and the entry points that work identically
+ * for every playlist type.
+ *
+ * Both of this module's playlist-scoped workbenches are reachable here, in the same order the
+ * Playlist config sheet injects them (graph, then mixer - handlePlaylistConfigRender). The mixer
+ * had this shortcut on its own for a while and the graph editor did not, which left the more
+ * frequently edited of the two costing three extra actions (open the sheet, find the row, click).
  *
  * Entry shape and hook signature are v13+/v14 ApplicationV2: `{label, icon, onClick(event,
  * target)}`, and the menu is anchored on `.playlist > header`, so the playlist id has to be read
@@ -323,18 +352,37 @@ export function handleUpdatePlaylistSound(sound, updateData) {
 export function handlePlaylistContextMenu(_application, entries) {
   try {
     if (!game.user.isGM || !Array.isArray(entries)) return;
+    /**
+     * Resolve the playlist a context-menu click landed on, from the enclosing [data-entry-id].
+     * @param {HTMLElement} target
+     * @returns {object|null}
+     */
+    const playlistFor = (target) => {
+      const element = target?.closest?.('[data-entry-id]') ?? target;
+      return getPlaylistById(element?.dataset?.entryId);
+    };
+    entries.push({
+      // Never mode-gated: the editor's save path forces UNSEQUENCED itself, exactly as the
+      // config sheet's button does since the gate came off (handlePlaylistConfigRender).
+      label: 'GameOrchestra.CustomEditor.MenuEntry',
+      icon: '<i class="fas fa-project-diagram"></i>',
+      condition: () => game.user.isGM,
+      onClick: (event, target) => {
+        const playlist = playlistFor(target);
+        if (playlist) new CustomPlaylistEditor(playlist).render(true);
+      }
+    });
     entries.push({
       label: 'GameOrchestra.Mixer.MenuEntry',
       icon: '<i class="fas fa-sliders"></i>',
       condition: () => game.user.isGM,
       onClick: (event, target) => {
-        const element = target?.closest?.('[data-entry-id]') ?? target;
-        const playlist = getPlaylistById(element?.dataset?.entryId);
+        const playlist = playlistFor(target);
         if (playlist) PlaylistMixerApp.open(playlist);
       }
     });
   } catch (error) {
-    log(1, 'Error adding the mixer entry to the playlist context menu:', error);
+    log(1, 'Error adding the Game Orchestra entries to the playlist context menu:', error);
   }
 }
 

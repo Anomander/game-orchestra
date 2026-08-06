@@ -3,9 +3,48 @@ import { setupFoundryMocks } from './mocks/foundry.mjs';
 
 setupFoundryMocks();
 
-import { registerSettings } from '../scripts/settings.mjs';
+import { registerSettings, registerKeybindings } from '../scripts/settings.mjs';
 import { log } from '../scripts/helpers.mjs';
 import { CONST } from '../scripts/config.mjs';
+
+describe('registerKeybindings', () => {
+  beforeEach(() => {
+    setupFoundryMocks();
+  });
+
+  /**
+   * Every binding ships with a default key. They previously registered with no
+   * `editable` at all, which left all four inert until the GM assigned keys by hand -
+   * so the keybinding route the README and the wiki both advertise did nothing on a
+   * fresh install. An unbound play-time shortcut is not a shortcut.
+   */
+  it('gives every binding a default key', () => {
+    registerKeybindings();
+
+    const calls = game.keybindings.register.mock.calls;
+    expect(calls.map(([, action]) => action)).toEqual([
+      'toggleAreaMusic',
+      'toggleCombatMusic',
+      'toggleMoodWidget',
+      'togglePlaylistTree'
+    ]);
+    for (const [, action, config] of calls) {
+      expect(config.editable, `${action} ships unbound`).toHaveLength(1);
+      expect(config.editable[0].key).toMatch(/^Key[A-Z]$/);
+      // Core reserves plain letters and Ctrl+letter; Alt+letter is the free space.
+      expect(config.editable[0].modifiers).toEqual(['Alt']);
+      // GM-only: all four either mutate world settings or open management apps.
+      expect(config.restricted).toBe(true);
+    }
+  });
+
+  it('binds four distinct keys', () => {
+    registerKeybindings();
+
+    const keys = game.keybindings.register.mock.calls.map(([, , config]) => config.editable[0].key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
 
 describe('registerSettings', () => {
   beforeEach(() => {

@@ -114,10 +114,18 @@
     <button type="button" data-action="save">
       <i class="fas fa-save"></i> {{localize "GameOrchestra.UI.Save"}}
     </button>
-    {{#if hasExistingGraph}}
-    <button type="button" data-action="removeCustomPlayback">
+    <!-- Always rendered, disabled until there is a graph to remove, and re-enabled by
+         CustomPlaylistEditor#_enableRemoveButton() on the first successful save. Save no longer
+         closes this window (see handleSave), and HR-A forbids re-rendering it - so wrapping this
+         button in a conditional block would leave a graph saved in this session with no remove
+         button until the window was closed and reopened. One property flip replaces a re-render.
+
+         NOTE: never write a Handlebars block expression inside an HTML comment in a .hbs file.
+         Handlebars parses the whole file and does not skip HTML comments, so a bare opening
+         block in prose is an unclosed block and the template fails to compile at render time -
+         which is exactly how this comment broke the editor once. -->
+    <button type="button" data-action="removeCustomPlayback" {{#unless hasExistingGraph}}disabled{{/unless}}>
       <i class="fas fa-undo"></i> {{localize "GameOrchestra.CustomEditor.RemoveButton"}}
     </button>
-    {{/if}}
   </footer>
 </div>
