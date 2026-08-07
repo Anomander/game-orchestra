@@ -204,6 +204,28 @@ them exactly like a native transition instead of cutting them dead.
 `stopAudio` passes straight through to child engines, so a crossfading root stop crossfades every
 nested playlist's sounds too — not just the root engine's own.
 
+**Corollary: a fade-out is a pending stop, and it must stay cancellable.** `playing === true` for
+the whole of a fade, so every adoption path in the module ("already playing, leave it
+uninterrupted"; the engine's `path=adopted`) will happily adopt a sound that is seconds from being
+stopped by a fade nobody can see any more — and be left holding a token on dead audio, waiting for
+an `'end'` that a `'stop'` never sends. Confirmed live twice, from two directions: ticking *Play as
+overlay*, and leaving a mood and returning inside the crossfade window.
+
+So `_fadeOutSounds()` claims each sound with a token in `MusicController#_pendingFadeOuts`, and the
+completion callback stops it **only while that token is still the current one**. Anything that
+reclaims a playing sound must call `cancelPendingFadeOut(sound)` first — it drops the token and
+fades the level back up, since adoption never sets a volume of its own.
+
+The same registry answers the other question `sound.playing` can't: **anything that levels live
+audio must skip a sound that is fading out.** `applyMixToSound()` does, at entry and on every
+retry. Re-levelling mid-fade glides the ramp back *up*, so the track plays on at full volume for
+the rest of the fade and then stops dead — reported as *"suppress does not respect the fadeout, it
+delays then cuts out"*, because suppression drops the base and the layer together and the duck's
+`onChange` re-levels the world mid-fade.
+
+**Never clear `_pendingFadeOuts` in bulk.** Dropping a token is exactly how a stop gets cancelled,
+so emptying the map cancels every pending stop and strands those sounds playing forever.
+
 ---
 
 ## H12 — A durational node's "holds its token forever" property is a function of its loop mode, not its node type

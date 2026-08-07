@@ -140,6 +140,26 @@ export function playlistNeedsMix(playlist) {
 }
 
 /**
+ * Whether this sound is currently being faded out to a stop by the controller.
+ *
+ * A fade-out leaves the document saying `playing` for its whole duration, so `sound.playing` -
+ * which is otherwise the right "is there anything to level" test - cannot see it. Re-asserting a
+ * mix onto a sound mid-fade-out overwrites the ramp with a glide back up to full: the track then
+ * plays on at full volume for the rest of the fade and stops dead at the end of it. Confirmed
+ * live: suppressing Area/Combat music while a layer was ducking cut out after a pause instead of
+ * fading, because dropping the layer republished `activeDuck`, whose onChange re-levelled every
+ * playing sound in the world - the ones on their way out included.
+ *
+ * Only the head GM runs fades, so this reads false everywhere else and those clients simply stop
+ * when the document does, exactly as before.
+ * @param {object|null} sound - Foundry PlaylistSound document.
+ * @returns {boolean}
+ */
+function isFadingOut(sound) {
+  return game.gameOrchestra?.musicController?.isFadingOut?.(sound?.id) === true;
+}
+
+/**
  * Push the mixed volume onto a sound's live audio, waiting for the audio to exist first.
  *
  * The wait is not defensive: `PlaylistSound#sync()` starts playback with an async
@@ -153,14 +173,15 @@ export function playlistNeedsMix(playlist) {
  * @returns {void}
  */
 export function applyMixToSound(sound, { duration = REASSERT_FADE_MS } = {}) {
-  if (!sound?.playing) return;
+  if (!sound?.playing || isFadingOut(sound)) return;
   const target = mixedVolume(sound);
   let attempts = 0;
 
   const attempt = () => {
     // The document stopped while we were waiting - sync() owns the stop, and forcing a volume
-    // onto a sound mid-stop would fight its fade-out.
-    if (!sound.playing) return;
+    // onto a sound mid-stop would fight its fade-out. Re-checked on every retry, not just at
+    // entry: a fade-out can begin at any point during the wait.
+    if (!sound.playing || isFadingOut(sound)) return;
     const raw = sound.sound;
     if (raw?.playing) {
       try {

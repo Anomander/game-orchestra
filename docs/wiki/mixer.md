@@ -144,6 +144,24 @@ with an async `Sound#load({autoplay})`, so on the update that *begins* a track t
 where the document says playing and there is nothing to set a volume on yet. Same retry shape as
 `MusicController#_fadeInWhenReady`, for the same reason.
 
+### A sound on its way out is not levelable
+
+`applyMixToSound()` refuses any sound the controller reports via `isFadingOut()`, at entry **and on
+every retry** — a fade can start at any point during the wait.
+
+A fade-out leaves the document saying `playing` for its whole duration, so `sound.playing` cannot
+see one. Re-levelling a sound mid-fade-out replaces the ramp with a glide back **up** to its mix
+volume: the track then plays on at full level for the rest of the fade and stops dead at the end of
+it. Confirmed live, reported as *"Suppress Area/Combat Music does not respect the fadeout — it
+delays for a time, then cuts out"*. The trigger is the duck: suppression drops the base and the
+layer together, so `_applyDuck()` republishes `activeDuck` at 1 in the same tick the base starts
+fading, and `reassertDuck()` walks **every** playing sound in the world — the outgoing ones
+included.
+
+The registry backing `isFadingOut()` is `MusicController#_pendingFadeOuts` (see
+[architecture.md](architecture.md) → *Reclaiming a sound mid-fade*). Only the head GM runs fades, so
+this reads `false` on every other client and they level exactly as before.
+
 ### Where the mix is applied at start
 
 Three sites start audio with an explicit volume and would otherwise begin at the unmixed level and

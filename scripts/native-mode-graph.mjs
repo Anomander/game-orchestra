@@ -97,12 +97,24 @@ function buildSimultaneousGraph(soundIds) {
 
 /**
  * @param {{mode: number, playbackOrder?: string[], sounds?: object}} playlist
- * @param {{rng?: () => number}} [options] - Injectable RNG (SHUFFLE only), for deterministic tests.
+ * @param {object} [options]
+ * @param {() => number} [options.rng] - Injectable RNG (SHUFFLE only), for deterministic tests.
+ * @param {string|null} [options.trackId] - An explicitly bound initial track. When set, it wins
+ *   over the playlist's mode entirely, exactly as `PlaylistContext._resolveTracks()` checks
+ *   `trackId` before `mode` for the non-graph path. Without this, a binding that names one track
+ *   of a Soundboard playlist plays the WHOLE playlist when it is driven through an engine
+ *   (an additive layer, or a Playlist node) - confirmed live: an overlay layer bound to one
+ *   ambient track marched through every drum loop in the playlist instead.
  * @returns {import('./custom-playback-schema.mjs').CustomGraph}
  */
-export function buildNativeModeGraph(playlist, { rng = Math.random } = {}) {
+export function buildNativeModeGraph(playlist, { rng = Math.random, trackId = null } = {}) {
   const modes = playlistModes();
   const soundIds = orderedSoundIds(playlist);
+
+  // Validated against the playlist's own sounds rather than trusted: a stale id left over from a
+  // previous binding would otherwise synthesize a graph whose only Track node names a sound that
+  // does not exist, which starts and goes idle in silence.
+  if (trackId && soundIds.includes(trackId)) return buildSequenceGraph([trackId]);
 
   if (playlist?.mode === modes.SIMULTANEOUS) return buildSimultaneousGraph(soundIds);
   if (playlist?.mode === modes.SHUFFLE) return buildSequenceGraph(shuffled(soundIds, rng));

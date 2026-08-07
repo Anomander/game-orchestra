@@ -11,6 +11,12 @@ import { coerceDuckFactor, resolveCrossfadeOverride } from './playlist-mix.mjs';
 export class MusicController {
   constructor() {
     this.fadingTracks = [];
+    // soundId -> the token identifying the fade-out currently scheduled to stop that sound. The
+    // stop only fires while its own token is still the one in here, which is what makes a fade
+    // cancellable: a sound reclaimed mid-fade has its entry replaced/removed and the landing fade
+    // becomes a no-op. See _fadeOutSounds / cancelPendingFadeOut.
+    /** @type {Map<string, object>} */
+    this._pendingFadeOuts = new Map();
     this.currentTracks = [];
     this.currentContext = null;
     this.isDebouncing = false;
@@ -142,6 +148,11 @@ export class MusicController {
       validContexts.sort((a, b) => this.sortPlaylists(a, b, combat));
 
       const winnerContext = validContexts[0] || null;
+      // Resolved BEFORE the transition, and threaded through both calls below so the two cannot
+      // disagree. A binding that just flipped between replacing and layering hands the SAME
+      // PlaylistSound from the base to a layer, and transitionToContext() has to know that before
+      // it decides what to fade out - see its `layerSoundIds`.
+      const incomingLayers = this._collectLayerContexts(winnerContext);
       const targetTracks = winnerContext?.tracks || [];
       const primaryTrackName = targetTracks[0]?.name || 'none';
 
@@ -161,14 +172,14 @@ export class MusicController {
         if (contextUnchanged && !audioActuallyPlaying && targetTracks.length > 0) {
           log(3, 'Context unchanged but audio is not playing — restarting tracks.');
         }
-        await this.transitionToContext(winnerContext);
+        await this.transitionToContext(winnerContext, incomingLayers);
       }
 
       // Always, including on the no-change path above: the base can be entirely unchanged while
       // a layer has to swap or stop, which is the normal case for a turn passing between two
       // combatants when neither is exclusive. Returning early here would strand the outgoing
       // combatant's theme playing over everyone else's turn.
-      await this._syncLayers();
+      await this._syncLayers(incomingLayers);
     } catch (error) {
       log(1, 'Error in playCurrentTrack calculation:', error);
     } finally {
@@ -185,8 +196,11 @@ export class MusicController {
   /**
    * Transition to a target playlist context
    * @param {PlaylistContext|null} targetContext Target context to play
+   * @param {Map<string, PlaylistContext>|null} [incomingLayers] - The layers about to start once
+   *   this transition finishes ({@link MusicController#_collectLayerContexts}). Their sounds are
+   *   held back from the fade-out below; see `layerSoundIds`.
    */
-  async transitionToContext(targetContext) {
+  async transitionToContext(targetContext, incomingLayers = null) {
     // A custom graph already driving the exact playlist the resolver just
     // picked again must be left alone. Without this, every re-evaluation
     // that still resolves to the same running graph (e.g. an unrelated mood
@@ -226,6 +240,13 @@ export class MusicController {
 
     log(3, `Transitioning music context to '${targetContext?.playlist?.name || 'none'}' (stopping ${this.fadingTracks.length} tracks, starting ${targetTracks.length} tracks, fade: ${fadeDurationMs}ms)`);
 
+    // Anything this transition intends to KEEP playing has to be taken off a fade-out an earlier
+    // transition already scheduled - re-winning a context inside the crossfade window is exactly
+    // that case, and the sound would otherwise be stopped mid-playback by a fade nobody could see
+    // any more. Done here, before the first await: the cancel has to beat the fade's completion
+    // callback, and every await below is another chance for it to land first.
+    for (const track of targetTracks) this.cancelPendingFadeOut(track, fadeDurationMs);
+
     // Retire any running custom-graph engine, but leave its sounds playing: they
     // stay in _managedSoundIds and (unless shared with the new target) are absent
     // from targetTrackIds, so the fade-out loop below crossfades them exactly like
@@ -247,9 +268,19 @@ export class MusicController {
     // it a layer. Their sounds are in _managedSoundIds like any other, so without this exclusion
     // the loop below would fade them out on every single base re-resolution and the layers would
     // die the moment anything else changed.
-    const layerSoundIds = new Set(
-      [...this._layers.values()].flatMap((run) => (run.engine?.activeSounds ?? []).map((sound) => sound.id))
-    );
+    //
+    // The INCOMING layers count too, not just the running ones. Ticking "Play as overlay" hands
+    // the same PlaylistSound straight from the base to a layer: the binding stops winning the
+    // resolution, so this transition sees its track as an outgoing managed sound and fades it -
+    // and then _syncLayers() starts the layer, which finds the document still marked playing and
+    // ADOPTS it rather than starting it (path=adopted, no play() call). Four seconds later the
+    // fade lands, the sound stops, and the layer is left holding a token on dead audio, waiting
+    // for an 'end' that a 'stop' never sends. Confirmed live: the layer showed as running and was
+    // simply inaudible. Leaving the sound alone here makes it a seamless hand-over instead.
+    const layerSoundIds = new Set([
+      ...[...this._layers.values()].flatMap((run) => (run.engine?.activeSounds ?? []).map((sound) => sound.id)),
+      ...[...(incomingLayers?.values() ?? [])].flatMap((context) => (context.tracks ?? []).map((track) => track.id))
+    ]);
 
     // Fade out current playing tracks (excluding targetTracks). Only ever touches sounds
     // this controller itself previously started — a GM's manually-started ambience or
@@ -282,6 +313,8 @@ export class MusicController {
     // unrelated config change that happens to re-resolve to the same winning context.
     const tracksToStart = targetTracks.filter((targetTrack) => {
       const alreadyPlaying = targetTrack.playing === true || targetTrack.sound?.playing === true;
+      // Any fade-out scheduled on it was already cancelled above, which is what makes
+      // "uninterrupted" true rather than "uninterrupted until the old fade lands".
       if (alreadyPlaying) log(3, `Track '${targetTrack.name}' is already playing; leaving it uninterrupted.`);
       return !alreadyPlaying;
     });
@@ -351,16 +384,73 @@ export class MusicController {
       const soundObj = activeSound.sound || activeSound;
       if (fadeDurationMs > 0 && typeof soundObj?.fade === 'function') {
         log(3, `Fading out track '${activeSound.name}' over ${fadeDurationMs}ms`);
-        Promise.resolve(soundObj.fade(0, { duration: fadeDurationMs })).then(() => {
+        // The stop is claimed by this token, not scheduled unconditionally. Whoever reclaims the
+        // sound before the fade lands takes the claim away and the stop below simply doesn't run.
+        const token = {};
+        if (activeSound.id) this._pendingFadeOuts.set(activeSound.id, token);
+        const settle = () => {
+          if (activeSound.id && this._pendingFadeOuts.get(activeSound.id) !== token) return;
+          this._pendingFadeOuts.delete(activeSound.id);
           this.stopTrack(activeSound);
-        }).catch(() => {
-          this.stopTrack(activeSound);
-        });
+        };
+        Promise.resolve(soundObj.fade(0, { duration: fadeDurationMs })).then(settle).catch(settle);
         this.fadingTracks.push(new FadingTrack(activeSound, fadeDurationMs));
       } else {
+        if (activeSound.id) this._pendingFadeOuts.delete(activeSound.id);
         this.stopTrack(activeSound);
       }
     }
+  }
+
+  /**
+   * Whether a fade-out is currently running on this sound with a stop waiting at the end of it.
+   *
+   * The question `sound.playing` cannot answer: the document says `playing` for the whole of a
+   * fade. Anything that levels live audio has to ask this before touching a sound, or it glides
+   * the ramp back up and turns the fade into a pause followed by a hard cut (see
+   * playlist-mix-apply.mjs#isFadingOut).
+   * @param {string|null|undefined} soundId
+   * @returns {boolean}
+   */
+  isFadingOut(soundId) {
+    return !!soundId && this._pendingFadeOuts.has(soundId);
+  }
+
+  /**
+   * Reclaim a sound that is mid-fade-out: call off the stop that fade was going to perform, and
+   * bring the level back up to what this sound's mix asks for.
+   *
+   * Exists because "still playing" and "not on its way to silence" are different questions, and
+   * every adoption path in the module asks only the first. A sound fading out is `playing === true`
+   * for the whole fade, so an engine adopting it takes no action at all (`path=adopted`, no play()
+   * call) - and then the fade lands, the sound stops, and the adopter is left holding a token on
+   * dead audio waiting for an 'end' that a 'stop' never sends. Confirmed live: switching a mood
+   * away and back inside the crossfade window left the overlay layer showing as running and
+   * completely silent.
+   *
+   * The fade back up is not cosmetic. Adoption never sets a volume - the level is wherever the
+   * outgoing fade had got to, so without this the reclaimed sound plays on at some arbitrary
+   * fraction, or at zero if the reclaim landed near the end of the fade.
+   * @param {object|null} sound - PlaylistSound document being reclaimed.
+   * @param {number} [fadeDurationMs] - How long to ramp back up; defaults to this playlist's own
+   *   crossfade, matching the fade it is cancelling.
+   * @returns {boolean} Whether there was a pending fade-out to cancel.
+   */
+  cancelPendingFadeOut(sound, fadeDurationMs = undefined) {
+    const soundId = sound?.id;
+    if (!soundId || !this._pendingFadeOuts.has(soundId)) return false;
+    this._pendingFadeOuts.delete(soundId);
+    const index = this.fadingTracks.findIndex((fading) => fading.track?.id === soundId);
+    if (index >= 0) this.fadingTracks.splice(index, 1);
+    const soundObj = sound.sound || sound;
+    const duration = fadeDurationMs ?? this._resolveFadeMs(sound.parent);
+    log(3, `Reclaiming fading-out track '${sound.name}' - cancelling its stop and restoring volume over ${duration}ms`);
+    if (typeof soundObj?.fade === 'function') {
+      // Failure here is not worth propagating to the caller's start path: the sound keeps playing
+      // either way, which is the part that matters. A wrong level is audible; a thrown start is fatal.
+      Promise.resolve(soundObj.fade(mixedVolume(sound), { duration })).catch(() => {});
+    }
+    return true;
   }
 
   /**
@@ -372,14 +462,17 @@ export class MusicController {
    *
    * - `combatant` - the current combatant's non-exclusive theme (getCombatantLayerContext).
    * - `overlay:<section>` - a mood or phase entry marked `layer` (getOverlayLayerContexts).
+   * @param {PlaylistContext|null} [baseContext] - The base this layer set will play over. Callers
+   *   resolving layers BEFORE the transition pass the incoming winner, so the area-vs-combat rule
+   *   is decided against the music that is about to play rather than the music leaving.
    * @returns {Map<string, PlaylistContext>}
    * @private
    */
-  _collectLayerContexts() {
+  _collectLayerContexts(baseContext = this.currentContext) {
     const layers = new Map();
     const combatant = this.getCombatantLayerContext();
     if (combatant) layers.set('combatant', combatant);
-    for (const context of this.getOverlayLayerContexts()) layers.set(`overlay:${context.context}`, context);
+    for (const context of this.getOverlayLayerContexts(baseContext)) layers.set(`overlay:${context.context}`, context);
     return layers;
   }
 
@@ -393,11 +486,13 @@ export class MusicController {
    * none has a priority, and none is ever crossfaded against the base: the base simply keeps
    * playing underneath, which is the entire feature - no stop, no restart, and therefore nothing
    * to resume (position memory can't help a graph anyway, H9).
+   * @param {Map<string, PlaylistContext>} [desired] - Pre-resolved by playCurrentTrack() before
+   *   the base transition, so this and transitionToContext() act on the identical set. Resolved
+   *   here when called on its own.
    * @returns {Promise<void>}
    * @private
    */
-  async _syncLayers() {
-    const desired = this._collectLayerContexts();
+  async _syncLayers(desired = this._collectLayerContexts()) {
 
     // Every retirement first, before any start. A playlist moving from one layer key to another
     // (a phase overlay naming what the outgoing combatant was already playing) would otherwise be
@@ -426,7 +521,13 @@ export class MusicController {
       // graph is an EMPTY graph - which starts, finds nothing to do, and goes idle in silence.
       // Synthesizing one from the playlist's native mode is exactly what a Playlist node does for
       // its target (_runPlaylistPass), so native and custom layers behave identically.
-      const graph = getCustomGraph(playlist) || buildNativeModeGraph(playlist);
+      //
+      // `trackId` is threaded in so a layer bound to ONE track of a Soundboard playlist plays that
+      // track, matching what the same binding does when it wins the base resolution instead
+      // (PlaylistContext._resolveTracks checks trackId before mode). It is deliberately not passed
+      // for a custom playlist: getCustomGraph() wins first, and a stray initialTrack must never
+      // bypass a graph (H2).
+      const graph = getCustomGraph(playlist) || buildNativeModeGraph(playlist, { trackId: context.trackId });
       const engine = new CustomPlaybackEngine(context, this, { graph });
       this._layers.set(key, { engine, context });
       log(3, `Starting music layer '${playlist.name}' (${key}) over '${this.currentContext?.playlist?.name || 'nothing'}'`);
@@ -539,6 +640,29 @@ export class MusicController {
   }
 
   /**
+   * Every sound id currently being played by something other than the layer under `key` - the
+   * base context (its own tracks for a native playlist, its engine's for a graph) and every other
+   * layer.
+   *
+   * Exists because "this engine was playing it" stopped being the same question as "this engine
+   * still owns it" once a binding could move between layering and replacing. Stopping a sound
+   * another owner is mid-way through is silent and looks exactly like the feature being broken.
+   * @param {string} key - The layer being retired; its own sounds are what the caller is asking about.
+   * @returns {Set<string>}
+   * @private
+   */
+  _soundIdsOwnedOutside(key) {
+    const ids = new Set();
+    for (const track of this.currentTracks ?? []) if (track?.id) ids.add(track.id);
+    for (const sound of this._customEngine?.activeSounds ?? []) if (sound?.id) ids.add(sound.id);
+    for (const [otherKey, run] of this._layers) {
+      if (otherKey === key) continue;
+      for (const sound of run.engine?.activeSounds ?? []) if (sound?.id) ids.add(sound.id);
+    }
+    return ids;
+  }
+
+  /**
    * Tear down one running layer, fading its sounds out over that layer playlist's own crossfade
    * value. Its active sounds have to be captured BEFORE stop(): once the engine has stopped, its
    * nodes have released them and activeSounds is empty, so there would be nothing left to fade.
@@ -552,8 +676,16 @@ export class MusicController {
     const run = this._layers.get(key);
     if (!run) return;
     const engine = run.engine;
-    const sounds = engine.activeSounds;
     const fadeDurationMs = this._resolveFadeMs(engine.playlist);
+    // Only the sounds nothing ELSE is now playing. A layer and the base can legitimately end up
+    // on the same PlaylistSound - unticking "Play as overlay" is exactly that: the same binding
+    // stops layering and starts winning the resolution instead, so transitionToContext() adopts
+    // the already-playing sound ("leaving it uninterrupted") and _syncLayers() then retires the
+    // layer that had been playing it. Fading the whole activeSounds list there takes the BASE's
+    // own track to silence a beat after it was handed over - confirmed live as "everything stops
+    // playing" the moment the overlay was switched back to replacing.
+    const ownedElsewhere = this._soundIdsOwnedOutside(key);
+    const sounds = engine.activeSounds.filter((sound) => !ownedElsewhere.has(sound?.id));
     this._layers.delete(key);
     log(3, `Retiring music layer '${engine.playlist?.name || 'unknown'}' (${key}, fading ${sounds.length} track(s) over ${fadeDurationMs}ms)`);
     await engine.stop({ stopAudio: false });
@@ -982,9 +1114,11 @@ export class MusicController {
    * (config.mjs#sectionAxis), and leaving an ambience layer running over a boss fight is not what
    * "an overlay over the base area music" means. Nothing here goes through sortPlaylists() - a
    * layer does not compete.
+   * @param {PlaylistContext|null} [baseContext] - The base these layers will play over; defaults
+   *   to the one currently playing.
    * @returns {PlaylistContext[]}
    */
-  getOverlayLayerContexts() {
+  getOverlayLayerContexts(baseContext = this.currentContext) {
     const scene = this.currentScene;
     const defaultConfig = game.settings.get(CONST.moduleId, CONST.settings.defaultMusic) || null;
     const contexts = [];
@@ -995,7 +1129,7 @@ export class MusicController {
         if (context) break;
       }
       if (!context || !this.filterPlaylists(context)) continue;
-      if (type === 'area' && this.currentContext?.context === 'combat') continue;
+      if (type === 'area' && baseContext?.context === 'combat') continue;
       contexts.push(context);
     }
     return contexts;

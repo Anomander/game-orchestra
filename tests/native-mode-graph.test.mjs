@@ -118,3 +118,44 @@ describe('buildNativeModeGraph', () => {
     expect(trackSoundIds(graph)).toEqual(['s1', 's2']);
   });
 });
+
+describe('buildNativeModeGraph with an explicitly bound track', () => {
+  // A binding that names one track of a Soundboard playlist means "play this one" - that is
+  // exactly what PlaylistContext._resolveTracks() does for the non-engine path, checking trackId
+  // before mode. Without it here, driving the same binding through an engine (an additive layer,
+  // or a Playlist node) marched through the entire playlist instead. Confirmed live.
+  const sounds = () => [createMockSound('s1', 'A'), createMockSound('s2', 'B'), createMockSound('s3', 'C')];
+
+  it('plays only that track, whatever the playlist mode says', () => {
+    for (const mode of [MODES.UNSEQUENCED, MODES.SEQUENTIAL, MODES.SHUFFLE, MODES.SIMULTANEOUS]) {
+      const playlist = createMockPlaylist('pl1', 'Playlist', sounds(), mode);
+      const graph = buildNativeModeGraph(playlist, { trackId: 's2' });
+
+      expect(validateGraph(graph).valid, `mode ${mode}`).toBe(true);
+      expect(trackSoundIds(graph), `mode ${mode}`).toEqual(['s2']);
+    }
+  });
+
+  it('still ends cleanly, so a layer or a Playlist-node pass completes', () => {
+    const playlist = createMockPlaylist('pl1', 'Playlist', sounds(), MODES.UNSEQUENCED);
+    const graph = buildNativeModeGraph(playlist, { trackId: 's2' });
+
+    expect(graph.nodes.filter((n) => n.type === 'start')).toHaveLength(1);
+    expect(graph.nodes.filter((n) => n.type === 'end')).toHaveLength(1);
+  });
+
+  it('falls back to the whole playlist when the bound track is no longer in it', () => {
+    // A stale id from a previous binding would otherwise synthesize a graph whose only Track
+    // node names a sound that does not exist - which starts and goes idle in silence.
+    const playlist = createMockPlaylist('pl1', 'Playlist', sounds(), MODES.SEQUENTIAL);
+    const graph = buildNativeModeGraph(playlist, { trackId: 'gone' });
+
+    expect(trackSoundIds(graph)).toEqual(['s1', 's2', 's3']);
+  });
+
+  it('ignores a null/absent trackId, which is the ordinary case', () => {
+    const playlist = createMockPlaylist('pl1', 'Playlist', sounds(), MODES.SEQUENTIAL);
+    expect(trackSoundIds(buildNativeModeGraph(playlist, { trackId: null }))).toEqual(['s1', 's2', 's3']);
+    expect(trackSoundIds(buildNativeModeGraph(playlist))).toEqual(['s1', 's2', 's3']);
+  });
+});

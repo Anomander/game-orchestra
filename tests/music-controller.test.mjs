@@ -575,6 +575,217 @@ describe('MusicController', () => {
       expect(controller.currentLayerContexts).toEqual([]);
     });
 
+    it('layers only the bound track of a Soundboard playlist, not the whole thing', async () => {
+      // Confirmed live: an overlay bound to one ambient track marched through every drum loop in
+      // the playlist, because the synthesized graph never saw the binding's initialTrack.
+      const many = createMockPlaylist('overlayP', 'Drums', [
+        createMockSound('d1', 'Chaotic Drum Beat'),
+        createMockSound('d2', 'Combat Drum Loop'),
+        createMockSound('d3', 'Dark Tension Music')
+      ]);
+      game.playlists.get = vi.fn((id) => ({ baseP: basePl, overlayP: many })[id] || null);
+      sceneWith({
+        area: {
+          playlist: 'baseP',
+          overlays: { calm: { playlist: 'overlayP', initialTrack: 'd3', layer: true } }
+        }
+      });
+      controller.currentContext = { context: 'area', playlist: basePl };
+
+      await controller._syncLayers();
+
+      const soundIds = layerEngine('overlay:area').graph.nodes.filter((n) => n.type === 'track').map((n) => n.soundId);
+      expect(soundIds).toEqual(['d3']);
+    });
+
+    it('does not fade the base\'s own track when a layer stops layering and starts winning', async () => {
+      // Unticking "Play as overlay" makes the SAME binding win the resolution instead. The base
+      // adopts the already-playing sound ("leaving it uninterrupted"), then the layer retires -
+      // and fading its whole activeSounds list there silenced the track the base had just taken
+      // over. Confirmed live as "everything stops playing".
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+      await controller._syncLayers();
+
+      const shared = createMockSound('shared1', 'Dark Tension Music', { playing: true });
+      layerEngine('overlay:area').activeSounds = [shared];
+      // The base has now taken that very sound over - what transitionToContext leaves in place.
+      controller.currentContext = { context: 'area', playlist: overlayPl };
+      controller.currentTracks = [shared];
+
+      await controller._retireLayer('overlay:area');
+
+      expect(shared.sound.fade).not.toHaveBeenCalled();
+      expect(controller._layers.size).toBe(0);
+    });
+
+    it('still fades the layer sounds nothing else picked up', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+      await controller._syncLayers();
+
+      const kept = createMockSound('kept1', 'Adopted', { playing: true });
+      const dropped = createMockSound('dropped1', 'Layer only', { playing: true });
+      layerEngine('overlay:area').activeSounds = [kept, dropped];
+      controller.currentTracks = [kept];
+
+      await controller._retireLayer('overlay:area');
+
+      expect(kept.sound.fade).not.toHaveBeenCalled();
+      expect(dropped.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
+    });
+
+    it('does not fade a sound another layer is still playing', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      controller.currentContext = { context: 'area', playlist: basePl };
+      await controller._syncLayers();
+
+      const shared = createMockSound('shared1', 'Shared', { playing: true });
+      layerEngine('overlay:area').activeSounds = [shared];
+      controller._layers.set('combatant', { engine: { activeSounds: [shared] }, context: {} });
+
+      await controller._retireLayer('overlay:area');
+
+      expect(shared.sound.fade).not.toHaveBeenCalled();
+    });
+
+    it('hands a sound straight to the incoming layer instead of fading it out from under it', async () => {
+      // Ticking "Play as overlay" makes the same binding stop winning the resolution and start
+      // layering. The transition sees its track as an outgoing managed sound and faded it - then
+      // the layer ADOPTED the still-playing document (path=adopted, no play() call) and the fade
+      // stopped it four seconds later, leaving the layer holding a token on dead audio. Confirmed
+      // live: the layer read as running and was simply inaudible.
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const handed = createMockSound('handed1', 'Dark Tension Music', { playing: true });
+      const overlayWithTrack = createMockPlaylist('overlayP', 'Drums', [handed]);
+      game.playlists.get = vi.fn((id) => ({ baseP: basePl, overlayP: overlayWithTrack })[id] || null);
+      game.playlists.playing = [overlayWithTrack];
+      sceneWith({
+        area: {
+          playlist: 'baseP',
+          overlays: { calm: { playlist: 'overlayP', initialTrack: 'handed1', layer: true } }
+        }
+      });
+      // The base was playing it a moment ago, as the winner - so it is a managed sound, and the
+      // transition below would otherwise fade it.
+      controller._managedSoundIds.add('handed1');
+      vi.spyOn(controller, 'playTrack').mockResolvedValue();
+
+      const incoming = controller._collectLayerContexts({ context: 'area', playlist: basePl });
+      await controller.transitionToContext(
+        { playlist: basePl, tracks: [], scopeEntity: null, context: 'area' },
+        incoming
+      );
+
+      expect(handed.sound.fade).not.toHaveBeenCalled();
+      expect(handed.playing).toBe(true);
+    });
+
+    it('still fades an outgoing managed sound no incoming layer claims', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const orphan = createMockSound('orphan1', 'Old Track', { playing: true });
+      game.playlists.playing = [createMockPlaylist('oldP', 'Old', [orphan])];
+      controller._managedSoundIds.add('orphan1');
+      vi.spyOn(controller, 'playTrack').mockResolvedValue();
+
+      await controller.transitionToContext(
+        { playlist: basePl, tracks: [], scopeEntity: null, context: 'area' },
+        new Map()
+      );
+
+      expect(orphan.sound.fade).toHaveBeenCalledWith(0, { duration: 2000 });
+    });
+
+    it('calls off a scheduled stop when the fading sound is reclaimed mid-fade', () => {
+      // Leaving a mood and coming back inside the crossfade window: the layer retired and its
+      // track began fading, then the layer restarted and ADOPTED the still-`playing` document -
+      // and the original fade landed and stopped it anyway. Confirmed live as an overlay that
+      // showed up as running and made no sound at all.
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const sound = createMockSound('s1', 'Dark Tension Music', { playing: true });
+      const stopSpy = vi.spyOn(controller, 'stopTrack').mockImplementation(() => {});
+
+      controller._fadeOutSounds([sound], 2000);
+      expect(controller.cancelPendingFadeOut(sound, 2000)).toBe(true);
+
+      return Promise.resolve().then(() => {
+        expect(stopSpy).not.toHaveBeenCalled();
+        // Restored to its mix level, not left wherever the outgoing fade had got to - adoption
+        // itself never sets a volume.
+        expect(sound.sound.fade).toHaveBeenLastCalledWith(1, { duration: 2000 });
+        expect(controller.fadingTracks).toHaveLength(0);
+      });
+    });
+
+    it('still stops a faded-out sound nobody reclaimed', async () => {
+      const sound = createMockSound('s1', 'Old Track', { playing: true });
+      const stopSpy = vi.spyOn(controller, 'stopTrack').mockImplementation(() => {});
+
+      controller._fadeOutSounds([sound], 2000);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(stopSpy).toHaveBeenCalledWith(sound);
+    });
+
+    it('reports a fading-out sound as such, so the mixer leaves its ramp alone', async () => {
+      // The one thing `sound.playing` cannot tell anyone: the document says playing for the whole
+      // of the fade. reassertDuck() re-levels every playing sound in the world, and dropping a
+      // layer republishes the duck at exactly the moment the base starts fading.
+      const sound = createMockSound('s1', 'Leaving', { playing: true });
+      vi.spyOn(controller, 'stopTrack').mockImplementation(() => {});
+
+      expect(controller.isFadingOut('s1')).toBe(false);
+      controller._fadeOutSounds([sound], 2000);
+      expect(controller.isFadingOut('s1')).toBe(true);
+
+      await Promise.resolve();
+      await Promise.resolve();
+      // Cleared once the stop has actually happened - the sound is no longer on its way out, it is
+      // out, and a stale entry would make the sound permanently unlevelable if it played again.
+      expect(controller.isFadingOut('s1')).toBe(false);
+    });
+
+    it('reports nothing to cancel for a sound that is not fading out', () => {
+      const sound = createMockSound('s1', 'Playing normally', { playing: true });
+      expect(controller.cancelPendingFadeOut(sound, 2000)).toBe(false);
+      expect(sound.sound.fade).not.toHaveBeenCalled();
+    });
+
+    it('leaves the stop with the newest fade when a sound is faded out twice', async () => {
+      const sound = createMockSound('s1', 'Twice', { playing: true });
+      const stopSpy = vi.spyOn(controller, 'stopTrack').mockImplementation(() => {});
+
+      controller._fadeOutSounds([sound], 2000);
+      controller._fadeOutSounds([sound], 2000);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Once, by the second fade's claim - not once per fade, and not zero because the first
+      // fade's claim was superseded.
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('reclaims a fading track the base wins back inside the crossfade window', async () => {
+      setMockSetting('game-orchestra', 'fadeDuration', 2);
+      const sound = createMockSound('s1', 'Base Track', { playing: true });
+      const stopSpy = vi.spyOn(controller, 'stopTrack').mockImplementation(() => {});
+      vi.spyOn(controller, 'playTrack').mockResolvedValue();
+      controller._fadeOutSounds([sound], 2000);
+
+      await controller.transitionToContext(
+        { playlist: basePl, tracks: [sound], scopeEntity: null, context: 'area' },
+        new Map()
+      );
+      await Promise.resolve();
+
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(sound.sound.fade).toHaveBeenLastCalledWith(1, { duration: 2000 });
+    });
+
     it('collects overlay-layer playlists for the stale-playback sweep, every overlay id', async () => {
       sceneWith({
         area: {
@@ -838,7 +1049,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(targetCtx);
+      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map));
       vi.advanceTimersByTime(350);
       expect(controller.isDebouncing).toBe(false);
       vi.useRealTimers();
@@ -860,7 +1071,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(combatCtx);
+      expect(transitionSpy).toHaveBeenCalledWith(combatCtx, expect.any(Map));
       vi.advanceTimersByTime(350);
       vi.useRealTimers();
     });
@@ -877,7 +1088,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(areaCtx);
+      expect(transitionSpy).toHaveBeenCalledWith(areaCtx, expect.any(Map));
       vi.advanceTimersByTime(350);
       vi.useRealTimers();
     });
@@ -924,7 +1135,7 @@ describe('MusicController', () => {
       const transitionSpy = vi.spyOn(controller, 'transitionToContext').mockResolvedValue();
 
       await controller.playCurrentTrack();
-      expect(transitionSpy).toHaveBeenCalledWith(targetCtx);
+      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map));
     });
   });
 

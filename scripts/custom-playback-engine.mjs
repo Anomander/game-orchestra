@@ -1069,12 +1069,19 @@ export class CustomPlaybackEngine {
       // Adopt a track that's already audibly playing (e.g. carried over from the
       // previous context) instead of restarting it from position 0.
       //
+      // First take it off any fade-out already scheduled to stop it. `playing` stays true for the
+      // whole of a fade-out, so "already playing" on its own cannot tell a live track from one
+      // four seconds into its own funeral - adopting the latter yields a node holding a token on
+      // audio that stops shortly afterwards, with no 'end' event ever fired. Confirmed live:
+      // leaving a mood and returning inside the crossfade window silenced the layer for good.
+      //
       // Yield here before touching the watcher below. If this _enterTrack call
       // was itself reached synchronously from inside another node's 'end'
       // dispatch on this same (shared) sound, calling addEventListener('end', ...)
       // while that dispatch is still on the call stack can get invoked again in
       // the very same pass, cascading synchronously - confirmed live: 16
       // restarts landed within ~12ms, far faster than any real audio duration.
+      this.controller.cancelPendingFadeOut?.(sound);
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (this._runId !== runId) {
         this._releaseTrackNode(node); // engine stopped/restarted while awaiting

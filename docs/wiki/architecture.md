@@ -196,8 +196,65 @@ A layer target may be a plain native playlist, so `_syncLayers()` passes an expl
 graph is an *empty* graph, which starts and goes idle in silence. Same pairing `_runPlaylistPass()`
 uses for a Playlist node's target.
 
+**The binding's `initialTrack` is threaded into that synthesized graph.** `buildNativeModeGraph()`
+takes a `trackId`, and when set it wins over the playlist's mode entirely — a one-Track graph —
+mirroring `PlaylistContext._resolveTracks()`, which checks `trackId` before `mode` on the
+non-engine path. Without it, a layer bound to *one* track of a Soundboard playlist marched through
+the whole playlist instead. A stale id that no longer belongs to the playlist falls back to the
+full mode-derived graph rather than synthesizing a Track node for a sound that does not exist.
+
 A layer is refused outright if its playlist is the base's, is anywhere in the base engine tree, or
 is already running as *another* layer (H15).
+
+#### Handing one sound between the base and a layer
+
+Toggling *Play as overlay* moves the **same `PlaylistSound`** between the base and a layer, in
+both directions, and each direction had its own way of killing the sound mid-hand-over. Both are
+now closed, and they are the reason `playCurrentTrack()` resolves the layer set **before** the
+transition and threads the identical `Map` into both calls.
+
+**Layer → base** (unticking). `transitionToContext()` adopts the already-playing sound
+("leaving it uninterrupted"), then `_syncLayers()` retires the layer that had been playing it.
+Fading that layer's whole `activeSounds` list took the base's own track to silence a beat after it
+was handed over. **Retiring a layer therefore only fades sounds nothing else is playing** —
+`_soundIdsOwnedOutside()` covers the base's tracks, the base engine's, and every other layer's.
+
+**Base → layer** (ticking). The binding stops winning the resolution, so the transition sees its
+track as an outgoing *managed* sound and faded it. `_syncLayers()` then started the layer, which
+found the document still marked `playing` and **adopted** it (`path=adopted` — no `play()` call,
+because adoption assumes the audio is already live). Four seconds later the fade landed, the sound
+stopped, and the layer was left holding a token on dead audio waiting for an `'end'` that a
+`'stop'` never sends: the layer read as running and was simply inaudible. `transitionToContext()`
+therefore excludes the **incoming** layers' tracks from its fade-out, not just the running ones —
+so the sound is never touched and the hand-over is seamless.
+
+#### Reclaiming a sound mid-fade
+
+The two hand-overs above stop the fade being *scheduled*. A third case needs a fade already in
+flight to be *called off*: leaving a mood and returning inside the crossfade window. The layer
+retires and its track starts fading; the layer restarts and adopts the still-`playing` document;
+the original fade lands and stops it. Same silent ending as base → layer, from a different
+direction.
+
+The root cause is that **`playing === true` for the whole of a fade-out**, so no adoption path
+anywhere in the module could tell a live track from one four seconds into its own funeral. So
+fade-outs are cancellable: `_fadeOutSounds()` records a token per sound in
+`MusicController#_pendingFadeOuts` and the completion callback stops the sound **only while its own
+token is still the current one**. `cancelPendingFadeOut(sound)` drops the token — the landing fade
+becomes a no-op — and fades the level back up to `mixedVolume(sound)`, since adoption never sets a
+volume and the sound would otherwise play on at whatever fraction the outgoing fade had reached.
+
+Two callers, one per adoption path:
+
+- `transitionToContext()`, for every target track, **before its first `await`** — the cancel has to
+  beat the fade's completion callback.
+- `CustomPlaybackEngine#_enterTrack()`, in the `alreadyPlaying` branch — this covers the base
+  engine, every layer, and every nested Playlist node in one place.
+
+**Never clear `_pendingFadeOuts` wholesale.** Dropping a token is how a stop gets cancelled, so
+emptying the map cancels every pending stop at once and leaves those sounds playing forever.
+`fadingTracks.length = 0` in `transitionToContext()` is pure UI bookkeeping and is *not* the same
+thing.
 
 **Ducking.** `duck` is the multiplier *everything else* is taken to while a layer plays —
 1/absent means no ducking, and it is stored and rendered exactly like the mixer's `gain`. It is read

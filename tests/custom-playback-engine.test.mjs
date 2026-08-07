@@ -49,7 +49,8 @@ function createFakeController() {
     stopTrack: vi.fn((sound) => {
       sound.playing = false;
       sound.sound.playing = false;
-    })
+    }),
+    cancelPendingFadeOut: vi.fn(() => false)
   };
 }
 
@@ -693,6 +694,26 @@ describe('CustomPlaybackEngine', () => {
     expect(controller.playTrack).not.toHaveBeenCalled();
     expect(s1.update).not.toHaveBeenCalled();
     expect(engine.activeSounds).toEqual([s1]);
+  });
+
+  it('takes an adopted track off any fade-out scheduled to stop it', async () => {
+    // `playing` stays true for the whole of a fade-out, so the adoption branch cannot tell a live
+    // track from one on its way to silence. Restarting a layer inside the crossfade window is
+    // exactly that, and without the cancel the fade lands and this node is left holding a token on
+    // dead audio, waiting for an 'end' that a 'stop' never sends.
+    const s1 = createMockSound('s1', 'Track 1', { playing: true });
+    s1.sound.playing = true;
+    const playlist = createMockPlaylist('pl1', 'Graph', [s1], -1);
+    playlist.setFlag('game-orchestra', 'customPlayback', {
+      version: 1,
+      nodes: [{ id: 'start', type: 'start' }, { id: 't1', type: 'track', soundId: 's1', loop: { mode: 'count', count: 1 } }],
+      edges: [{ id: 'e1', from: 'start', to: 't1' }]
+    });
+
+    const engine = new CustomPlaybackEngine({ playlist }, controller);
+    await engine.start();
+
+    expect(controller.cancelPendingFadeOut).toHaveBeenCalledWith(s1);
   });
 
   it('stop({stopAudio:false}) leaves active sounds playing; stop() (default) stops them', async () => {

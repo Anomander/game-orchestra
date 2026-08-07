@@ -30,6 +30,9 @@ beforeEach(() => {
   clearSolo('p1');
   clearSolo('p2');
   setMockSetting('game-orchestra', 'activeDuck', {});
+  // A stub controller left behind by a fading-out test would make every later re-level silently
+  // conditional on it.
+  delete game.gameOrchestra;
 });
 
 afterEach(() => {
@@ -126,6 +129,37 @@ describe('ducking (an additive layer attenuating everything else)', () => {
 
     expect(fadeCallsFor(s1[0])[0]).toEqual([0.5, { duration: 2000 }]);
     expect(fadeCallsFor(s2[0])[0]).toEqual([0.5, { duration: 2000 }]);
+  });
+
+  it('leaves a sound that is fading out to a stop alone', () => {
+    // The document says `playing` for the whole of a fade-out, so without asking the controller
+    // this re-level glides the outgoing track back UP to its mix volume: it then plays on at full
+    // level for the rest of the fade and stops dead at the end. Confirmed live as "Suppress
+    // Area/Combat Music does not respect the fadeout - it delays, then cuts out", because
+    // dropping the layer republished activeDuck at the same moment the base began fading.
+    const { playlist, sounds } = makePlaylist('p1', null, [
+      { id: 'leaving', volume: 1, playing: true, audioPlaying: true },
+      { id: 'staying', volume: 1, playing: true, audioPlaying: true }
+    ]);
+    game.playlists.playing = [playlist];
+    game.gameOrchestra = { musicController: { isFadingOut: (id) => id === 'leaving' } };
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.5, exemptPlaylistIds: [], fadeMs: 2000 });
+
+    reassertDuck();
+
+    expect(fadeCallsFor(sounds[0])).toHaveLength(0);
+    expect(fadeCallsFor(sounds[1])[0]).toEqual([0.5, { duration: 2000 }]);
+  });
+
+  it('levels normally when no controller is present - a player client runs no fades of its own', () => {
+    const { playlist, sounds } = makePlaylist('p1', null, [{ id: 'a', volume: 1, playing: true, audioPlaying: true }]);
+    game.playlists.playing = [playlist];
+    delete game.gameOrchestra;
+    setMockSetting('game-orchestra', 'activeDuck', { factor: 0.5, exemptPlaylistIds: [], fadeMs: 2000 });
+
+    reassertDuck();
+
+    expect(fadeCallsFor(sounds[0])[0]).toEqual([0.5, { duration: 2000 }]);
   });
 });
 
