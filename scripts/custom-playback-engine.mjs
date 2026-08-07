@@ -1051,6 +1051,29 @@ export class CustomPlaybackEngine {
     // bounding this node exactly as they do for an ordinary start.
     const armedForThisNode = this._armedHandoff?.plan.nodeId === node.id && this._armedHandoff.nextSound === sound;
     if (armedForThisNode) this._armedHandoff = null;
+    // An arm for a DIFFERENT node has to be cancelled here, not merely ignored.
+    //
+    // Confirmed live (itest/specs/090-graph-nodes.spec.mjs, ~1 run in 3): two mechanisms can
+    // advance a token at a seam - the 'end' watcher and the scheduled _commitArmedHandoff,
+    // "whichever gets here first owns the hand-off". _commitArmedHandoff re-plans and cancels on a
+    // mismatch. The 'end' watcher instead walks straight into _enterTrack, which used to do
+    // nothing at all when the arm pointed elsewhere - and by then the armed sound's audio is
+    // already scheduled on the audio clock and its document update already sent. It therefore
+    // started underneath the track the walk actually chose and played to its natural end: the
+    // probe measured a full 3s of two tones together.
+    //
+    // Worse, _armedHandoff stayed non-null forever, so every later seam bailed with
+    // [already-armed] and degraded to path=clean - one mismatch silently disabled seamless
+    // hand-offs for the rest of the session. That is the leak _armHandoff's own warning predicts
+    // ("it should be cleared by _enterTrack or _cancelArmedHandoff"); this is _enterTrack's half.
+    //
+    // Only reachable when the walk can diverge from the prediction, i.e. a Random node upstream -
+    // planNextHandoff draws afresh at arm time and again at commit time. A deterministic graph
+    // always reaches the node it armed, which is why the sequential specs never saw this.
+    else if (this._armedHandoff) {
+      log(2, `CustomPlaybackEngine: cancelling the hand-off armed for '${this._armedHandoff.plan.nodeId}' - the walk entered '${node.id}' instead.`);
+      this._cancelArmedHandoff();
+    }
     const armedStarted = armedForThisNode && sound.sound?.playing === true;
     if (armedStarted) this._lastCleanStartAt.set(node.id, Date.now());
 

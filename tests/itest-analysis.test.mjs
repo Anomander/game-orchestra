@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   audibleTones,
+  concurrentDuration,
   sustainedTones,
   crossfade,
   entryOrder,
@@ -242,5 +243,97 @@ describe('renderTimeline', () => {
     const chart = renderTimeline(timeline([[0.5, 0], [0, 0.5]]));
     expect(chart.split('\n').length).toBe(3);
     expect(chart).toContain('alpha');
+  });
+});
+
+/**
+ * The primitive behind Fork/layering assertions. It exists because `sustainedTones` answers
+ * "which tracks were heard" and a Fork test needs "which tracks were heard *at the same time*" -
+ * two questions with identical answers over a sequential walk.
+ */
+describe('concurrentDuration', () => {
+  it('measures the stretch where every named tone is above the floor at once', () => {
+    const frames = timeline([
+      [0.5, 0.0],
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.0]
+    ]);
+
+    // Frames 1..3 at 40 ms spacing: 120 ms - measured from the first to the last frame of the run.
+    expect(concurrentDuration(frames, [A, B])).toBe(80);
+  });
+
+  it('reports nothing for a sequential walk, where the same tones are never simultaneous', () => {
+    // The distinction the whole function exists for: sustainedTones() says [A, B] for both this
+    // timeline and a layered one.
+    // Six frames each, so both runs clear sustainedTones' 150 ms floor.
+    const frames = timeline([
+      [0.5, 0.0],
+      [0.5, 0.0],
+      [0.5, 0.0],
+      [0.5, 0.0],
+      [0.5, 0.0],
+      [0.5, 0.0],
+      [0.0, 0.5],
+      [0.0, 0.5],
+      [0.0, 0.5],
+      [0.0, 0.5],
+      [0.0, 0.5],
+      [0.0, 0.5]
+    ]);
+
+    expect(sustainedTones(frames)).toEqual([A, B]);
+    expect(concurrentDuration(frames, [A, B])).toBe(0);
+  });
+
+  it('takes the longest run, not the total or the last', () => {
+    const frames = timeline([
+      [0.5, 0.5],
+      [0.5, 0.0],
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.0]
+    ]);
+
+    expect(concurrentDuration(frames, [A, B])).toBe(80);
+  });
+
+  it('requires every tone, not any of them', () => {
+    const frames = timeline([
+      [0.5, 0.5, 0.0],
+      [0.5, 0.5, 0.0],
+      [0.5, 0.5, 0.0]
+    ]);
+
+    expect(concurrentDuration(frames, [A, B])).toBe(80);
+    expect(concurrentDuration(frames, [A, B, 2])).toBe(0);
+  });
+
+  it('ignores audio outside the window', () => {
+    const frames = timeline([
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.5],
+      [0.5, 0.5]
+    ]);
+
+    expect(concurrentDuration(frames, [A, B], { window: { from: 80 } })).toBe(40);
+  });
+
+  it('treats a level under the floor as not sounding', () => {
+    const frames = timeline([
+      [0.5, 0.0001],
+      [0.5, 0.0001],
+      [0.5, 0.0001]
+    ]);
+
+    expect(concurrentDuration(frames, [A, B])).toBe(0);
+  });
+
+  it('is zero for an empty timeline', () => {
+    expect(concurrentDuration([], [A, B])).toBe(0);
   });
 });

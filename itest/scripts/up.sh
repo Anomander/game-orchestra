@@ -12,7 +12,18 @@ repo="$(cd "$here/../.." && pwd)"
 
 FOUNDRY_VERSION="${FOUNDRY_VERSION:-$(node -p "require('$repo/module.json').compatibility.verified")}"
 export FOUNDRY_VERSION
-export FOUNDRY_PORT="${FOUNDRY_PORT:-30000}"
+# 30001, NOT Foundry's default 30000. *Confirmed live:* a developer's own Foundry was already
+# listening on the host's 30000, and `docker compose up` published the container there anyway
+# without reporting a conflict - on macOS the host process holds the IPv6 wildcard and simply wins,
+# so Docker's binding is shadowed rather than refused. Every request the harness made then went to
+# the *personal* server: `bootstrap` tried to install a system and create a world on it, and only
+# failed because that server's admin key happened not to be `itest-admin`. Had it matched, the
+# specs' `resetWorld()` would have run against a real world.
+#
+# Defaulting off Foundry's own port means the two can never be confused by accident. Override with
+# FOUNDRY_PORT if 30001 is taken too - and set FOUNDRY_URL to match, since that is what the client
+# side reads (playwright.config.mjs, bootstrap-world.mjs).
+export FOUNDRY_PORT="${FOUNDRY_PORT:-30001}"
 
 # Credentials are only needed when there is nothing to install *from*. A cached release archive
 # (itest/.cache) or an existing installation in the data volume is enough on its own, and demanding

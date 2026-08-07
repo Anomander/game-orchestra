@@ -455,3 +455,142 @@ describe('MoodWidget', () => {
     });
   });
 });
+
+/**
+ * The two-tab window's in-memory model. Both lists are loaded up front and edited in memory, so
+ * the only thing standing between a typed edit and a discarded one is `_harvestActiveAxis`.
+ */
+describe('OverlayConfigApp tab state', () => {
+  beforeEach(() => {
+    setupFoundryMocks();
+  });
+
+  /**
+   * A rendered row, as `.mood-item[data-index]` with the four inputs the harvest reads back.
+   * @param {object} values - id/label/icon/color as they currently stand in the DOM.
+   * @returns {object} A row element stub.
+   */
+  function row({ id = '', label = '', icon = '', color = '' } = {}) {
+    const fields = {
+      'input[name$=".id"]': { value: id },
+      'input[name$=".label"]': { value: label },
+      'select[name$=".icon"]': { value: icon },
+      'input[name$=".color"]': { value: color }
+    };
+    return { querySelector: (sel) => fields[sel] ?? null };
+  }
+
+  /** @param {object[]} rows @returns {object} An element stub returning those rows. */
+  const elementWith = (rows) => ({ querySelectorAll: (sel) => (sel === '.mood-item[data-index]' ? rows : []) });
+
+  describe('_harvestActiveAxis', () => {
+    it('reads the rendered rows back into the active axis', () => {
+      // Without this, typing a label and switching tabs discards the edit - the DOM is the
+      // only place it lived until Save.
+      const app = new MoodConfigApp();
+      app.element = elementWith([row({ id: 'calm', label: 'Very Calm', icon: 'fas fa-leaf', color: '#4caf50' })]);
+
+      app._harvestActiveAxis();
+
+      expect(app.itemsByAxis.mood).toEqual([{ id: 'calm', label: 'Very Calm', icon: 'fas fa-leaf', color: '#4caf50' }]);
+    });
+
+    it('harvests into whichever tab is active, leaving the other alone', () => {
+      const app = new MoodConfigApp();
+      const moodsBefore = app.itemsByAxis.mood;
+      app.activeAxis = 'phase';
+      app.element = elementWith([row({ id: 'p1', label: 'Opening', icon: 'fas fa-shield-halved', color: '#4caf50' })]);
+
+      app._harvestActiveAxis();
+
+      expect(app.itemsByAxis.phase).toEqual([{ id: 'p1', label: 'Opening', icon: 'fas fa-shield-halved', color: '#4caf50' }]);
+      expect(app.itemsByAxis.mood).toBe(moodsBefore);
+    });
+
+    it('substitutes the defaults for a row whose icon or colour was cleared', () => {
+      const app = new MoodConfigApp();
+      app.element = elementWith([row({ id: 'x', label: 'X', icon: '', color: '' })]);
+
+      app._harvestActiveAxis();
+
+      expect(app.itemsByAxis.mood[0]).toMatchObject({ icon: 'fas fa-music', color: '#3b82f6' });
+    });
+
+    it('leaves the model untouched when nothing is rendered', () => {
+      // A harvest before the first render must not blank the list out.
+      const app = new MoodConfigApp();
+      const before = app.itemsByAxis.mood;
+
+      app.element = undefined;
+      app._harvestActiveAxis();
+      app.element = elementWith([]);
+      app._harvestActiveAxis();
+
+      expect(app.itemsByAxis.mood).toBe(before);
+    });
+
+    it('survives a real tab switch with edits pending in the DOM', () => {
+      const app = new MoodConfigApp();
+      app.render = vi.fn();
+      app.element = elementWith([row({ id: 'calm', label: 'Renamed In The Box', icon: 'fas fa-leaf', color: '#4caf50' })]);
+
+      OverlayConfigApp.handleSelectAxis.call(app, { preventDefault: vi.fn() }, { dataset: { axis: 'phase' } });
+
+      expect(app.activeAxis).toBe('phase');
+      expect(app.itemsByAxis.mood[0].label).toBe('Renamed In The Box');
+    });
+  });
+
+  describe('_prepareContext', () => {
+    it('offers every built-in icon, with the row\'s own marked selected', () => {
+      const app = new MoodConfigApp();
+      app.itemsByAxis.mood = [{ id: 'calm', label: 'Calm', icon: 'fas fa-leaf', color: '#4caf50' }];
+
+      const [item] = app._prepareContext({}).items;
+
+      expect(item.iconOptions.filter((o) => o.selected).map((o) => o.value)).toEqual(['fas fa-leaf']);
+      expect(item.iconOptions.length).toBeGreaterThan(10);
+    });
+
+    it('preserves a custom icon that is not in the built-in list, as the selected first option', () => {
+      // Otherwise opening the window on a hand-edited mood would silently reset its icon on Save.
+      const app = new MoodConfigApp();
+      app.itemsByAxis.mood = [{ id: 'x', label: 'X', icon: 'fas fa-dragon', color: '#fff' }];
+
+      const [item] = app._prepareContext({}).items;
+
+      expect(item.iconOptions[0]).toMatchObject({ value: 'fas fa-dragon', selected: true });
+      expect(item.iconOptions[0].label).toContain('CustomFallback');
+    });
+
+    it('localizes a shipped label but shows a GM-authored one verbatim', () => {
+      const app = new MoodConfigApp();
+      app.itemsByAxis.mood = [
+        { id: 'calm', label: 'GameOrchestra.Mood.Calm', icon: 'fas fa-leaf', color: '#4caf50' },
+        { id: 'mine', label: 'Skulking About', icon: 'fas fa-mask', color: '#111' }
+      ];
+
+      const items = app._prepareContext({}).items;
+
+      expect(items[0].displayLabel).toBe('GameOrchestra.Mood.Calm'); // localize() is identity here
+      expect(items[1].displayLabel).toBe('Skulking About');
+    });
+
+    it('marks the live tab and carries that axis\'s own hint and add label', () => {
+      const app = new MoodConfigApp();
+      app.activeAxis = 'phase';
+
+      const context = app._prepareContext({});
+
+      expect(context.tabs.find((t) => t.active).axis).toBe('phase');
+      expect(context.hintKey).toBe('GameOrchestra.PhaseConfig.Hint');
+      expect(context.items.map((i) => i.id)).toEqual(CONST.defaultPhases.map((p) => p.id));
+    });
+
+    it('always offers a save button', () => {
+      expect(new MoodConfigApp()._prepareContext({}).buttons).toEqual([
+        { type: 'submit', icon: 'fas fa-save', label: 'GameOrchestra.UI.Save' }
+      ]);
+    });
+  });
+});

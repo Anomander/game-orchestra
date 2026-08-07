@@ -23,7 +23,11 @@
 
 import { defineConfig, devices } from '@playwright/test';
 
-const BASE_URL = process.env.FOUNDRY_URL ?? 'http://localhost:30000';
+// 30001, matching docker-compose.yml's default publish. Deliberately not Foundry's own 30000: a
+// developer's personal Foundry on that port shadows the container's binding rather than colliding
+// with it, and the specs would then drive their live world - `resetWorld()` included. See
+// scripts/up.sh.
+const BASE_URL = process.env.FOUNDRY_URL ?? 'http://localhost:30001';
 
 export default defineConfig({
   testDir: './specs',

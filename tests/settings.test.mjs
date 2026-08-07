@@ -44,6 +44,46 @@ describe('registerKeybindings', () => {
     const keys = game.keybindings.register.mock.calls.map(([, , config]) => config.editable[0].key);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  /**
+   * A bound key that dispatches nothing is the same dead shortcut the `editable` defaults were
+   * added to fix, one layer down - and just as invisible, since registration still looks correct.
+   */
+  describe('onDown', () => {
+    /** @param {string} action @returns {Function} The registered onDown for a binding. */
+    const onDownFor = (action) => game.keybindings.register.mock.calls.find(([, a]) => a === action)?.[2]?.onDown;
+
+    beforeEach(() => {
+      registerKeybindings();
+    });
+
+    it('routes the two suppression keys through the shared transport action', async () => {
+      // The same route the scene-control bar and the widget take, which is what keeps all three
+      // showing the same state.
+      await onDownFor('toggleAreaMusic')();
+      expect(game.settings.set).toHaveBeenCalledWith(CONST.moduleId, CONST.settings.suppressArea, true);
+
+      await onDownFor('toggleCombatMusic')();
+      expect(game.settings.set).toHaveBeenCalledWith(CONST.moduleId, CONST.settings.suppressCombat, true);
+    });
+
+    it('toggles rather than only ever switching on', async () => {
+      await onDownFor('toggleAreaMusic')();
+      await onDownFor('toggleAreaMusic')();
+
+      expect(game.settings.set).toHaveBeenLastCalledWith(CONST.moduleId, CONST.settings.suppressArea, false);
+    });
+
+    it('opens the widget and the hub', () => {
+      game.gameOrchestra = { moodWidget: null, playlistTree: null };
+
+      expect(() => onDownFor('toggleMoodWidget')()).not.toThrow();
+      expect(game.gameOrchestra.moodWidget).not.toBeNull();
+
+      expect(() => onDownFor('togglePlaylistTree')()).not.toThrow();
+      expect(game.gameOrchestra.playlistTree).toBeDefined();
+    });
+  });
 });
 
 describe('registerSettings', () => {
@@ -79,6 +119,127 @@ describe('registerSettings', () => {
       expect(game.gameOrchestra.musicController.playCurrentTrack).toHaveBeenCalled();
       expect(mockConfigApp.selectedPhase).toBe('p2');
       expect(mockConfigApp.render).toHaveBeenCalledWith(false);
+    });
+  });
+
+  /**
+   * Every setting that matters at play time carries an `onChange` doing the actual wiring -
+   * re-resolving playback, and pushing the change into whichever windows are open. Registration
+   * alone proves nothing: an `onChange` that never fires is a setting that silently does not
+   * apply until the next reload.
+   */
+  describe('onChange wiring', () => {
+    /** @param {string} key @returns {Function} The registered onChange for a setting key. */
+    const onChangeFor = (key) => game.settings.register.mock.calls.find(([, k]) => k === key)?.[2]?.onChange;
+
+    /** @returns {object} An open window stub the refresh helper will recognize. */
+    const windowNamed = (name, extra = {}) => ({ constructor: { name }, rendered: true, render: vi.fn(), ...extra });
+
+    beforeEach(() => {
+      registerSettings();
+      game.gameOrchestra = { musicController: { playCurrentTrack: vi.fn() } };
+    });
+
+    it('re-resolves playback when the active mood changes', () => {
+      onChangeFor(CONST.settings.activeMood)('stealth');
+      expect(game.gameOrchestra.musicController.playCurrentTrack).toHaveBeenCalled();
+    });
+
+    it('pushes the new mood into a rendered config window and refreshes the widget and tree', () => {
+      const config = windowNamed('GameOrchestraConfig', { selectedMood: 'calm' });
+      const widget = windowNamed('MoodWidget');
+      const tree = windowNamed('PlaylistTreeApp');
+      globalThis.ui = { windows: { a: config, b: widget, c: tree } };
+
+      onChangeFor(CONST.settings.activeMood)('stealth');
+
+      expect(config.selectedMood).toBe('stealth');
+      expect(config.render).toHaveBeenCalledWith(false);
+      expect(widget.render).toHaveBeenCalledWith(false);
+      expect(tree.render).toHaveBeenCalledWith(false);
+    });
+
+    it('clears the config selection when the mood is cleared rather than storing undefined', () => {
+      const config = windowNamed('GameOrchestraConfig', { selectedMood: 'calm' });
+      globalThis.ui = { windows: { a: config } };
+
+      onChangeFor(CONST.settings.activeMood)('');
+
+      expect(config.selectedMood).toBe('');
+    });
+
+    it('reaches ApplicationV2 windows too, which do not live in ui.windows', () => {
+      // The widget and the tree are ApplicationV2 - they are only in
+      // foundry.applications.instances. Walking ui.windows alone would miss them entirely.
+      const widget = windowNamed('MoodWidget');
+      globalThis.ui = { windows: {} };
+      foundry.applications.instances = new Map([['w', widget]]);
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+
+      expect(widget.render).toHaveBeenCalledWith(false);
+    });
+
+    it('leaves a closed window alone', () => {
+      const widget = windowNamed('MoodWidget', { rendered: false });
+      globalThis.ui = { windows: { a: widget } };
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+
+      expect(widget.render).not.toHaveBeenCalled();
+    });
+
+    it('ignores unrelated windows', () => {
+      const other = windowNamed('SomeOtherModuleApp');
+      globalThis.ui = { windows: { a: other } };
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+
+      expect(other.render).not.toHaveBeenCalled();
+    });
+
+    it('refreshes every axis-aware window when the mood list is edited', () => {
+      // Editing the list changes what the strips can even show, so all three redraw - but
+      // unlike an active-overlay change this must NOT re-trigger playback.
+      const widget = windowNamed('MoodWidget');
+      const tree = windowNamed('PlaylistTreeApp');
+      const config = windowNamed('GameOrchestraConfig');
+      globalThis.ui = { windows: { a: widget, b: tree, c: config } };
+
+      onChangeFor(CONST.settings.configuredMoods)([]);
+
+      for (const app of [widget, tree, config]) expect(app.render).toHaveBeenCalledWith(false);
+      expect(game.gameOrchestra.musicController.playCurrentTrack).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the same windows when the phase list is edited', () => {
+      const widget = windowNamed('MoodWidget');
+      globalThis.ui = { windows: {} };
+      foundry.applications.instances = new Map([['w', widget]]);
+
+      onChangeFor(CONST.settings.configuredPhases)([]);
+
+      expect(widget.render).toHaveBeenCalledWith(false);
+      expect(game.gameOrchestra.musicController.playCurrentTrack).not.toHaveBeenCalled();
+    });
+
+    it('re-resolves playback when either suppression toggle flips', () => {
+      // This is the whole mechanism behind the transport buttons and the Alt+A / Alt+C
+      // keybindings: they only write the setting, and this onChange is what makes it audible.
+      onChangeFor(CONST.settings.suppressArea)(true);
+      expect(game.gameOrchestra.musicController.playCurrentTrack).toHaveBeenCalledTimes(1);
+
+      onChangeFor(CONST.settings.suppressCombat)(true);
+      expect(game.gameOrchestra.musicController.playCurrentTrack).toHaveBeenCalledTimes(2);
+    });
+
+    it('survives firing before the controller exists', () => {
+      game.gameOrchestra = undefined;
+      globalThis.ui = { windows: {} };
+
+      for (const key of [CONST.settings.activeMood, CONST.settings.activePhase, CONST.settings.suppressArea, CONST.settings.suppressCombat]) {
+        expect(() => onChangeFor(key)('x'), key).not.toThrow();
+      }
     });
   });
 

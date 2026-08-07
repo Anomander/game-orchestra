@@ -15,7 +15,7 @@ Read this before changing anything in [itest/](../../itest/), and before assumin
 |---|---|---|---|---|
 | **L0** | The module's logic against `tests/mocks/foundry.mjs` | node, no browser | ~3 s | `npm test` |
 | **L1** | The harness's own maths, against synthesised audio | node, no browser | included in L0 | `npm test` |
-| **L2** | The module in real Foundry, measured by a real audio probe | Docker + Chromium | ~5 min, 13 specs | `cd itest && npm run ci` |
+| **L2** | The module in real Foundry, measured by a real audio probe | Docker + Chromium | ~10 min, 19 specs | `cd itest && npm run ci` |
 | **L3** | Two clients at once (GM + player) | same as L2 | included in L2 | — |
 
 L1 is the unusual one and it is deliberate: `itest/harness/analysis.mjs`, `goertzel.mjs`,
@@ -26,11 +26,25 @@ whose own bugs get blamed on the module.** Two real defects were caught by L1 be
 ever saw Foundry, and the tier as a whole flushed out a dozen more — see
 [Findings](#findings-from-building-this).
 
-**Status:** all 13 L2/L3 specs pass locally against Foundry **14.364**, and 12 of 13 on a GitHub
-runner — the fourth CI run, in 9.9 min with a healthy environment (`clockRatio` 1.0, an 18 ms
-main-thread round trip). The single remaining failure was not an environment problem: it was this
-tier asserting a number that moves with machine load, which is now fixed and not yet re-confirmed
-on a runner. See [When CI fails](#when-ci-fails) — the most useful section on this page.
+**Status:** the original 13 L2/L3 specs pass locally against Foundry **14.364**, and 12 of 13 on a
+GitHub runner — the fourth CI run, in 9.9 min with a healthy environment (`clockRatio` 1.0, an
+18 ms main-thread round trip). The single remaining failure was not an environment problem: it was
+this tier asserting a number that moves with machine load, which is now fixed and not yet
+re-confirmed on a runner. See [When CI fails](#when-ci-fails) — the most useful section on this
+page.
+
+**`specs/090-graph-nodes.spec.mjs` (6 specs: Fork, Random, Delay) has a local baseline: all 6 pass.**
+It found a real module defect on its first run — an armed hand-off leaking when a Random node sent
+the walk somewhere other than the node it had armed — which is now fixed. See
+[A mismatched armed hand-off leaks](#a-mismatched-armed-hand-off-leaks-and-plays-as-a-second-track).
+
+**Known flaky: `040-mixer-multiclient › only the head GM drives playback`.** Measured at **3 failures
+in 5** on an idle desktop, and it fails the same way with and without the hand-off fix (4/5 vs 3/5 —
+a control run confirmed it is not a regression). It passes single-shot, which is how it stayed
+invisible. The signature is `expectLevelRatio` returning `Infinity` — its reference window measures
+as silent — while the ASCII timeline shows the tone audible for the entire capture, so the fault is
+in the windowing, not in the level. Undiagnosed; treat a failure there as this, not as new
+breakage, until someone works it out.
 
 ---
 
@@ -44,6 +58,7 @@ on a runner. See [When CI fails](#when-ci-fails) — the most useful section on 
 | **H1/H2 — a stray `initialTrack`** | Symptom is *music playing*, from Foundry's own `UNSEQUENCED` handling, bypassing the graph. Module state looks fine. |
 | **Armed starts against a suspended context** | `custom-playback-engine.mjs` schedules against the `AudioContext` clock. A suspended context makes the delay never elapse. Real clock, real context, by definition. |
 | **Fades, crossfades, ducking** | Modelled in unit tests, never exercised. A duck applied twice and a duck applied once differ only by a number no state inspection reveals. |
+| **Fork — layering vs. sequencing** | A fake controller records three `playTrack()` calls and cannot tell three layers from three tracks in a row. Nor can `expectExactlyAudible`: over a window covering a sequential walk it reports the same tone set a Fork produces. Only a per-frame simultaneity test (`expectConcurrent`) separates them — and the failure that matters is a forked branch surviving an interruption as an orphaned sound under the combat track. |
 | **Foundry version compatibility** | `hooks.mjs` flags the `renderPlaylistConfig` hook name and `select[name="mode"]` anchor as unverified against a live v14 build. |
 
 ---
@@ -108,7 +123,7 @@ scaled so a reading is directly comparable to the source amplitude — a 0.5-amp
 |---|---|---|
 | `itest/harness/tones.mjs` | **pure** | The tone table, the audibility floor, the harmonic guard |
 | `itest/harness/goertzel.mjs` | **pure** | The detector maths. Shared with the worklet by concatenation |
-| `itest/harness/analysis.mjs` | **pure** | Sustained tones, segments, entry order, crossfade, ratios, ASCII timeline |
+| `itest/harness/analysis.mjs` | **pure** | Sustained tones, segments, entry order, crossfade, **concurrency**, ratios, ASCII timeline |
 | `itest/harness/worklet-source.mjs` | node | Assembles worklet source; validates the export strip |
 | `itest/fixtures/generate.mjs` | node | Renders the tone bank as WAV |
 | `itest/harness/probe-init.js` | browser | The `connect` patch and the page-side `__goProbe` API |
@@ -118,10 +133,34 @@ scaled so a reading is directly comparable to the source amplitude — a 0.5-amp
 | `itest/harness/expect-audio.mjs` | Playwright | The assertions specs actually call |
 | `itest/harness/global-setup.mjs` | Playwright | Enables the module, creates the two users |
 | `itest/harness/bootstrap-world.mjs` | node | Creates + launches the world over `/setup` |
-| `itest/specs/*.spec.mjs` | Playwright | The scenarios |
+| `itest/specs/NNN-*.spec.mjs` | Playwright | The scenarios, **numbered** — see [Spec ordering](#spec-ordering) |
 
 **Keep the pure four pure.** They are what L1 can test, and that is the only reason the harness's
 own correctness is knowable.
+
+---
+
+## Spec ordering
+
+Spec files carry a numeric prefix, and the order is **load-bearing rather than cosmetic**. Playwright
+runs files alphabetically with `workers: 1`, and `maxFailures: 3` in CI aborts the run part-way —
+so file order decides *which specs still get to report* when something goes wrong.
+
+| Prefix | File | Role |
+|---|---|---|
+| `000` | `000-smoke.spec.mjs` | The canary. Must sort first, so a broken environment fails once with a clear message instead of proving the same point eighteen more times. |
+| `010`–`040` | combat transition, graph playback, ducking, multi-client mixer | The established specs, cheapest first, two-client last. Each has a measured baseline. |
+| `090` | `090-graph-nodes.spec.mjs` | The tail: specs with no confirmed baseline yet. |
+
+Two rules follow from `maxFailures`:
+
+- **A spec with no measured baseline sorts into the 090 tail.** Its first CI runs are calibration,
+  and a miscalibrated tolerance failing three times would abort the job before the proven specs ran
+  — turning "my new tolerances were optimistic" into what looks like a broad regression, with no
+  results from the specs you actually trust. Promote it into the numbered body once it has a green
+  run behind it.
+- **Gaps of ten are deliberate.** Inserting a spec should never mean renumbering the file whose CI
+  history you are trying to compare against.
 
 ---
 
@@ -439,6 +478,98 @@ reports both.
 
 Recorded because they are the kind of thing that gets "cleaned up" later, and because most of them
 cost a full debugging round each. Everything below was **confirmed live** against 14.364.
+
+### A mismatched armed hand-off leaks, and plays as a second track
+
+**Fixed.** Found by `090-graph-nodes.spec.mjs`, mechanism confirmed from the engine's own debug
+log, fix verified at 10/10 on a spec that previously failed ~1 run in 3.
+
+`random > yields one branch at a time` fails about **one run in three**, with two tracks audible
+together for up to a full track length. Only graphs containing a **Random** node are affected,
+which is why the sequential specs never saw it.
+
+#### What the log shows
+
+With `enableDebug` on, the first seam of a failing run:
+
+```
+ 120ms  will arm '3' in 2940ms
+3062ms  armed '3' (sound 'n7Ga7...') to start in 59ms
+3121ms  track '4' finished naturally, advancing        <- the 'end' watcher advances first
+3121ms  random '2' -> '5'                              <- the walk picks 5, not the armed 3
+3128ms  track '5' started ... path=clean
+```
+
+`_enterTrack` clears `_armedHandoff` **only when the arm is for the node being entered**:
+
+```js
+const armedForThisNode = this._armedHandoff?.plan.nodeId === node.id && this._armedHandoff.nextSound === sound;
+if (armedForThisNode) this._armedHandoff = null;
+```
+
+Node `5` is not node `3`, so nothing clears it and nothing cancels it. The armed audio was already
+scheduled on the audio clock and its document update already sent, so **node 3 starts 59 ms later
+and plays underneath node 5 for its full duration** - the probe measured 3044 ms of `[alpha,
+charlie]` together.
+
+#### Two consequences, not one
+
+1. **An orphaned track.** The audible symptom the spec catches.
+2. **Arming is dead for the rest of the run.** `_armedHandoff` stays non-null forever, so every
+   later seam bails with `not arming a hand-off at 'N' [already-armed]` and degrades to
+   `path=clean` (`whyNotArmed=already-armed@4`). The seamless hand-off the whole mechanism exists
+   to provide is silently lost after the first mismatch.
+
+The engine already predicts this in its own warning text: *"If this repeats, an armed hand-off is
+leaking - it should be cleared by `_enterTrack` or `_cancelArmedHandoff`."* It is `_enterTrack`
+that fails to clear it.
+
+#### Why a Random node is required to see it
+
+Two mechanisms can advance a token at a seam: the `'end'` watcher and the scheduled
+`_commitArmedHandoff`, "whichever gets here first owns the hand-off". Both re-decide the route:
+
+- `_commitArmedHandoff` re-plans and, on a mismatch, calls `_cancelArmedHandoff()` - **correct**.
+- the `'end'` watcher walks normally into `_enterTrack`, which on a mismatch does **nothing**.
+
+For a deterministic graph the walk always reaches the armed node and neither path mismatches. At a
+Random node it can, because `_planNextHandoff` passes `rng: this._rng` and is called afresh at arm
+time and again at commit time - two independent draws over the same eligible set. That is also why
+the discard warning reads *"the graph now routes elsewhere (a condition changed inside the lead
+window)"* on a graph **with no Condition node in it**: nothing routed anywhere, the dice were
+merely rolled twice. Misleading, but on that path harmless - it cancels correctly.
+
+#### The fix
+
+`_enterTrack` now cancels an armed hand-off that is *not* for the node being entered, instead of
+ignoring it. `_cancelArmedHandoff()` already did the right things - stops the pending audio, clears
+the playing flag Foundry would otherwise resurrect on reload - so this is only about calling it on
+the path that never did.
+
+Verified: **10/10 passes** on `random > yields one branch at a time`, which failed about 1 run in 3
+before. At that rate ten consecutive passes has ~1.7% probability, so this is a real change and not
+a lucky streak. Full unit suite and the rest of the audio tier unaffected.
+
+Still open, separately: a Random node re-draws at commit time at all, even though
+`planNextHandoff` returns `decisions[]` with `historyAfter` precisely so the walk and the lookahead
+cannot drift. Harmless now that both mismatch paths clean up, but it makes ~half of a shuffle
+graph's hand-offs fall back to `path=clean` when they could have been seamless.
+
+#### Corrections to earlier readings of this failure
+
+Recorded because both were plausible and both were wrong, in the way this page keeps warning about:
+
+- **"The overlap always begins at t = 12117 ms, so the trigger is time-scheduled."** Three failures
+  agreed to within half a millisecond, which looked decisive. It was three samples of the *same
+  tail*: those runs happened to leak at the last seam inside a 14 s capture, so the measured
+  overlap was just "double-start to end of recording". The instrumented failure leaked at the
+  **first** seam, ~3.1 s in. The timing is not fixed.
+- **"The re-drawn RNG in `_commitArmedHandoff` is the defect."** The re-draw is real, and it is why
+  the arm and the walk can disagree at all - but that path cancels correctly. The defect is the
+  missing cancel on the *other* path, `_enterTrack`.
+
+**Do not widen the spec's tolerance.** The overlap is up to a full track and the arming mechanism
+dies with it.
 
 ### About the module and Foundry
 

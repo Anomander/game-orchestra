@@ -33,6 +33,22 @@ npm run ci
 | `npm run down` | Stop and wipe the container |
 | `npm run ci` | All of the above, in order |
 
+### The port is 30001, not 30000
+
+Deliberately not Foundry's own default. A personal Foundry already listening on the host's 30000
+**shadows** the container's port publish rather than colliding with it — `docker compose up`
+reports no conflict, and everything the harness does then lands on that live server. *Confirmed
+live:* `npm run bootstrap` tried to install a system and create a world on a developer's real
+instance, and was stopped only by its admin key not happening to be `itest-admin`.
+
+Nothing needs setting; 30001 is the default on both sides. If it is also taken, override **both**
+halves — they are read by different processes:
+
+```bash
+export FOUNDRY_PORT=30002              # compose: which host port to publish on
+export FOUNDRY_URL=http://localhost:30002   # bootstrap + the specs: where to point
+```
+
 Separate `package.json` on purpose: Playwright plus a browser is ~400 MB, and the module's own
 suite must stay a three-second `npm test` with two dev dependencies.
 

@@ -301,6 +301,39 @@ export function rampDuration(frames, tone, { direction = 'in', lower = 0.1, uppe
 }
 
 /**
+ * The longest continuous stretch during which **every** given tone was audible at the same time.
+ *
+ * The distinction `sustainedTones` cannot make. Over any window that covers a whole
+ * `sequential-once` walk, `sustainedTones` reports `[A, B, C]` - and it reports exactly the same
+ * thing for a Fork playing all three at once. One of those is three tracks in a row and the other
+ * is three layers, and only a per-frame simultaneity test tells them apart.
+ *
+ * That makes this the assertion primitive for Fork nodes and layered playback generally, and its
+ * inverse the one for "a Random node picks *one* track", where an overlap that is not a crossfade
+ * means two branches ran when one should have.
+ * @param {ProbeFrame[]} frames - Captured frames.
+ * @param {number[]} tones - Tone indices that must be audible together.
+ * @param {object} [options] - Options.
+ * @param {Window} [options.window] - Window to measure over.
+ * @param {number} [options.floor] - Amplitude floor.
+ * @returns {number} Longest simultaneous run in ms; `0` when they were never all audible at once.
+ */
+export function concurrentDuration(frames, tones, { window, floor = AUDIBLE_FLOOR } = {}) {
+  const slice = clip(frames, window);
+  let runStart = null;
+  let longest = 0;
+  for (const frame of slice) {
+    if (tones.every((tone) => (frame.mags[tone] ?? 0) >= floor)) {
+      runStart ??= frame.t;
+      longest = Math.max(longest, frame.t - runStart);
+    } else {
+      runStart = null;
+    }
+  }
+  return longest;
+}
+
+/**
  * Whether a window is silent - no tone above the floor in any frame.
  * @param {ProbeFrame[]} frames - Captured frames.
  * @param {Window} [window] - Window to measure over.

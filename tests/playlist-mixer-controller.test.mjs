@@ -417,3 +417,584 @@ describe('dragging vs. adjusting (reported live: grabbing the volume knob dragge
     expect(bound(plainRoot)).not.toContain('mousedown');
   });
 });
+
+/* -------------------------------------------- */
+/*  The input layer                             */
+/* -------------------------------------------- */
+
+/**
+ * The mixer's markup, reduced to the selectors the controller actually queries.
+ *
+ * There is no jsdom here, and the controller's listeners are delegated - they resolve everything
+ * from the event target and from `_root.querySelector`. So the fixture only needs to answer those
+ * queries: one row (with its two readouts) and one slider per sound, plus `contains`, which
+ * `_onClick` uses to make sure it only claims buttons inside its own subtree.
+ * @param {string[]} soundIds
+ * @returns {object} A root stub, with the per-sound elements exposed for assertions.
+ */
+function fakeMixerDom(soundIds) {
+  const rows = {};
+  const sliders = {};
+  const readouts = {};
+  const effectives = {};
+
+  for (const id of soundIds) {
+    readouts[id] = { textContent: '' };
+    effectives[id] = { textContent: '' };
+    rows[id] = {
+      dataset: { soundId: id },
+      classList: { contains: () => false },
+      querySelector: (sel) => (sel.includes('effective') ? effectives[id] : sel.includes('readout') ? readouts[id] : null)
+    };
+    sliders[id] = { value: '', dataset: { soundId: id } };
+  }
+
+  const root = {
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    contains: () => true,
+    querySelector: (sel) => {
+      // refresh() bails while a slider is under the pointer; nothing here is being dragged.
+      if (sel.includes(':active')) return null;
+      const match = /data-sound-id="([^"]+)"/.exec(sel);
+      if (!match) return null;
+      if (sel.includes('mixer-volume')) return sliders[match[1]] ?? null;
+      if (sel.includes('mixer-row')) return rows[match[1]] ?? null;
+      return null;
+    }
+  };
+  return Object.assign(root, { rows, sliders, readouts, effectives });
+}
+
+/** A range input carrying a `data-mix-action`, as every mixer slider does. */
+const slider = (mixAction, value, extra = {}) => ({
+  type: 'range',
+  value: String(value),
+  dataset: { mixAction, ...(extra.dataset ?? {}) },
+  parentElement: extra.parentElement ?? null
+});
+
+/** A non-range field carrying a `data-mix-action` - the crossfade and fade boxes. */
+const field = (mixAction, value, extra = {}) => ({
+  type: 'number',
+  value: String(value),
+  dataset: { mixAction, ...(extra.dataset ?? {}) }
+});
+
+/** An event whose target resolves `closest()` from an explicit selector map. */
+function clickOn(ancestors, extra = {}) {
+  return {
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    target: { closest: (sel) => ancestors[sel] ?? null },
+    ...extra
+  };
+}
+
+describe('_onInput (live slider movement)', () => {
+  it('writes a track slider through to the document and updates its readouts without a rebuild', () => {
+    // A rebuild mid-drag would replace the very <input type="range"> under the pointer.
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const controller = controllerFor(playlist);
+    const root = fakeMixerDom([sound.id]);
+    controller.attach(root);
+
+    controller._onInput({ target: slider('trackVolume', 0.8, { dataset: { soundId: sound.id } }) });
+
+    expect(sound.volume).toBeCloseTo(Math.pow(0.8, 1.5), 5);
+    expect(sound.debounceVolume).toHaveBeenCalled();
+    expect(root.readouts[sound.id].textContent).toBe('80%');
+    expect(controller._onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('moves the whole selection *relatively* by default, preserving the balance already dialled in', () => {
+    const loud = soundAt(0.8);
+    const quiet = soundAt(0.4);
+    const playlist = makePlaylist([loud, quiet]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([loud.id, quiet.id]));
+    controller.selection = new Set([loud.id, quiet.id]);
+
+    // Target peak 0.4^1.5; the loudest selected track lands there and the other keeps its ratio.
+    controller._onInput({ target: slider('gain', 0.4), altKey: false });
+
+    const target = Math.pow(0.4, 1.5);
+    expect(loud.volume).toBeCloseTo(target, 5);
+    expect(quiet.volume).toBeCloseTo(target * (0.4 / 0.8), 5);
+    expect(quiet.volume).toBeLessThan(loud.volume); // the balance survived
+  });
+
+  it('flattens the selection to one absolute level when Alt is held', () => {
+    const loud = soundAt(0.8);
+    const quiet = soundAt(0.4);
+    const playlist = makePlaylist([loud, quiet]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([loud.id, quiet.id]));
+    controller.selection = new Set([loud.id, quiet.id]);
+
+    controller._onInput({ target: slider('gain', 0.4), altKey: true });
+
+    expect(loud.volume).toBeCloseTo(quiet.volume, 5);
+    expect(loud.volume).toBeCloseTo(Math.pow(0.4, 1.5), 5);
+  });
+
+  it('pushes group volumes back onto the sliders and readouts it did not come from', () => {
+    const loud = soundAt(0.8);
+    const quiet = soundAt(0.4);
+    const controller = controllerFor(makePlaylist([loud, quiet]));
+    const root = fakeMixerDom([loud.id, quiet.id]);
+    controller.attach(root);
+    controller.selection = new Set([loud.id, quiet.id]);
+
+    controller._onInput({ target: slider('gain', 0.4), altKey: true });
+
+    expect(Number(root.sliders[loud.id].value)).toBeCloseTo(0.4, 2);
+    expect(Number(root.sliders[quiet.id].value)).toBeCloseTo(0.4, 2);
+    expect(root.readouts[quiet.id].textContent).toBe('40%');
+  });
+
+  it('with nothing selected, the gain slider is the playlist gain and is persisted to the mix flag', async () => {
+    vi.useFakeTimers();
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([sound.id]));
+
+    controller._onInput({ target: slider('gain', 0.5) });
+
+    expect(sound.volume).toBe(0.5); // the tracks themselves are untouched
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'mix', expect.objectContaining({ gain: Math.pow(0.5, 1.5) }));
+    vi.useRealTimers();
+  });
+
+  it('persists a ceiling move to the mix flag', async () => {
+    vi.useFakeTimers();
+    const playlist = makePlaylist([soundAt(1)]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+
+    controller._onInput({ target: slider('ceiling', 0.5) });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'mix', expect.objectContaining({ ceiling: Math.pow(0.5, 1.5) }));
+    vi.useRealTimers();
+  });
+
+  it('updates the header readout next to the slider that moved', () => {
+    const readout = { textContent: '' };
+    const parentElement = { querySelector: (sel) => (sel.includes('readout') ? readout : null) };
+    const controller = controllerFor(makePlaylist([soundAt(1)]));
+    controller.attach(fakeMixerDom([]));
+
+    controller._onInput({ target: slider('ceiling', 0.25, { parentElement }) });
+
+    expect(readout.textContent).toBe('25%');
+  });
+
+  it('makes a dragged gain audible immediately, before the debounced write lands', () => {
+    // Otherwise the slider moves and nothing is heard until the write settles.
+    const playing = soundAt(1, { playing: true });
+    playing.sound.playing = true;
+    const controller = controllerFor(makePlaylist([playing]));
+    controller.attach(fakeMixerDom([playing.id]));
+
+    controller._onInput({ target: slider('gain', 0.5) });
+
+    expect(playing.sound.fade).toHaveBeenCalled();
+    const [target] = playing.sound.fade.mock.calls.at(-1);
+    expect(target).toBeLessThan(1);
+  });
+
+  it('previews a soloed selection by silencing everything else', () => {
+    const kept = soundAt(1, { playing: true });
+    const silenced = soundAt(0.5, { playing: true });
+    kept.sound.playing = true;
+    silenced.sound.playing = true;
+    const controller = controllerFor(makePlaylist([kept, silenced]));
+    controller.attach(fakeMixerDom([kept.id, silenced.id]));
+    controller.toggleSolo(kept.id);
+    kept.sound.fade.mockClear();
+    silenced.sound.fade.mockClear();
+
+    controller._onInput({ target: slider('ceiling', 0.9) });
+
+    expect(silenced.sound.fade.mock.calls.at(-1)[0]).toBe(0);
+    expect(kept.sound.fade.mock.calls.at(-1)[0]).toBeGreaterThan(0);
+  });
+
+  it('ignores an input event that is not one of its sliders', () => {
+    const sound = soundAt(0.5);
+    const controller = controllerFor(makePlaylist([sound]));
+    controller.attach(fakeMixerDom([sound.id]));
+
+    controller._onInput({ target: { type: 'range', value: '0.1', dataset: {} } }); // no mix action
+    controller._onInput({ target: field('trackVolume', 0.1, { dataset: { soundId: sound.id } }) }); // not a range
+
+    expect(sound.volume).toBe(0.5);
+  });
+});
+
+describe('_onChange (committed fields)', () => {
+  it('reflects a clamped crossfade back into the field and stores it', async () => {
+    vi.useFakeTimers();
+    const playlist = makePlaylist([soundAt(1)]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+    const target = field('crossfade', ' 1234.6 ');
+
+    controller._onChange({ target, stopPropagation: vi.fn() });
+
+    expect(target.value).toBe('1235'); // rounding reflected back, so the box never lies
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'mix', expect.objectContaining({ crossfadeMs: 1235 }));
+    vi.useRealTimers();
+  });
+
+  it('clears a blanked crossfade back to inheriting', async () => {
+    vi.useFakeTimers();
+    const playlist = makePlaylist([soundAt(1)]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+    const target = field('crossfade', '   ');
+
+    controller._onChange({ target, stopPropagation: vi.fn() });
+
+    expect(target.value).toBe('');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'mix', expect.objectContaining({ crossfadeMs: null }));
+    vi.useRealTimers();
+  });
+
+  it('writes a per-track fade to that track only', async () => {
+    vi.useFakeTimers();
+    const sound = soundAt(0.5);
+    const other = soundAt(0.25);
+    const controller = controllerFor(makePlaylist([sound, other]));
+    controller.attach(fakeMixerDom([sound.id, other.id]));
+
+    controller._onChange({ target: field('trackFade', '250', { dataset: { soundId: sound.id } }), stopPropagation: vi.fn() });
+
+    expect(sound.updateSource).toHaveBeenCalledWith({ fade: 250 });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sound.fade).toBe(250);
+    expect(other.fade).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it('applies a fade to every selected track in one round-trip', async () => {
+    vi.useFakeTimers();
+    const first = soundAt(0.5);
+    const second = soundAt(0.25);
+    const playlist = makePlaylist([first, second]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([first.id, second.id]));
+    controller.selection = new Set([first.id, second.id]);
+
+    controller._onChange({ target: field('fade', '400'), stopPropagation: vi.fn() });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.updateEmbeddedDocuments).toHaveBeenCalledTimes(1);
+    expect(first.fade).toBe(400);
+    expect(second.fade).toBe(400);
+    vi.useRealTimers();
+  });
+
+  it('with nothing selected the fade field is the playlist fade, and 0 clears it to null', async () => {
+    // Playlist#fade is `positive: true` in the schema - 0 is not storable, and null already
+    // means "no playlist fade".
+    vi.useFakeTimers();
+    const playlist = makePlaylist([soundAt(1)]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+
+    controller._onChange({ target: field('fade', '0'), stopPropagation: vi.fn() });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(playlist.update).toHaveBeenCalledWith({ fade: null });
+    vi.useRealTimers();
+  });
+
+  it('rounds and floors a fade rather than storing a negative or fractional one', () => {
+    const sound = soundAt(0.5);
+    const controller = controllerFor(makePlaylist([sound]));
+    controller.attach(fakeMixerDom([sound.id]));
+
+    const negative = field('trackFade', '-40', { dataset: { soundId: sound.id } });
+    controller._onChange({ target: negative, stopPropagation: vi.fn() });
+    expect(negative.value).toBe('0');
+
+    const fractional = field('trackFade', '99.7', { dataset: { soundId: sound.id } });
+    controller._onChange({ target: fractional, stopPropagation: vi.fn() });
+    expect(fractional.value).toBe('100');
+  });
+
+  it('stops the event so the graph editor\'s own delegated change dispatcher never sees it', () => {
+    const controller = controllerFor(makePlaylist([soundAt(1)]));
+    controller.attach(fakeMixerDom([]));
+    const event = { target: field('crossfade', '100'), stopPropagation: vi.fn() };
+
+    controller._onChange(event);
+
+    expect(event.stopPropagation).toHaveBeenCalled();
+  });
+
+  it('ignores a range input - those are handled live on `input`', () => {
+    const controller = controllerFor(makePlaylist([soundAt(1)]));
+    controller.attach(fakeMixerDom([]));
+    const event = { target: slider('gain', 0.5), stopPropagation: vi.fn() };
+
+    controller._onChange(event);
+
+    expect(event.stopPropagation).not.toHaveBeenCalled();
+  });
+});
+
+describe('_onClick', () => {
+  /** @returns {object} An event targeting a mixer button. */
+  const buttonEvent = (action, soundId) =>
+    clickOn({ '[data-action]': { dataset: { action, soundId } } });
+
+  it('routes each of its own buttons to the matching method and stops the event there', async () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([sound.id]));
+
+    const event = buttonEvent('toggleMute', sound.id);
+    controller._onClick(event);
+    await Promise.resolve();
+
+    // Stopped so a host whose action map knows nothing about `toggleMute` never sees it - which
+    // is what lets the same markup work inside the graph editor.
+    expect(event.stopPropagation).toHaveBeenCalled();
+    expect(playlist.setFlag).toHaveBeenCalledWith('game-orchestra', 'mix', expect.objectContaining({ muted: [sound.id] }));
+  });
+
+  it('routes solo, which stays local to this client', () => {
+    const sound = soundAt(0.5);
+    const controller = controllerFor(makePlaylist([sound]));
+    controller.attach(fakeMixerDom([sound.id]));
+
+    controller._onClick(buttonEvent('toggleSolo', sound.id));
+
+    expect(getSoloIds('pl1')).toEqual(new Set([sound.id]));
+  });
+
+  it('routes reset', async () => {
+    const playlist = makePlaylist([soundAt(0.5)]);
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+
+    controller._onClick(buttonEvent('resetMix'));
+    await Promise.resolve();
+
+    expect(playlist.unsetFlag).toHaveBeenCalledWith('game-orchestra', 'mix');
+  });
+
+  it('leaves a button outside its own subtree to whoever owns it', () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const controller = controllerFor(playlist);
+    const root = fakeMixerDom([sound.id]);
+    root.contains = () => false; // the click came from a sibling application
+    controller.attach(root);
+
+    const event = buttonEvent('toggleMute', sound.id);
+    controller._onClick(event);
+
+    expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(playlist.setFlag).not.toHaveBeenCalled();
+  });
+
+  it('falls through to row selection for a click that is not one of its buttons', () => {
+    const sound = soundAt(0.5);
+    const controller = controllerFor(makePlaylist([sound]));
+    const root = fakeMixerDom([sound.id]);
+    controller.attach(root);
+
+    controller._onClick(clickOn({ '.game-orchestra-mixer-row': root.rows[sound.id] }));
+
+    expect(controller.selection).toEqual(new Set([sound.id]));
+  });
+});
+
+describe('_onRowClick (selection)', () => {
+  /** Three rows, so shift-extension has a middle to include. */
+  function threeRows() {
+    const sounds = [soundAt(0.9), soundAt(0.6), soundAt(0.3)];
+    const controller = controllerFor(makePlaylist(sounds));
+    const root = fakeMixerDom(sounds.map((s) => s.id));
+    controller.attach(root);
+    return { controller, root, ids: sounds.map((s) => s.id) };
+  }
+
+  const rowClick = (row, extra = {}) => clickOn({ '.game-orchestra-mixer-row': row }, extra);
+
+  it('a plain click selects exactly that row', () => {
+    const { controller, root, ids } = threeRows();
+
+    controller._onRowClick(rowClick(root.rows[ids[1]]));
+
+    expect(controller.selection).toEqual(new Set([ids[1]]));
+  });
+
+  it('clicking the only selected row again deselects it', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    expect(controller.selection.size).toBe(0);
+  });
+
+  it('ctrl/meta toggles one row without disturbing the rest', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    controller._onRowClick(rowClick(root.rows[ids[2]], { ctrlKey: true }));
+    expect(controller.selection).toEqual(new Set([ids[0], ids[2]]));
+
+    controller._onRowClick(rowClick(root.rows[ids[2]], { metaKey: true }));
+    expect(controller.selection).toEqual(new Set([ids[0]]));
+  });
+
+  it('shift extends from the anchor, inclusive of the rows between', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    controller._onRowClick(rowClick(root.rows[ids[2]], { shiftKey: true }));
+
+    expect(controller.selection).toEqual(new Set(ids));
+  });
+
+  it('shift extends backwards too', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[2]]));
+
+    controller._onRowClick(rowClick(root.rows[ids[0]], { shiftKey: true }));
+
+    expect(controller.selection).toEqual(new Set(ids));
+  });
+
+  it('a click on a control inside a row is the control\'s business, not a selection change', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    controller._onRowClick(
+      clickOn({ 'input, button, [data-action]': { tagName: 'INPUT' }, '.game-orchestra-mixer-row': root.rows[ids[2]] })
+    );
+
+    expect(controller.selection).toEqual(new Set([ids[0]]));
+  });
+
+  it('clicking off the rows clears the selection', () => {
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+
+    controller._onRowClick(clickOn({}));
+
+    expect(controller.selection.size).toBe(0);
+  });
+
+  it('does not rebuild the view when clicking empty space with nothing selected', () => {
+    const { controller } = threeRows();
+
+    controller._onRowClick(clickOn({}));
+
+    expect(controller._onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('treats the column header as chrome, not a selectable row', () => {
+    // It is a `.game-orchestra-mixer-row` for layout reasons only.
+    const { controller, root, ids } = threeRows();
+    controller._onRowClick(rowClick(root.rows[ids[0]]));
+    const header = { dataset: {}, classList: { contains: (c) => c === 'game-orchestra-mixer-column-header' } };
+
+    controller._onRowClick(rowClick(header));
+
+    expect(controller.selection.size).toBe(0);
+  });
+});
+
+describe('focusNode', () => {
+  /** Named exactly as the editor class is - focusNode matches on `constructor.name`. */
+  class CustomPlaylistEditor {
+    constructor(playlist, graph) {
+      this.playlist = playlist;
+      this.graph = graph;
+      this._focusNode = vi.fn();
+      this.bringToFront = vi.fn();
+    }
+  }
+
+  it('jumps to the Track node that plays the sound in an open editor for that playlist', () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const editor = new CustomPlaylistEditor(playlist, { nodes: [{ id: 'n7', type: 'track', soundId: sound.id }] });
+    foundry.applications.instances.set('editor', editor);
+
+    controllerFor(playlist).focusNode(sound.id);
+
+    expect(editor._focusNode).toHaveBeenCalledWith('n7');
+    expect(editor.bringToFront).toHaveBeenCalled();
+  });
+
+  it('stays silent when no editor is open - the badge is primarily a count', () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+
+    expect(() => controllerFor(playlist).focusNode(sound.id)).not.toThrow();
+  });
+
+  it('ignores an editor open on a different playlist', () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const editor = new CustomPlaylistEditor({ id: 'other' }, { nodes: [{ id: 'n7', type: 'track', soundId: sound.id }] });
+    foundry.applications.instances.set('editor', editor);
+
+    controllerFor(playlist).focusNode(sound.id);
+
+    expect(editor._focusNode).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the graph has no Track node for that sound', () => {
+    const sound = soundAt(0.5);
+    const playlist = makePlaylist([sound]);
+    const editor = new CustomPlaylistEditor(playlist, { nodes: [{ id: 'n1', type: 'delay' }] });
+    foundry.applications.instances.set('editor', editor);
+
+    controllerFor(playlist).focusNode(sound.id);
+
+    expect(editor._focusNode).not.toHaveBeenCalled();
+    expect(editor.bringToFront).not.toHaveBeenCalled();
+  });
+});
+
+describe('write failures', () => {
+  it('reports a failed debounced write rather than losing it silently', async () => {
+    vi.useFakeTimers();
+    const playlist = makePlaylist([soundAt(1)]);
+    playlist.setFlag.mockRejectedValueOnce(new Error('no permission'));
+    const controller = controllerFor(playlist);
+    controller.attach(fakeMixerDom([]));
+
+    controller._onInput({ target: slider('ceiling', 0.5) });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(ui.notifications.error).toHaveBeenCalledWith('GameOrchestra.Mixer.SaveFailed');
+    vi.useRealTimers();
+  });
+
+  it('reports a failed bake and leaves the mix flag untouched', async () => {
+    const playlist = makePlaylist([soundAt(0.5)]);
+    playlist.updateEmbeddedDocuments.mockRejectedValueOnce(new Error('nope'));
+    const controller = controllerFor(playlist);
+
+    await controller.bake();
+
+    expect(ui.notifications.error).toHaveBeenCalledWith('GameOrchestra.Mixer.SaveFailed');
+    expect(playlist.setFlag).not.toHaveBeenCalled();
+  });
+});

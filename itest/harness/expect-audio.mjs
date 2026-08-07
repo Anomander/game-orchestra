@@ -16,7 +16,7 @@
 import { expect } from '@playwright/test';
 
 import { AUDIBLE_FLOOR, toneLabel } from './tones.mjs';
-import { crossfade, entryOrder, levelRatio, mean, rampDuration, renderTimeline, sustainedTones } from './analysis.mjs';
+import { concurrentDuration, crossfade, entryOrder, levelRatio, mean, rampDuration, renderTimeline, sustainedTones } from './analysis.mjs';
 
 /**
  * Build the failure context appended to every assertion message.
@@ -79,6 +79,50 @@ export function expectNotAudible(frames, tone, window) {
 export function expectSilence(frames, window) {
   // Sustained, not raw: a stop is a step too, and its transient must not read as "still playing".
   expect(sustainedTones(frames, window), `expected silence${context(frames)}`).toEqual([]);
+}
+
+/**
+ * Assert these tones played **together**, not merely one after another.
+ *
+ * `expectExactlyAudible` cannot express this: over a window covering a whole sequential walk it
+ * reports the same tone set a Fork produces. Layering is the one graph behaviour where the
+ * difference between "all of these were heard" and "all of these were heard at once" is the
+ * entire feature.
+ * @param {import('./analysis.mjs').ProbeFrame[]} frames - Captured frames.
+ * @param {number[]} tones - Tone indices expected to sound simultaneously.
+ * @param {object} [options] - Options.
+ * @param {number} [options.minDurationMs=1000] - How long they must hold together. Well past any
+ *   crossfade overlap, so a hand-off can never be mistaken for a layer.
+ * @param {import('./analysis.mjs').Window} [options.window] - Window to measure over.
+ * @returns {void}
+ */
+export function expectConcurrent(frames, tones, { minDurationMs = 1000, window } = {}) {
+  const measured = concurrentDuration(frames, tones, { window });
+  expect(
+    measured,
+    `expected [${tones.map(toneLabel)}] to sound together for >=${minDurationMs} ms, measured ${measured} ms${context(frames)}`
+  ).toBeGreaterThanOrEqual(minDurationMs);
+}
+
+/**
+ * Assert these tones were never sustained together - the inverse of {@link expectConcurrent}.
+ *
+ * A short overlap is allowed, because a legitimate hand-off crossfades. What this rules out is two
+ * branches genuinely running at once where only one should be.
+ * @param {import('./analysis.mjs').ProbeFrame[]} frames - Captured frames.
+ * @param {number[]} tones - Tone indices that must not sound together.
+ * @param {object} [options] - Options.
+ * @param {number} [options.maxOverlapMs=1500] - Overlap tolerated as a crossfade rather than a
+ *   concurrent branch.
+ * @param {import('./analysis.mjs').Window} [options.window] - Window to measure over.
+ * @returns {void}
+ */
+export function expectNotConcurrent(frames, tones, { maxOverlapMs = 1500, window } = {}) {
+  const measured = concurrentDuration(frames, tones, { window });
+  expect(
+    measured,
+    `expected [${tones.map(toneLabel)}] never to run concurrently, measured ${measured} ms together${context(frames)}`
+  ).toBeLessThanOrEqual(maxOverlapMs);
 }
 
 /**

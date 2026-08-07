@@ -44,7 +44,11 @@
 
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const BASE_URL = process.env.FOUNDRY_URL ?? 'http://localhost:30000';
+// 30001 by default - the harness deliberately does not sit on Foundry's own 30000, because a
+// personal Foundry already listening there shadows the container's port publish instead of
+// colliding with it, and this script would then provision a world on that live server. See
+// scripts/up.sh.
+const BASE_URL = process.env.FOUNDRY_URL ?? 'http://localhost:30001';
 const ADMIN_KEY = process.env.FOUNDRY_ADMIN_KEY ?? 'itest-admin';
 const WORLD_ID = process.env.FOUNDRY_WORLD ?? 'game-orchestra-itest';
 

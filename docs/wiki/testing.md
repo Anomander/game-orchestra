@@ -1,6 +1,6 @@
 # Testing
 
-Vitest, node environment, no jsdom. **1591 tests across 38 files, ~3s.** CI runs `npm test` on
+Vitest, node environment, no jsdom. **1854 tests across 41 files, ~4s.** CI runs `npm test` on
 push and PR to `main` (Node 20).
 
 This page covers the unit tier. Audio is verified separately, against a real pinned Foundry - see
@@ -154,29 +154,38 @@ already shipped:
 
 | Test file | Tests | Subject |
 |---|---:|---|
-| `custom-playlist-editor.test.mjs` | 156 | The editor window, including the `until` toggle/kind/value/boundary/minLoops/maxLoops handlers |
+| `custom-playlist-editor.test.mjs` | 307 | The editor window, including the `until` toggle/kind/value/boundary/minLoops/maxLoops handlers |
+| `music-controller.test.mjs` | 141 | Context resolution, priority, transitions |
+| `custom-playback-engine.test.mjs` | 137 | Token walk, safety nets, playlist nodes, `loop.mode: 'until'` (both boundaries, minLoops/maxLoops, probe failure, H12 idle/pass-completion) |
 | `graph-presets.test.mjs` | 103 | Every preset (all 8, `loop-until-combat-ends` included) through `validateGraph()`, the Drawflow bridge, id/edge-order rules, parametrized per sound count |
-| `music-controller.test.mjs` | 97 | Context resolution, priority, transitions |
-| `custom-playback-engine.test.mjs` | 82 | Token walk, safety nets, playlist nodes, `loop.mode: 'until'` (both boundaries, minLoops/maxLoops, probe failure, H12 idle/pass-completion) |
-| `graph-validation.test.mjs` | 69 | All 39 rules, including the `loop.mode` switch's `until` branch |
-| `helpers.test.mjs` | 60 | `PlaylistContext`, flags, resolution |
-| `hooks.test.mjs` | 45 | Hook handlers, button injection, phase reset on `deleteCombat` |
-| `playlist-tree.test.mjs` | 44 | Tree app, mood and phase rows |
-| `custom-playlist-inspector.test.mjs` | 40 | Inspector HTML, including `buildUntilLoopFieldsHtml()` |
-| `app.test.mjs` | 30 | Config window, incl. the Token phase-only grid |
-| `custom-playlist-node-render.test.mjs` | 28 | Node content |
+| `graph-validation.test.mjs` | 92 | All 39 rules, including the `loop.mode` switch's `until` branch |
+| `helpers.test.mjs` | 79 | `PlaylistContext`, flags, resolution |
+| `playlist-tree.test.mjs` | 76 | Tree app, mood and phase rows |
+| `playlist-mixer-controller.test.mjs` | 67 | The mixer's behaviour: data prep, mute/solo/reset/bake, keyboard, the drag-vs-adjust guard, and the whole delegated **input layer** — slider drags, the Alt-modified group fader, committed fade/crossfade fields, and shift/ctrl row selection |
+| `custom-playback-schema.test.mjs` | 64 | `resolveLoop()` normalization for all three modes |
+| `custom-playlist-node-render.test.mjs` | 60 | Node content |
+| `custom-playlist-connection-render.test.mjs` | 58 | Connection markup |
+| `hooks.test.mjs` | 56 | Hook handlers, button injection, phase reset on `deleteCombat` |
+| `mood-widget.test.mjs` | 55 | The dockable widget: axis switching (moods out of combat, phases in it), header-button injection, dock/compact persistence, and every action handler — including the deliberate rule that clicking the **already-active** mood or phase is a no-op, not a toggle-off |
+| `custom-playlist-inspector.test.mjs` | 52 | Inspector HTML, including `buildUntilLoopFieldsHtml()` |
+| `mood-config.test.mjs` | 43 | `OverlayConfigApp` (mood + phase) CRUD, the tab-switch harvest that keeps typed edits, and the custom-icon fallback |
+| `app.test.mjs` | 39 | Config window, incl. the Token phase-only grid |
+| `playlist-mix-apply.test.mjs` | 35 | Applying a mix to live sounds; session solo; ducking |
+| `playlist-mix.test.mjs` | 32 | The pure mix maths |
+| `binding-store.test.mjs` | 30 | Binding reads/writes |
+| `itest-analysis.test.mjs` | 28 | The audio harness's timeline analysis, against synthetic frames — including `concurrentDuration`, the Fork/layering primitive |
+| `playlist-mixer-render.test.mjs` / `transport.test.mjs` | 26 each | Mixer markup / the shared transport actions |
 | `playlist-ref.test.mjs` | 24 | Axis-aware reference normalization + resolution |
-| `graph-drawflow-bridge.test.mjs` | 23 | Round-trip, `data.exits[]` alignment, `until`-loop round-trip (regression coverage) |
-| `mood-config.test.mjs` | 20 | `OverlayConfigApp` (mood + phase) CRUD |
-| `graph-activity-highlight.test.mjs` | 17 | Highlight sets |
-| `custom-playback-schema.test.mjs` | 14 | `resolveLoop()` normalization for all three modes |
-| `engine-clock.test.mjs` / `graph-drop.test.mjs` | 10 each | Scheduler / drop matrix |
-| `graph-splice.test.mjs` | 13 | Edge-insertion and delete-healing rewire plans — including Drawflow's asymmetric connection-record naming, which is the easiest thing here to get backwards |
-| `audio-end-watcher.test.mjs`, `custom-playlist-connection-render.test.mjs`, `custom-playlist-editor-template.test.mjs` | 9 each | — |
-| `native-mode-graph.test.mjs` | 8 | — |
-| `itest-analysis.test.mjs` | 17 | The audio harness's timeline analysis, against synthetic frames |
-| `itest-goertzel.test.mjs` | 13 | The audio harness's amplitude detector and fixture generator, numerically |
-| `lang.test.mjs`, `config.test.mjs`, `game-orchestra.test.mjs`, `settings.test.mjs`, `module-manifest.test.mjs` | 2–4 | Structural guards |
+| `graph-drawflow-bridge.test.mjs` / `graph-history.test.mjs` | 23 each | Round-trip, `data.exits[]` alignment, `until`-loop round-trip / undo stack |
+| `binding-template.test.mjs` | 20 | Binding templates |
+| `settings.test.mjs` | 19 | Registration, keybinding defaults **and their `onDown` dispatch**, plus every setting's `onChange` — the wiring that makes a changed setting audible and re-renders the open windows |
+| `engine-clock.test.mjs` / `graph-activity-highlight.test.mjs` | 18 each | Scheduler / highlight sets |
+| `custom-playlist-editor-template.test.mjs` | 16 | Template structure the editor's DOM queries depend on |
+| `graph-splice.test.mjs` / `itest-goertzel.test.mjs` | 13 each | Edge-insertion and delete-healing rewire plans / the detector maths |
+| `native-mode-graph.test.mjs` | 12 | Native-mode synthesis |
+| `playlist-mixer.test.mjs` / `graph-drop.test.mjs` | 11, 10 | Standalone window / drop matrix |
+| `audio-end-watcher.test.mjs` / `template-compile.test.mjs` | 9, 7 | — |
+| `lang.test.mjs`, `config.test.mjs`, `game-orchestra.test.mjs`, `module-manifest.test.mjs` | 2–4 | Structural guards |
 
 ---
 
@@ -184,6 +193,13 @@ already shipped:
 
 Deliberate gaps — don't assume a green suite proves these:
 
+- **That a selector matches the real markup.** There is no jsdom, so the window tests
+  (`mood-widget`, the mixer's input layer, `mood-config`'s tab harvest) answer `querySelector`
+  from hand-built stubs keyed by selector string. That proves the *logic* hanging off each query —
+  which is where the behaviour lives — but a selector renamed in a `.hbs` template and not in the
+  code would still pass here. `custom-playlist-editor-template.test.mjs` and
+  `template-compile.test.mjs` are the guards for that half; extend them when you move a class name
+  a controller queries.
 - **Real Drawflow behavior.** The library is never instantiated in tests. Its export shape was
   verified once by hand against a headless DOM (`docs/graph-editor-panel-plan.md`, and the bridge's
   own header comment). Changes to Drawflow interop need manual verification in Foundry.
@@ -194,5 +210,5 @@ Deliberate gaps — don't assume a green suite proves these:
   against a live Foundry v14 build. The [integration tier](integration-testing.md) runs against
   the version in `module.json`'s `compatibility.verified`.
 - **Multi-client sync / GM handoff.** Only `isHeadGM()` gating is unit-tested. The two-client
-  specs in `itest/specs/mixer-multiclient.spec.mjs` cover the mixer's everywhere-rule.
+  specs in `itest/specs/040-mixer-multiclient.spec.mjs` cover the mixer's everywhere-rule.
 - **CSS.** Only load order is tested.

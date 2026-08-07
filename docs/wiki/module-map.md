@@ -111,7 +111,7 @@ weigh on `npm test`. Full design in [integration-testing.md](integration-testing
 | `itest/harness/session.mjs` | Playwright | `gm`/`player` fixtures, probe health, `record*`. |
 | `itest/harness/foundry-api.mjs` | Playwright | World provisioning via Foundry's document API — never via the module's UI. |
 | `itest/harness/expect-audio.mjs` | Playwright | The assertions specs call. |
-| `itest/specs/*.spec.mjs` | Playwright | Scenarios: combat transitions, graph playback, ducking, two-client mixer. |
+| `itest/specs/NNN-*.spec.mjs` | Playwright | Scenarios: combat transitions, graph playback, ducking, two-client mixer, Fork/Random/Delay nodes. Numbered — the prefix decides what still reports when CI aborts on `maxFailures`; see [integration-testing.md](integration-testing.md#spec-ordering). |
 
 The first four are exercised by the **main** vitest suite (`tests/itest-{analysis,goertzel}.test.mjs`).
 Keep them pure — that is the only reason the harness's own correctness is knowable.

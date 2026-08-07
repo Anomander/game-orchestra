@@ -58,7 +58,12 @@ services:
       # bounce back to /auth that looks like nothing at all.
       - CONTAINER_PRESERVE_CONFIG=false
     ports:
-      - "${FOUNDRY_PORT:-30000}:30000"
+      # Host 30001 by default, deliberately NOT Foundry's own 30000 - a developer's personal
+      # Foundry on that port silently shadows this publish rather than colliding with it, and the
+      # harness then drives their live server. See scripts/up.sh for the full account.
+      # Container-side stays 30000: that is Foundry's port inside the container, and the
+      # healthcheck below is container-local.
+      - "${FOUNDRY_PORT:-30001}:30000"
     healthcheck:
       # The container is "up" long before Foundry answers HTTP; without this the first spec races
       # the server and fails on a navigation timeout that looks like a module bug.

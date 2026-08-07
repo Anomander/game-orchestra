@@ -54,8 +54,20 @@ class MockApplicationV2 {
   }
   _onRender(context, options) {}
   _onClose(options) {}
+  _onPosition(position) {}
+  /**
+   * ApplicationV2#_renderFrame builds and returns the window chrome. `MoodWidget` overrides it to
+   * inject its own header buttons into what the base class returns, so `super._renderFrame()` has
+   * to hand back something queryable - a subclass that only ever received `undefined` here would
+   * take the `if (closeBtn)` bail-out on every path and the injection would never be exercised.
+   * The test parks the frame it wants to inspect on `_mockFrame`.
+   */
+  async _renderFrame(options) {
+    return this._mockFrame ?? null;
+  }
   render() {}
   close() {}
+  setPosition(position) {}
 }
 
 function MockHandlebarsApplicationMixin(Base) {
