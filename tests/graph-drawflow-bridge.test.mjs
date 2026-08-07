@@ -324,3 +324,44 @@ describe('node names round-trip', () => {
     expect(drawflowExportToGraph(graphToDrawflowExport(graph)).nodes[0]).not.toHaveProperty('label');
   });
 });
+
+describe('Script nodes round-trip', () => {
+  /**
+   * `script` is a discriminated union, and this file already carries the scar from collapsing one:
+   * flattening a Track's `loop` on the way out silently reverted every until-loop to a 1-count loop
+   * the moment any other field on the node changed. An inline script flattened to macro mode would
+   * lose its source exactly as quietly.
+   */
+  const roundTrip = (node) => {
+    const graph = {
+      version: 1,
+      nodes: [{ id: '1', type: 'start', x: 0, y: 0 }, { id: '2', type: 'script', x: 0, y: 0, ...node }],
+      edges: [{ id: 'e1', from: '1', to: '2' }]
+    };
+    return drawflowExportToGraph(graphToDrawflowExport(graph)).nodes.find((n) => n.id === '2');
+  };
+
+  it('preserves an inline script through an export/import cycle', () => {
+    expect(roundTrip({ script: { mode: 'inline', source: 'await foo();' } }).script)
+      .toEqual({ mode: 'inline', source: 'await foo();' });
+  });
+
+  it('preserves a macro reference', () => {
+    expect(roundTrip({ script: { mode: 'macro', macroUuid: 'Macro.abc' } }).script)
+      .toEqual({ mode: 'macro', macroUuid: 'Macro.abc' });
+  });
+
+  it('normalizes a malformed or legacy script field rather than carrying it through', () => {
+    expect(roundTrip({ script: { mode: 'nonsense' } }).script).toEqual({ mode: 'macro', macroUuid: null });
+    expect(roundTrip({}).script).toEqual({ mode: 'macro', macroUuid: null });
+  });
+
+  it('gives a Script node exactly one output port', () => {
+    const exported = graphToDrawflowExport({
+      version: 1,
+      nodes: [{ id: '1', type: 'script', x: 0, y: 0, script: { mode: 'macro', macroUuid: 'M.a' } }],
+      edges: []
+    });
+    expect(Object.keys(exported.drawflow.Home.data['1'].outputs)).toEqual(['output_1']);
+  });
+});

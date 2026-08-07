@@ -1,4 +1,4 @@
-import { INSTANTANEOUS_NODE_TYPES, conditionMissingValue, conditionSignature } from './custom-playback-schema.mjs';
+import { INSTANTANEOUS_NODE_TYPES, conditionMissingValue, conditionSignature, resolveScript } from './custom-playback-schema.mjs';
 import { nodeDisplayLabel } from './custom-playlist-node-render.mjs';
 import { PLAYLIST_REF_SOURCES, PLAYLIST_REF_SECTIONS, PLAYLIST_REF_OVERLAY_MODES } from './playlist-ref.mjs';
 import { CONST } from './config.mjs';
@@ -186,9 +186,21 @@ export function reachesPlaylist(startId, targetId, playlistsById) {
  *   reference on an 'area' section. When omitted, that check is skipped.
  * @param {string[]} [options.phaseIds] - Configured phase ids, for validating a 'specific' overlay
  *   reference on a 'combat' section. When omitted, that check is skipped.
+ * @param {Array<{uuid: string, name: string, type: string}>} [options.macros] - Every macro a
+ *   Script node could reference. When omitted, the "does this uuid resolve" checks are skipped.
+ * @param {object} [options.scripting] - **Environment-dependent** inputs, and the first of their
+ *   kind in this module: whether a graph is "valid" now partly depends on a world setting and on
+ *   who is asking. They arrive through this options object like every other live value, so this
+ *   module stays Foundry-free and every rule below stays testable with plain booleans.
+ * @param {boolean} [options.scripting.inlineAllowed] - The world's allowInlineScripts setting AND
+ *   whether this deployment can compile at all (script-runtime.mjs#inlineScriptsAllowed).
+ * @param {boolean} [options.scripting.canAuthor] - Whether the current user has MACRO_SCRIPT.
+ * @param {(source: string) => boolean} [options.scripting.compiles] -
+ *   Syntax check. Compiling here directly would make this module construct functions, which is
+ *   exactly the purity this file's header promises not to break.
  * @returns {{valid: boolean, errors: ValidationIssue[], warnings: ValidationIssue[], infos: ValidationIssue[]}}
  */
-export function validateGraph(graph, { playlist, playlists, moodIds, phaseIds } = {}) {
+export function validateGraph(graph, { playlist, playlists, moodIds, phaseIds, macros, scripting } = {}) {
   const errors = [];
   const warnings = [];
   const infos = [];
@@ -196,6 +208,7 @@ export function validateGraph(graph, { playlist, playlists, moodIds, phaseIds } 
   const nodes = graph?.nodes || [];
   const edges = graph?.edges || [];
   const exitsOf = (nodeId) => edges.filter((e) => e.from === nodeId);
+
 
   const starts = nodes.filter((n) => n.type === 'start');
   if (starts.length === 0) {
@@ -287,7 +300,8 @@ export function validateGraph(graph, { playlist, playlists, moodIds, phaseIds } 
           // graph that saved cleanly.
           else if (conditionMissingValue(edge.condition)) {
             errors.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ConditionExitMissingValue' });
-          } else if (edge.condition.kind !== 'default') {
+          }
+          else if (edge.condition.kind !== 'default') {
             // _enterCondition returns on the FIRST matching edge, so a repeat of
             // an earlier condition is unreachable however the game state falls -
             // the same shape of bug as a 'default' that isn't last, and an error
@@ -315,6 +329,46 @@ export function validateGraph(graph, { playlist, playlists, moodIds, phaseIds } 
             errors.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ConditionDefaultMustBeLast' });
           }
         });
+        break;
+      }
+      case 'script': {
+        // Exactly one exit, like Track and Delay - a Script node is a step in the flow, not a
+        // branch. Routing by return value is rejected outright (node-anatomy.md R1).
+        if (exits.length !== 1) errors.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptExitMissing' });
+        const script = resolveScript(node);
+        if (script.mode === 'macro') {
+          // WARNING, not error: an unconfigured node is a legitimate placeholder mid-authoring,
+          // and at runtime it follows its exit fine. The bar for `error` (node-anatomy.md) is a
+          // state that can never work, which this is not.
+          if (!script.macroUuid) {
+            warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptMissingMacro' });
+          } else if (macros) {
+            // The rule that makes the LIVE link honest: a dropped macro later deleted, or a graph
+            // imported into a world that has no such macro, degrades to something visible rather
+            // than to silence. Same class of cross-world fragility a Playlist node's
+            // source:'direct' already has, handled the same way.
+            const macro = macros.find((m) => m.uuid === script.macroUuid);
+            if (!macro) warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptMacroNotFound' });
+            else if (macro.type !== 'script') warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptMacroNotScript' });
+          }
+        } else {
+          if (!String(script.source ?? '').trim()) {
+            warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptMissingSource' });
+          } else {
+            // ERROR, and the one script rule that pays for itself: source that does not compile can
+            // never do anything, and unlike every other rule here it is checkable for free. Without
+            // it the first sign of a typo is silence during play.
+            if (scripting?.compiles && !scripting.compiles(script.source)) {
+              errors.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptSyntaxError' });
+            }
+            if (scripting && scripting.inlineAllowed === false) {
+              warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptInlineDisabled' });
+            }
+            if (scripting && scripting.canAuthor === false) {
+              warnings.push({ nodeId: node.id, messageKey: 'GameOrchestra.CustomEditor.Validation.ScriptNoPermission' });
+            }
+          }
+        }
         break;
       }
       case 'playlist': {

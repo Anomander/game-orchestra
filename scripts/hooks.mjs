@@ -221,11 +221,16 @@ export function handleUserConnected() {
  * the mode switch is announced rather than silent.
  *
  * NOTE: anchored on the mode <select> since Playlist#mode is a stable,
- * version-spanning field every config sheet renders - unlike the scene/token
- * config anchors elsewhere in this file, this specific selector and the
- * 'renderPlaylistConfig' hook name have not been verified against a live
- * Foundry v14 build (docs/custom-playlist-plan.md flags this as a required
- * manual verification step before release).
+ * version-spanning field every config sheet renders. Unlike the scene/token
+ * config anchors elsewhere in this file, both halves of this one are now
+ * VERIFIED against a live build: itest/specs/005-platform-assumptions.spec.mjs
+ * opens a real PlaylistConfig and confirms the 'renderPlaylistConfig' hook
+ * fires, that select[name="mode"] exists inside a .form-group, and that this
+ * function's button actually lands in the sheet.
+ *
+ * That last assertion is the one that matters. UX-9 makes the failure mode a
+ * missing button plus a level-2 log rather than a throw - correct behaviour,
+ * and exactly why a broken anchor would otherwise ship unnoticed.
  * @param {object} app - The playlist config application
  * @param {HTMLElement} html - The rendered HTML
  */

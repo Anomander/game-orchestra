@@ -182,6 +182,22 @@ export async function removeCustomGraph(playlist) {
 }
 
 /**
+ * The world's macros, flattened to the plain `{uuid, name, type}` shape that
+ * graph-validation.mjs consumes for Script-node macro checks.
+ *
+ * Here rather than in the editor because both graph write paths need it and
+ * they must agree: a graph saved through api.graph.set() has to be held to the
+ * same bar as one saved from the editor, or a caller gets a graph the UI would
+ * have complained about. Kept as a projection rather than passing the documents
+ * themselves so the validator stays free of Foundry types.
+ * @returns {Array<{uuid: string, name: string, type: string}>}
+ */
+export function macroValidationList() {
+  const macros = game.macros?.contents || Array.from(game.macros ?? []);
+  return macros.map((m) => ({ uuid: m.uuid, name: m.name, type: m.type }));
+}
+
+/**
  * Resolve the initial track to store alongside a playlist selection: keeps
  * the existing track if it still belongs to the selected playlist, otherwise
  * auto-assigns the first track for Soundboard (UNSEQUENCED) playlists. Custom

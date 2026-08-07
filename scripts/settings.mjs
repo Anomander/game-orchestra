@@ -256,6 +256,43 @@ export function registerSettings() {
     }
   });
 
+  // The whole enforcement boundary for user-supplied inline code (Script nodes in inline mode).
+  // Default OFF, and it must stay that way: the graph is a flag on a
+  // Playlist document, so anyone with OWNER on that playlist can *store* code, and the engine runs
+  // it on the head GM's client with GM privileges. Turning this on is the GM saying they trust
+  // whoever can edit their playlists.
+  //
+  // Deliberately NOT paired with a per-user `MACRO_SCRIPT` check at execution time: the engine only
+  // ever runs on the head GM, who always has that permission, so such a gate would defend nothing.
+  // See docs/api-and-script-node-plan.md B5 - that mistake was in the plan before it was in code.
+  //
+  // Macro-mode Script nodes are unaffected: those go through core's own Macro#canExecute, which
+  // includes core's gating of script-macro *authorship*.
+  game.settings.register(CONST.moduleId, CONST.settings.allowInlineScripts, {
+    name: 'GameOrchestra.Settings.AllowInlineScripts.Name',
+    hint: 'GameOrchestra.Settings.AllowInlineScripts.Hint',
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  // How long a Script node may hold its token before the engine gives up, follows the exit, and
+  // logs. A hanging promise (an un-awaited dialog, a fetch to a dead host) would otherwise strand
+  // the token silently and permanently - the same class of failure as the stop-before-start race.
+  //
+  // Configurable rather than a hard constant because a legitimately slow script would otherwise
+  // have no recourse but a fork; 5 s is long enough for a chat message and a document update.
+  game.settings.register(CONST.moduleId, CONST.settings.scriptTimeout, {
+    name: 'GameOrchestra.Settings.ScriptTimeout.Name',
+    hint: 'GameOrchestra.Settings.ScriptTimeout.Hint',
+    scope: 'world',
+    config: true,
+    type: Number,
+    range: { min: 500, max: 60000, step: 500 },
+    default: 5000
+  });
+
   game.settings.register(CONST.moduleId, 'enableDebug', {
     name: 'GameOrchestra.Settings.EnableDebug.Name',
     hint: 'GameOrchestra.Settings.EnableDebug.Hint',

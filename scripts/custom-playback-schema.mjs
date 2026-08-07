@@ -16,7 +16,7 @@
 /**
  * @typedef {object} GraphNode
  * @property {string} id                       Unique within the graph.
- * @property {'start'|'end'|'track'|'fork'|'delay'|'random'|'condition'|'playlist'} type
+ * @property {'start'|'end'|'track'|'fork'|'delay'|'random'|'condition'|'playlist'|'script'} type
  * @property {string} [label]                   User-facing name shown under the node and in
  *   validation messages. Absent on graphs saved before names existed, so readers must fall
  *   back to the type (custom-playlist-node-render.mjs#nodeDisplayLabel).
@@ -34,6 +34,24 @@
  * @property {PlaylistRef} [playlistRef]        playlist: what other playlist to play - see
  *   playlist-ref.mjs. Resolved when a token enters the node (docs/playlist-node-plan.md D4), never
  *   re-evaluated live mid-pass.
+ * @property {ScriptSpec} [script]             script: what code to run - see ScriptSpec below.
+ *   Read through resolveScript(node), never this field directly.
+ */
+
+/**
+ * @typedef {object} ScriptSpec
+ * @property {'macro'|'inline'} mode  'macro' (the default) stores a UUID and resolves it at run
+ *   time, so editing the referenced Macro changes what the graph runs - which is what a GM assumes
+ *   after dragging a macro onto the canvas. It also inherits core's Macro#canExecute permission
+ *   check AND core's gating of script-macro *authorship*, which inline has no equivalent for.
+ *   'inline' stores source on the node; it is governed entirely by the world's
+ *   `allowInlineScripts` setting. See docs/api-and-script-node-plan.md B5.
+ * @property {string|null} [macroUuid]  mode==='macro': the Macro document's uuid. A LIVE link -
+ *   deliberately not a copy of the macro's source (D-B5). An unresolvable uuid degrades to a
+ *   validation warning and a no-op that follows its exit, never to silence.
+ * @property {string} [source]  mode==='inline': the script body. Runs as an AsyncFunction, so it
+ *   may await. Its return value is ignored - a Script node has exactly one, unguarded exit, and
+ *   routing by return value is rejected (node-anatomy.md R1).
  */
 
 /**
@@ -186,15 +204,52 @@ export function resolveLoop(node) {
 }
 
 /**
+ * The script spec a freshly-created Script node starts with: macro mode, nothing
+ * referenced yet. Unconfigured is a no-op that follows its exit, never a runtime
+ * error - a placeholder mid-authoring is legitimate.
+ * @returns {ScriptSpec}
+ */
+export function createDefaultScript() {
+  return { mode: 'macro', macroUuid: null };
+}
+
+/**
+ * Resolve a Script node's effective spec, coercing a missing or malformed value
+ * the same way everywhere. Always use this rather than reading `node.script`.
+ *
+ * This matters more than resolveLoop's equivalent, because `script` is a
+ * DISCRIMINATED UNION and this codebase has already paid for collapsing one:
+ * routing a Track's `loop` through anything that flattened it on the way out of
+ * the Drawflow bridge silently reverted every `until` loop to a 1-count loop the
+ * moment any other field on the node changed. Both directions of
+ * graph-drawflow-bridge.mjs route `script` through here for that reason.
+ * @param {GraphNode} node
+ * @returns {ScriptSpec}
+ */
+export function resolveScript(node) {
+  const script = node?.script;
+  if (script?.mode === 'inline') return { mode: 'inline', source: typeof script.source === 'string' ? script.source : '' };
+  return { mode: 'macro', macroUuid: script?.macroUuid || null };
+}
+
+/**
  * Node types that hold a token for real time and therefore participate in the
  * singleton (one-active-instance) rule. Instantaneous types are excluded.
+ *
+ * `script` is durational, and that single choice is most of the Script node's
+ * design: it inherits the singleton rule (one execution at a time, no
+ * re-entrancy), the 300ms entry throttle (bounding a Script->Script cycle), the
+ * circuit breaker, and non-idle bookkeeping so a parent Playlist node waits for
+ * it. It also means hasInstantaneousCycle does NOT reject Script->Condition->
+ * Script, which is one of the shapes people most want. Making it instantaneous
+ * would forfeit all five.
  */
-export const DURATIONAL_NODE_TYPES = new Set(['track', 'delay', 'playlist']);
+export const DURATIONAL_NODE_TYPES = new Set(['track', 'delay', 'playlist', 'script']);
 
 /** Node types that pass a token through synchronously (no elapsed time). */
 export const INSTANTANEOUS_NODE_TYPES = new Set(['start', 'fork', 'random', 'condition', 'end']);
 
-export const ALL_NODE_TYPES = new Set(['start', 'end', 'track', 'fork', 'delay', 'random', 'condition', 'playlist']);
+export const ALL_NODE_TYPES = new Set(['start', 'end', 'track', 'fork', 'delay', 'random', 'condition', 'playlist', 'script']);
 
 /**
  * Hop cap for findUpcomingTrackNodes()'s forward walk. A graph can chain a long
@@ -250,6 +305,8 @@ export function findUpcomingTrackNodes(graph, nodeId) {
         }
         continue;
       }
+      // Script is CROSSED, like Delay: the track after a script is still the next audio to warm,
+      // and warming a buffer costs a decode while a wrong guess costs nothing.
       if (node.type === 'end' || node.type === 'playlist') continue;
       for (const edge of edges) if (edge.from === id) next.push(edge.to);
     }
@@ -355,6 +412,9 @@ const MAX_PLAN_HOPS = 32;
  *     running it);
  *   - a Delay node (the seam is no longer the track's end, and a Delay between
  *     two tracks means the silence is intentional - there is no gap to close);
+ *   - a Script node: its duration is unknowable AND its side effects may change what a later
+ *     Condition resolves to, so arming across one would predict from state the script is about to
+ *     invalidate. Conservative on purpose - it costs the hand-off optimisation, never correctness;
  *   - an End node, a dangling edge, or an unknown node id;
  *   - the target Track reusing the sound we are handing off FROM (one Sound
  *     cannot play two positions at once - the same reason the crossfade bails);
@@ -406,7 +466,7 @@ export function planNextHandoff(graph, fromNodeId, options) {
       if (!chosen) return null; // token would terminate here; nothing to arm
       decisions.push({ nodeId: node.id, edgeId: chosen.id });
     } else {
-      return null; // fork / delay / playlist / end / unknown - see the doc comment
+      return null; // fork / delay / playlist / script / end / unknown - see the doc comment
     }
 
     edgeIds.push(chosen.id);

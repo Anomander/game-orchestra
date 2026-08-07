@@ -19,7 +19,7 @@
  * textarea) - not the plain <div>/<span> a read-only summary line needs.
  */
 
-import { resolveLoop, CONDITION_KINDS_WITH_VALUE, conditionMissingValue } from './custom-playback-schema.mjs';
+import { resolveLoop, resolveScript, CONDITION_KINDS_WITH_VALUE, conditionMissingValue } from './custom-playback-schema.mjs';
 
 /**
  * HTML-escape untrusted text (sound/mood names, node labels) before
@@ -49,7 +49,8 @@ export const NODE_ICONS = {
   delay: 'fa-clock',
   random: 'fa-dice',
   condition: 'fa-signs-post',
-  playlist: 'fa-compact-disc'
+  playlist: 'fa-compact-disc',
+  script: 'fa-code'
 };
 
 export const NODE_LABELS = {
@@ -60,7 +61,8 @@ export const NODE_LABELS = {
   delay: 'Delay',
   random: 'Random',
   condition: 'Condition',
-  playlist: 'Playlist'
+  playlist: 'Playlist',
+  script: 'Script'
 };
 
 /**
@@ -221,12 +223,15 @@ function formatLoopQuantifier(loop) {
  *   (Playlist nodes only) - see playlist-ref.mjs#describePlaylistRef.
  * @param {number} [options.exitCount] - Live output-PORT count, not wired edges: a Fork's line has
  *   to update the instant an exit is added, before any wire reaches it.
+ * @param {string} [options.macroName] - Resolved LIVE name of a Script node's referenced macro.
+ *   Resolved by the caller, like soundName and refLabel, so this module stays Foundry-free - which
+ *   also means a deleted macro renders unresolved here, matching what validation reports.
  * @param {(key: string, data?: object) => string} [options.localize] - Injected so this module
  *   stays Foundry-free, same convention as playlist-ref.mjs#describePlaylistRef. Defaults to
  *   returning the key.
  * @returns {string} A short, human-readable summary of this node's configuration, or '' for none.
  */
-export function computeNodeDetail(node, { soundName, refLabel, exitCount, localize } = {}) {
+export function computeNodeDetail(node, { soundName, refLabel, exitCount, macroName, localize } = {}) {
   const loc = localize || ((key) => key);
   switch (node?.type) {
     case 'track':
@@ -241,6 +246,15 @@ export function computeNodeDetail(node, { soundName, refLabel, exitCount, locali
       return node.avoidRepeat ? loc('GameOrchestra.CustomEditor.Node.NoRepeat') : '';
     case 'fork':
       return loc('GameOrchestra.CustomEditor.Node.ExitCount', { count: exitCount ?? 0 });
+    case 'script': {
+      // Most-identifying first (R2): a macro node says WHICH macro, since that is the only thing
+      // distinguishing two of them at a glance. Inline has no name to give, so it says what it is.
+      // The macro's LIVE name is resolved by the caller (this module stays Foundry-free), which is
+      // also why a deleted macro shows as unresolved here as well as in validation.
+      const script = resolveScript(node);
+      if (script.mode === 'inline') return loc('GameOrchestra.CustomEditor.Node.InlineScript');
+      return macroName || loc('GameOrchestra.CustomEditor.Node.NoMacro');
+    }
     default:
       return '';
   }

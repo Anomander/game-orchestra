@@ -398,6 +398,39 @@ be lost.
 
 ---
 
+## H17 — A Script node runs foreign code while holding a token, so it must always give the token back
+
+The Script node is the only place this module executes code it did not write, and the only
+durational node whose duration is genuinely unknowable. Both facts point at the same hazard: a token
+held forever, silently.
+
+**Every failure path follows the exit.** No macro, a chat macro, a blocked gate, a compile failure,
+a throw, a timeout — all of them release the token and advance, and all of them report through
+`script-runtime.mjs#reportScriptError` (level-1 log + the `gameOrchestraScriptError` hook). A broken
+script degrades to a **no-op**, never to silence. This is the same reasoning that makes a Playlist
+node's refusal a zero-length pass rather than a dead end.
+
+**The timeout cannot be removed and cannot be made perfect.** A hanging promise — an un-awaited
+dialog, a `fetch` to a dead host — would strand the token permanently with no error anywhere. The
+engine gives up at `scriptTimeout` (default 5 s) and advances; the script's promise is
+**abandoned, not cancelled**, because nothing can cancel it. A late-resolving script therefore keeps
+running and may still write to `run.ctx` after its node has moved on.
+
+**The script must not be awaited by the walk that entered the node.** `start()` awaits the initial
+walk and a Playlist node's parent awaits its child's start, so awaiting the script would block the
+whole transition on it. The *synchronous* `_activeNodes` registration is what keeps the engine
+non-idle — not the call stack.
+
+**A script runs on the head GM with GM privileges**, so every API call in its context passes the
+head-GM and permission gates. Two shapes would eat their own engine — rewriting the running graph
+(H8 → restart from Start, H9) and stopping playback from inside one of its own nodes — and both are
+refused with `SELF_REENTRANT`. The mark is keyed on the run's shared registry so it covers the whole
+engine tree, and **must be released on every exit path**: a leaked mark makes that playlist
+permanently unwritable through the API for the rest of the session, exactly like a leaked
+`_registry` entry.
+
+---
+
 # House rules
 
 Not hazard-numbered, but equally load-bearing. Sourced from the archived plan docs, where they
@@ -476,6 +509,19 @@ no empty values. `tests/lang.test.mjs` enforces all three directions.
 
 This shipped broken once: `pt-BR.json` fell 73 keys behind, losing the entire custom-playback
 editor's strings, with no test catching it.
+
+**Parity is not correctness, and the gap has now cost something twice.** These tests prove the two
+files agree with *each other*; they say nothing about either agreeing with the **code**. A key
+written to the wrong path is perfectly consistent across locales, passes every parity check, and
+renders the raw key string to the user.
+
+That shipped too: the `script` condition kind's label went to
+`CustomEditor.ConditionKind.Script` while the inspector reads
+`CustomEditor.Inspector.ConditionKind.Script`, and the dropdown showed the bare key. **Keys the code
+*derives* rather than writes out are where this hides** — there is no literal to grep for, which is
+the same property that makes them pleasant to add. `tests/lang.test.mjs`'s *derived key families*
+block now checks those families explicitly: condition kinds (inspector label and exit chip) and
+palette node types. Add a family there whenever you add one to the code.
 
 ## HR-F — Only ever stop sounds this module started
 

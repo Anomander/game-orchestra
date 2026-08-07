@@ -605,3 +605,96 @@ describe('buildValidationHtml', () => {
     });
   });
 });
+
+/**
+ * The Script node's inspector, and in particular its two REFUSALS.
+ *
+ * UX-9 says a control that would not work is shown disabled with a reason, never hidden - and the
+ * two reasons here are deliberately separate because their remedies are: one is a world setting a
+ * GM can flip, the other is a permission or a deployment's Content-Security-Policy that nobody in
+ * the room can do anything about. Collapsing them into one message would send half of the affected
+ * users looking for a setting that will not help them.
+ */
+describe('buildInspectorHtml - Script nodes', () => {
+  const scriptNode = (script) => ({ id: 'sc1', type: 'script', script });
+  const build = (script, scripting, macroOptions = []) => buildInspectorHtml({
+    selectedNode: scriptNode(script),
+    soundOptions: [],
+    macroOptions,
+    scripting,
+    selectedExits: [],
+    localize: loc
+  });
+
+  it('offers both modes, with the stored one selected', () => {
+    const html = build({ mode: 'inline', source: '' }, { inlineAllowed: true, canAuthor: true });
+    expect(html).toContain('data-change-action="updateScriptMode"');
+    expect(html).toContain('<option value="inline" selected>');
+    expect(html).toContain('<option value="macro" >');
+  });
+
+  it('renders a macro picker in macro mode, with the referenced macro selected', () => {
+    const html = build({ mode: 'macro', macroUuid: 'Macro.b' }, { inlineAllowed: true, canAuthor: true }, [
+      { uuid: 'Macro.a', name: 'Thunder' },
+      { uuid: 'Macro.b', name: 'Boss FX' }
+    ]);
+    expect(html).toContain('data-change-action="updateScriptMacro"');
+    expect(html).toContain('<option value="Macro.b" selected>Boss FX</option>');
+    expect(html).not.toContain('updateScriptSource');
+  });
+
+  it('offers an empty option, so a macro can be un-referenced without deleting the node', () => {
+    const html = build({ mode: 'macro', macroUuid: 'Macro.a' }, { inlineAllowed: true, canAuthor: true }, [
+      { uuid: 'Macro.a', name: 'Thunder' }
+    ]);
+    expect(html).toContain('<option value="">');
+  });
+
+  it('renders an editable textarea in inline mode when nothing blocks it', () => {
+    const html = build({ mode: 'inline', source: 'await foo();' }, { inlineAllowed: true, canAuthor: true });
+    expect(html).toContain('data-change-action="updateScriptSource"');
+    expect(html).toContain('await foo();');
+    expect(html).not.toContain('readonly');
+  });
+
+  it('makes the source READONLY when the world has inline scripts turned off, and says so', () => {
+    const html = build({ mode: 'inline', source: 'await foo();' }, { inlineAllowed: false, canAuthor: true });
+    expect(html).toContain('readonly');
+    expect(html).toContain('GameOrchestra.CustomEditor.Inspector.ScriptDisabledHint');
+    // Still shown, never hidden: the author has to be able to read what is already stored.
+    expect(html).toContain('await foo();');
+  });
+
+  it('makes the source READONLY for a user without MACRO_SCRIPT, with the OTHER reason', () => {
+    const html = build({ mode: 'inline', source: '' }, { inlineAllowed: true, canAuthor: false });
+    expect(html).toContain('readonly');
+    expect(html).toContain('GameOrchestra.CustomEditor.Inspector.ScriptNoPermissionHint');
+    expect(html).not.toContain('ScriptDisabledHint');
+  });
+
+  it('reports the PERMISSION reason first when both apply - it is the one the user cannot fix', () => {
+    const html = build({ mode: 'inline', source: '' }, { inlineAllowed: false, canAuthor: false });
+    expect(html).toContain('GameOrchestra.CustomEditor.Inspector.ScriptNoPermissionHint');
+    expect(html).not.toContain('ScriptDisabledHint');
+  });
+
+  it('leaves the field editable when no scripting context is supplied at all', () => {
+    // Absent is not the same as false: an omitted context means "unknown", and disabling on
+    // unknown would lock the field for every caller that forgot to pass one.
+    const html = build({ mode: 'inline', source: '' }, undefined);
+    expect(html).not.toContain('readonly');
+  });
+
+  it('escapes stored source - it is user data going into a hand-built HTML string', () => {
+    const html = build({ mode: 'inline', source: '</textarea><img src=x onerror=alert(1)>' }, { inlineAllowed: true, canAuthor: true });
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('escapes macro names - they are user data too', () => {
+    const html = build({ mode: 'macro', macroUuid: 'Macro.a' }, { inlineAllowed: true, canAuthor: true }, [
+      { uuid: 'Macro.a', name: '<img src=x onerror=alert(1)>' }
+    ]);
+    expect(html).not.toContain('<img');
+  });
+});

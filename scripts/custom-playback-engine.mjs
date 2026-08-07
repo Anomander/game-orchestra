@@ -1,10 +1,18 @@
 import { CONST } from './config.mjs';
 import { log, isHeadGM, getCustomGraph, resolvePlaylistRef, PlaylistContext, emitHook } from './helpers.mjs';
+import {
+  beginScriptExecution,
+  compileScriptBody,
+  endScriptExecution,
+  inlineScriptsAllowed,
+  reportScriptError,
+  scriptTimeoutMs
+} from './script-runtime.mjs';
 import { EngineClock } from './engine-clock.mjs';
 import { AudioEndWatcher } from './audio-end-watcher.mjs';
 import { buildNativeModeGraph } from './native-mode-graph.mjs';
 import { normalizePlaylistRef } from './playlist-ref.mjs';
-import { resolveLoop, findUpcomingTrackNodes, resolveGraphCrossfadeMs, pickRandomExit, planNextHandoff } from './custom-playback-schema.mjs';
+import { resolveLoop, resolveScript, findUpcomingTrackNodes, resolveGraphCrossfadeMs, pickRandomExit, planNextHandoff } from './custom-playback-schema.mjs';
 import { resolveCrossfadeMs } from './playlist-mix.mjs';
 import { applyMixToSound, getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
 
@@ -236,6 +244,11 @@ export class CustomPlaybackEngine {
     this._idleFired = false;
     this._depth = options.depth ?? 0;
     this._registry = options.registry ?? new Set(this.playlist?.id ? [this.playlist.id] : []);
+    // Scratch space shared by every Script node in this run, and shared BY REFERENCE with child
+    // engines exactly as `_registry` is: a run is one musical event, so a script in a nested
+    // Playlist node's target should see what a script in the root wrote. Never persisted, and
+    // discarded with the engine.
+    this._scriptScratch = options.scriptScratch ?? {};
     this._onIdle = options.onIdle ?? null;
     // Child engines a Playlist node in this graph has spawned - torn down
     // whenever this engine is (see stop()).
@@ -718,6 +731,8 @@ export class CustomPlaybackEngine {
         return this._enterCondition(node, depth);
       case 'playlist':
         return this._enterPlaylist(node);
+      case 'script':
+        return this._enterScript(node);
       default:
         log(1, `CustomPlaybackEngine: unknown node type '${node.type}'.`);
     }
@@ -2172,6 +2187,172 @@ export class CustomPlaybackEngine {
    * @param {import('./custom-playback-schema.mjs').GraphNode} node
    * @private
    */
+  /**
+   * Run a Script node's code, then follow its single exit.
+   *
+   * **Durational**, deliberately - see DURATIONAL_NODE_TYPES' own comment for the five safety nets
+   * that choice inherits. Structurally this is `_enterDelay` with a script where the wait is: the
+   * singleton check, the synchronous `_activeNodes` registration, and the release-and-advance in
+   * ONE `_walk()` are all the same, and for the same reasons.
+   *
+   * Everything that can go wrong degrades to **a no-op that follows the exit**: a missing macro,
+   * a blocked gate, a compile failure, a throw, a timeout. A broken script must never turn into
+   * silence - same reasoning as a Playlist node's refusal being a zero-length pass rather than a
+   * dead end. Every one of those paths reports through `reportScriptError`, so "it did nothing"
+   * always comes with a reason rather than having to be inferred from absence.
+   *
+   * **The timeout is not optional.** A hanging promise - an un-awaited dialog, a fetch to a dead
+   * host - would strand the token silently and permanently. On timeout the engine gives up and
+   * advances; the script's promise is *abandoned, not cancelled*, because nothing can cancel it.
+   * A late-resolving script therefore keeps running and may still write to `run.ctx` long after its
+   * node has moved on, which is worth knowing before debugging something odd there.
+   * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @private
+   */
+  async _enterScript(node) {
+    const runId = this._runId;
+    if (this._activeNodes.has(node.id)) return; // singleton: drop this token
+    if (!this._throttleNodeEntry(node)) return;
+
+    // Registered BEFORE the first await, exactly like _enterTrack: two tokens can race in from two
+    // Fork branches in the same microtask, and a check that straddled an await would let both pass.
+    this._activeNodes.set(node.id, { sound: null, durationMs: null, startedAt: Date.now() });
+    this._emitActivity();
+
+    const advance = () => {
+      if (this._runId !== runId) return;
+      // See _walk()'s doc comment: release + follow-up hop as ONE tracked walk, so a parent
+      // Playlist node can never observe idle in the instant between them.
+      this._walk(async () => {
+        this._activeNodes.delete(node.id);
+        this._emitActivity();
+        await this._followSingleExit(node.id, 0);
+      });
+    };
+
+    // NOT awaited, and this is load-bearing: `start()` awaits the initial walk, and a Playlist
+    // node's parent awaits its child engine's start. Awaiting the script here would make the whole
+    // transition block until it finished - a five-second script would mean five seconds before any
+    // audio, and `transitionToContext` would sit on it too. Delay has the same shape for the same
+    // reason: it schedules and returns.
+    //
+    // Nothing is lost by not awaiting, because the token was registered SYNCHRONOUSLY above - that
+    // registration, not this call stack, is what keeps the engine non-idle while the script runs.
+    this._runScript(node, runId)
+      .catch((error) => log(1, `CustomPlaybackEngine: script node '${node.id}' failed unexpectedly.`, error))
+      .then(advance);
+  }
+
+  /**
+   * Execute one Script node's code, bounded by the world's script timeout.
+   *
+   * Resolves rather than throws on every failure - the caller advances unconditionally, and this
+   * function's job is to make sure the reason is recorded.
+   * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {number} runId
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _runScript(node, runId) {
+    const spec = resolveScript(node);
+    const playlistId = this.playlist?.id ?? null;
+    // `error` is optional but must be forwarded: the 'execute' phase is the one failure mode where
+    // the thrown object carries the only stack trace anyone can debug from, and an arity that
+    // silently dropped it left every user-code throw logged as a bare message string.
+    const fail = (phase, message, error = null) => reportScriptError({ phase, playlistId, nodeId: node.id, message, error });
+
+    // The re-entrancy mark is taken around the WHOLE execution, including the timeout race, and
+    // released in the finally below. Keyed on the shared registry so it covers this engine's whole
+    // tree - a script in a nested child engine must not be able to restart the root (D-B1).
+    beginScriptExecution(this._registry);
+    try {
+      const work = spec.mode === 'inline'
+        ? this._runInlineScript(node, spec, fail)
+        : this._runMacroScript(node, spec, fail);
+
+      const timeoutMs = scriptTimeoutMs();
+      let timer = null;
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => {
+          fail('timeout', `script did not settle within ${timeoutMs}ms; advancing without it. The script keeps running - it was abandoned, not cancelled.`);
+          resolve();
+        }, timeoutMs);
+      });
+      // A plain setTimeout rather than EngineClock (H4): this is a *cap on foreign code*, not a
+      // musical boundary. A backgrounded tab firing it late means a slow script is tolerated for
+      // longer, which is harmless; routing it through the clock would put user code on the one
+      // component every other scheduled node depends on for timing.
+      await Promise.race([work, timeout]);
+      clearTimeout(timer);
+    } finally {
+      endScriptExecution(this._registry);
+      if (this._runId !== runId) log(3, () => `CustomPlaybackEngine: script '${node.id}' settled after its run was torn down.`);
+    }
+  }
+
+  /**
+   * `mode: 'macro'` - resolve the uuid and hand off to core's own execution, which carries core's
+   * `Macro#canExecute` permission check. The context arrives as `scope.gameOrchestra`.
+   * @private
+   */
+  async _runMacroScript(node, spec, fail) {
+    if (!spec.macroUuid) return fail('missing', 'no macro is referenced; the node is a no-op.');
+    let macro;
+    try {
+      macro = await fromUuid(spec.macroUuid);
+    } catch (error) {
+      return fail('missing', `could not resolve macro '${spec.macroUuid}': ${error?.message ?? error}`);
+    }
+    if (!macro) return fail('missing', `macro '${spec.macroUuid}' no longer exists.`);
+    if (macro.type !== 'script') return fail('missing', `macro '${macro.name}' is a ${macro.type} macro and has no script to run.`);
+    try {
+      await macro.execute({ gameOrchestra: this._scriptContext(node) });
+    } catch (error) {
+      fail('execute', `macro '${macro.name}' threw: ${error?.message ?? error}`, error);
+    }
+  }
+
+  /**
+   * `mode: 'inline'` - compiled by this module, and therefore gated by the world's
+   * allowInlineScripts setting and by whether this deployment permits compilation at all.
+   * @private
+   */
+  async _runInlineScript(node, spec, fail) {
+    if (!spec.source?.trim()) return fail('missing', 'inline mode with no source; the node is a no-op.');
+    if (!inlineScriptsAllowed()) {
+      return fail('blocked', 'inline scripts are disabled in this world (or blocked by this deployment\'s Content-Security-Policy). Enable "Allow inline scripts" in the module settings, or use a Macro instead.');
+    }
+    const compiled = compileScriptBody(spec.source);
+    if (!compiled.ok) return fail('compile', `inline script does not compile: ${compiled.error}`);
+    const ctx = this._scriptContext(node);
+    try {
+      await compiled.fn(ctx, ctx.playlist, ctx.node, ctx.graph, ctx.run, ctx.api, ctx.log);
+    } catch (error) {
+      fail('execute', `inline script threw: ${error?.message ?? error}`, error);
+    }
+  }
+
+  /**
+   * The object a script receives. One argument so the shape can grow without breaking callers;
+   * inline scripts additionally get its keys as named parameters, matching how a Foundry macro
+   * receives its scope, so the same body reads the same way in either mode.
+   *
+   * `run.ctx` is shared BY REFERENCE down the whole engine tree, like `_registry`, so a script in
+   * a nested Playlist node's child engine sees what a script in the root wrote. A run is one
+   * musical event; splitting the scratch space per engine would surprise. It is never persisted.
+   * @private
+   */
+  _scriptContext(node) {
+    return {
+      playlist: this.playlist,
+      node: foundry.utils?.deepClone ? foundry.utils.deepClone(node) : { ...node },
+      graph: this.graph,
+      run: { id: this._runId, ctx: this._scriptScratch },
+      api: game.modules?.get?.(CONST.moduleId)?.api ?? game.gameOrchestra ?? null,
+      log: (...args) => log(3, `[script ${node.id}]`, ...args)
+    };
+  }
+
   async _enterDelay(node) {
     const runId = this._runId;
     if (this._activeNodes.has(node.id)) return; // singleton: drop this token
@@ -2405,6 +2586,7 @@ export class CustomPlaybackEngine {
       graph,
       depth: this._depth + 1,
       registry: this._registry,
+      scriptScratch: this._scriptScratch,
       onIdle: () => this._onPassComplete(node, target, runId, passIndex, child)
     });
     this._children.add(child);

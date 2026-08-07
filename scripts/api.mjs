@@ -49,6 +49,7 @@ import {
   getDocumentCategory,
   getPlaylistById,
   isHeadGM as isHeadGMHelper,
+  macroValidationList,
   removeCustomGraph,
   writeCustomGraph
 } from './helpers.mjs';
@@ -75,6 +76,7 @@ import {
 } from './playlist-mix-apply.mjs';
 import { clampVolume, coerceDuckFactor, effectiveVolume, normalizeMix } from './playlist-mix.mjs';
 import { validateGraph } from './graph-validation.mjs';
+import { inlineScriptsAllowed, isExecutingScriptFor, isScriptExecuting, scriptCompiles } from './script-runtime.mjs';
 import { createBuilder } from './graph-builder.mjs';
 import { GRAPH_PRESETS } from './graph-presets.mjs';
 import * as schema from './custom-playback-schema.mjs';
@@ -91,10 +93,12 @@ export const API_VERSION = '0.1.0';
  * - `INVALID_ARGUMENT` - the caller passed something this method cannot use.
  * - `NOT_FOUND` - a referenced playlist/document does not exist.
  * - `VALIDATION_FAILED` - a graph had error-level validation issues; see `.validation`.
+ * - `SELF_REENTRANT` - the call would tear down the engine currently executing the script that
+ *   made it. See {@link refuseSelfReentrant}.
  */
 export class GameOrchestraApiError extends Error {
   /**
-   * @param {'NOT_HEAD_GM'|'NOT_PERMITTED'|'INVALID_ARGUMENT'|'NOT_FOUND'|'VALIDATION_FAILED'} code
+   * @param {'NOT_HEAD_GM'|'NOT_PERMITTED'|'INVALID_ARGUMENT'|'NOT_FOUND'|'VALIDATION_FAILED'|'SELF_REENTRANT'} code
    * @param {string} message
    * @param {object} [details] - Extra fields merged onto the error (e.g. `validation`).
    */
@@ -136,6 +140,32 @@ function requireGM(what) {
   if (!canControl()) {
     throw new GameOrchestraApiError('NOT_PERMITTED', `${what} requires a GM. Check api.canControl() first.`);
   }
+}
+
+/**
+ * Refuse a call that would tear down the engine currently executing the script making it (D-B1).
+ *
+ * A Script node runs on the head GM, so **every** API call in its context passes the head-GM and
+ * permission gates - there is no `NOT_HEAD_GM` to catch this. Two shapes eat their own engine:
+ * `graph.set()`/`remove()` on the running playlist fires `updatePlaylist` -> `onCustomGraphChanged`
+ * -> teardown and restart from Start (H8/H9) *while this script's node holds a token*; and
+ * `playback.play()`/`stop()` retires the tree from inside one of its own nodes. The 300 ms throttle
+ * and the circuit breaker would eventually intervene, but a breaker trip is a diagnosis, not a
+ * guardrail - and the music restarts in a loop until it fires.
+ *
+ * Scoped to the executing tree, never global: rewriting a *different* playlist's graph from a
+ * script is one of the better reasons to have the node at all.
+ * @param {string|null} playlistId - Null means "any engine executing a script" (play/stop).
+ * @param {string} what
+ * @throws {GameOrchestraApiError} SELF_REENTRANT
+ */
+function refuseSelfReentrant(playlistId, what) {
+  const busy = playlistId === null ? isScriptExecuting() : isExecutingScriptFor(playlistId);
+  if (!busy) return;
+  throw new GameOrchestraApiError(
+    'SELF_REENTRANT',
+    `${what} would tear down the engine currently executing this script. Act on a different playlist, or let the script finish and let the graph route there instead.`
+  );
 }
 
 /**
@@ -262,6 +292,7 @@ const transport = {
    */
   async refresh() {
     requireHeadGM('Refreshing playback');
+    refuseSelfReentrant(null, 'Refreshing playback');
     return controller()?.playCurrentTrack();
   },
 
@@ -458,6 +489,30 @@ const bind = {
 // J3 - Behaviour (the graph)
 // ---------------------------------------------------------------------------
 
+/**
+ * The environment-dependent half of graph validation, for the API's own write path.
+ *
+ * Without this, `graph.set()` silently held Script nodes to a *lower* bar than the editor's Save
+ * button - every macro and inline-source rule in graph-validation.mjs self-skips when its context
+ * is absent, so a graph with source that cannot compile went straight to the flag with no error.
+ * That was the opposite of this method's documented promise.
+ *
+ * `canAuthor` is deliberately NOT included. It is an editor affordance - it disables the source
+ * field for a user without MACRO_SCRIPT - and asking it of an API caller answers the wrong
+ * question: a module writing a graph is not the person who will later run it. The check that
+ * actually decides whether inline source executes is inlineScriptsAllowed(), at execution time,
+ * where it covers every write path including the raw setFlag() this module can never intercept.
+ * See script-runtime.mjs#canAuthorInlineScripts.
+ * @returns {{macros: Array, scripting: {inlineAllowed: boolean, compiles: Function}}}
+ * @private
+ */
+function scriptValidationContext() {
+  return {
+    macros: macroValidationList(),
+    scripting: { inlineAllowed: inlineScriptsAllowed(), compiles: scriptCompiles }
+  };
+}
+
 const graph = {
   /**
    * A playlist's stored playback graph.
@@ -478,21 +533,27 @@ const graph = {
    * Refuses on **error**-level issues only, matching the editor's Save button - an API stricter
    * than the UI would be its own surprise. Warnings are returned so a caller can surface them.
    *
+   * "Matching the editor" includes the environment-dependent Script-node rules, which this method
+   * supplies for itself ({@link scriptValidationContext}) - pass `options` to override any of them.
+   *
    * Two consequences worth knowing before calling this on a live playlist:
    * - it force-writes `mode: UNSEQUENCED` (H1) and never assigns an `initialTrack` (H2);
    * - saving a graph that is **currently playing restarts it from Start** (H8 + H9). There is no
    *   in-place patch, deliberately.
    * @param {object|string} playlistOrId
    * @param {import('./custom-playback-schema.mjs').CustomGraph} newGraph
+   * @param {object} [options] - Extra validation context, merged over the environment context this
+   *   method supplies for itself. See graph-validation.mjs#validateGraph.
    * @returns {Promise<{valid: boolean, errors: Array, warnings: Array, infos: Array}>}
    * @throws {GameOrchestraApiError} VALIDATION_FAILED - carries `.validation`.
    */
-  async set(playlistOrId, newGraph) {
+  async set(playlistOrId, newGraph, options = {}) {
     requireGM('Saving a graph');
     const playlist = resolvePlaylist(playlistOrId);
+    refuseSelfReentrant(playlist.id, 'Saving this graph');
     return translatingPermission(async () => {
       try {
-        return await writeCustomGraph(playlist, newGraph);
+        return await writeCustomGraph(playlist, newGraph, { ...scriptValidationContext(), ...options });
       } catch (error) {
         if (error instanceof GraphValidationError) {
           throw new GameOrchestraApiError('VALIDATION_FAILED', error.message, { validation: error.validation });
@@ -511,6 +572,7 @@ const graph = {
   async remove(playlistOrId) {
     requireGM('Removing a graph');
     const playlist = resolvePlaylist(playlistOrId);
+    refuseSelfReentrant(playlist.id, 'Removing this graph');
     return translatingPermission(() => removeCustomGraph(playlist));
   },
 
@@ -710,6 +772,7 @@ const playback = {
    */
   async play() {
     requireHeadGM('Starting playback');
+    refuseSelfReentrant(null, 'Starting playback');
     return controller()?.playCurrentTrack();
   },
 
@@ -720,6 +783,7 @@ const playback = {
    */
   async stop() {
     requireHeadGM('Stopping playback');
+    refuseSelfReentrant(null, 'Stopping playback');
     return controller()?.transitionToContext(null);
   }
 };

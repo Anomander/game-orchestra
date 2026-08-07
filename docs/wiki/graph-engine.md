@@ -30,6 +30,7 @@ record live-confirmed failures.
 | `fork` | instantaneous | 1 | ≥2 | — (spawns a token on *every* exit) |
 | `random` | instantaneous | 1 | ≥1 | — (weighted draw, one exit) |
 | `condition` | instantaneous | 1 | ≥1 | — (first matching exit) |
+| `script` | **durational** | 1 | 1 | as long as its code runs, capped by `scriptTimeout` |
 
 `start` is the only type with **no input port** — it is the sole entry point and nothing ever
 produces an edge into it.
@@ -184,6 +185,7 @@ change the constants without understanding which failure each one absorbs.
 | `MAX_ENTER_TRACK_CALLS_PER_WINDOW` | 15 / 2 s | A genuine runaway (leaked/duplicate `'end'` listener) |
 | `MAX_DURATION_PROBE_ATTEMPTS` | 20 (~2 s) | A sound that never reports a loaded duration |
 | `MAX_PLAYLIST_NESTING_DEPTH` | 4 | An unbounded legitimate chain of Playlist nodes |
+| `scriptTimeout` (world setting) | 5000 ms | A Script node whose code never settles, stranding its token forever |
 
 **Why a durational cycle needs a floor at all.** A Track whose exit points back to itself is a
 *legitimate* way to say "keep playing this track" and is deliberately not blocked. But nothing
@@ -499,6 +501,50 @@ not the boundary itself is `loopEnd`.
   falls back to `immediate`-style unrestricted polling instead — a coarser wait, not a hang.
 
 `_evaluateCondition()`'s polling here is **not** a violation of H7 — see that entry's own note.
+
+### Script
+
+Runs user code — a referenced Macro, or inline source — then follows its single exit.
+
+**Durational**, and that one choice is most of the design: it inherits the singleton rule (one
+execution at a time, no re-entrancy), the 300 ms entry throttle (bounding a `Script → Script`
+cycle), the circuit breaker, and non-idle bookkeeping so a parent Playlist node waits for it. It
+also means `hasInstantaneousCycle` does **not** reject `Script → Condition → Script`, which is one
+of the shapes people most want. Making it instantaneous would forfeit all five.
+
+Structurally it is `_enterDelay` with a script where the wait is — and it shares two of that
+function's non-obvious properties:
+
+- **The token is registered synchronously**, before the first `await`, so two Fork branches racing
+  in cannot both pass the singleton check.
+- **Release and advance happen inside one `_walk()`**, so a parent can never observe idle in the
+  instant between them.
+
+**The script is not awaited by the walk that entered the node.** `start()` awaits the initial walk
+and a Playlist node's parent awaits its child's start, so awaiting here would block the entire
+transition on the script — a five-second script would mean five seconds before any audio. Nothing is
+lost: the *synchronous registration*, not the call stack, is what keeps the engine non-idle.
+
+**Everything that can go wrong follows the exit anyway** — no macro, a chat macro, a blocked gate, a
+compile failure, a throw, a timeout. A broken script degrades to a no-op, never to silence; same
+reasoning as a Playlist node's refusal being a zero-length pass. Every path reports through
+`reportScriptError`, so *"it did nothing"* always arrives with a reason rather than having to be
+inferred from absence.
+
+**The timeout is mandatory and imperfect on purpose.** A hanging promise would strand the token
+silently and permanently. On timeout the engine gives up and advances — but the script's promise is
+**abandoned, not cancelled**, because nothing can cancel it. A late-resolving script keeps running
+and may still write to `run.ctx` long after its node has moved on. It is a plain `setTimeout` rather
+than an `EngineClock` entry (the one sanctioned exception besides H4's): this is a cap on *foreign
+code*, not a musical boundary, and routing it through the clock would put user code on the one
+component every other scheduled node depends on for timing.
+
+`planNextHandoff()` returns `null` at a Script node, like Delay and Playlist: its duration is
+unknowable *and* its side effects may change what a later Condition resolves to, so arming across
+one would predict from state the script is about to invalidate. `findUpcomingTrackNodes()` does
+cross it — the track after a script is still the next audio worth warming.
+
+See [api.md](api.md) for the execution context, the two modes, and the one gate.
 
 ### Delay
 

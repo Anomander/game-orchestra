@@ -13,7 +13,7 @@
  */
 
 import { NODE_LABELS, escapeHtml } from './custom-playlist-node-render.mjs';
-import { CONDITION_KINDS_WITH_VALUE } from './custom-playback-schema.mjs';
+import { CONDITION_KINDS_WITH_VALUE, resolveScript } from './custom-playback-schema.mjs';
 
 /**
  * Condition kinds a user can pick. 'default' is deliberately absent: every
@@ -133,15 +133,9 @@ function exitRowAttributes(nodeId, exit) {
 function buildUntilLoopFieldsHtml(selectedNode, loc, moodOptions, phaseOptions) {
   const loop = selectedNode.loop || {};
   const kindOptions = buildConditionKindOptions(loop.condition?.kind, loc);
+  const untilAttrs = `data-change-action="updateTrackUntilValue" data-node-id="${escapeHtml(selectedNode.id)}"`;
   const valueInput = CONDITION_KINDS_WITH_VALUE.has(loop.condition?.kind)
-    ? buildConditionValueSelect(
-        loop.condition?.kind,
-        loop.condition?.value ?? '',
-        `data-change-action="updateTrackUntilValue" data-node-id="${escapeHtml(selectedNode.id)}"`,
-        moodOptions,
-        phaseOptions,
-        loc
-      )
+    ? buildConditionValueSelect(loop.condition?.kind, loop.condition?.value ?? '', untilAttrs, moodOptions, phaseOptions, loc)
     : '';
   const boundary = loop.boundary === 'loopEnd' ? 'loopEnd' : 'immediate';
   const boundaryOptions = [
@@ -192,6 +186,11 @@ function buildUntilLoopFieldsHtml(selectedNode, loc, moodOptions, phaseOptions) 
  * @param {Array<{id: string, label: string}>} [params.moodOptions] - Every configured mood, for a
  *   'mood'-kind condition's value dropdown (Condition node exits, a Track's until-loop condition).
  * @param {Array<{id: string, label: string}>} [params.phaseOptions] - Same, for 'phase'-kind conditions.
+ * @param {Array<{uuid: string, name: string}>} [params.macroOptions] - Script macros this world
+ *   has, for a Script node's macro picker. Resolved by the caller so this module stays Foundry-free.
+ * @param {{inlineAllowed: boolean, canAuthor: boolean}} [params.scripting] - Whether inline source
+ *   may run in this world, and whether this user may author it. Both are live environment state,
+ *   passed in for the same reason macroOptions is.
  * @param {Array<object>} params.selectedExits - Edges from selectedNode, each with a portName
  *   and (for random/condition) weight/cooldown/condition already attached.
  * @param {(key: string, data?: object) => string} params.localize - Resolves a plain key via
@@ -202,7 +201,7 @@ function buildUntilLoopFieldsHtml(selectedNode, loc, moodOptions, phaseOptions) 
  *   outside the accordion panel) even while the Properties pane containing this HTML is
  *   collapsed - see docs/graph-editor-panel-plan.md D4.
  */
-export function buildInspectorHtml({ selectedNode, soundOptions, playlistOptions, overlayOptions, moodOptions, phaseOptions, selectedExits, localize }) {
+export function buildInspectorHtml({ selectedNode, soundOptions, playlistOptions, overlayOptions, moodOptions, phaseOptions, macroOptions, scripting, selectedExits, localize }) {
   const loc = localize || ((k) => k);
   const parts = [];
 
@@ -263,6 +262,48 @@ export function buildInspectorHtml({ selectedNode, soundOptions, playlistOptions
             </div>
           `);
         }
+      }
+    } else if (selectedNode.type === 'script') {
+      const script = resolveScript(selectedNode);
+      const modeOptions = ['macro', 'inline']
+        .map((m) => `<option value="${m}" ${m === script.mode ? 'selected' : ''}>${escapeHtml(loc(`GameOrchestra.CustomEditor.Inspector.ScriptMode.${m === 'macro' ? 'Macro' : 'Inline'}`))}</option>`)
+        .join('');
+      parts.push(`
+        <div class="form-group">
+          <label>${escapeHtml(loc('GameOrchestra.CustomEditor.Inspector.ScriptModeLabel'))}</label>
+          <select data-change-action="updateScriptMode" data-node-id="${escapeHtml(selectedNode.id)}">${modeOptions}</select>
+        </div>
+      `);
+      if (script.mode === 'macro') {
+        const macroSelectOptions = [`<option value="">-- ${escapeHtml(loc('GameOrchestra.None'))} --</option>`]
+          .concat((macroOptions || []).map((m) => `<option value="${escapeHtml(m.uuid)}" ${m.uuid === script.macroUuid ? 'selected' : ''}>${escapeHtml(m.name)}</option>`))
+          .join('');
+        parts.push(`
+          <div class="form-group">
+            <label>${escapeHtml(loc('GameOrchestra.CustomEditor.Inspector.ScriptMacro'))}</label>
+            <select data-change-action="updateScriptMacro" data-node-id="${escapeHtml(selectedNode.id)}">${macroSelectOptions}</select>
+          </div>
+          <p class="hint">${escapeHtml(loc('GameOrchestra.CustomEditor.Inspector.ScriptMacroHint'))}</p>
+        `);
+      } else {
+        // UX-9: disabled WITH A REASON, never hidden, and only when it genuinely would not work.
+        // Two independent reasons, reported separately because they have different remedies - one
+        // is a world setting a GM can flip, the other is a permission or a deployment's CSP.
+        const blockedKey = scripting?.canAuthor === false
+          ? 'GameOrchestra.CustomEditor.Inspector.ScriptNoPermissionHint'
+          : scripting?.inlineAllowed === false
+            ? 'GameOrchestra.CustomEditor.Inspector.ScriptDisabledHint'
+            : null;
+        parts.push(`
+          <div class="form-group">
+            <label>${escapeHtml(loc('GameOrchestra.CustomEditor.Inspector.ScriptSource'))}</label>
+            <textarea rows="8" class="game-orchestra-script-source" spellcheck="false"
+                      data-change-action="updateScriptSource" data-node-id="${escapeHtml(selectedNode.id)}"
+                      ${blockedKey ? 'readonly' : ''}>${escapeHtml(script.source ?? '')}</textarea>
+          </div>
+          ${blockedKey ? `<p class="hint game-orchestra-issue-error">${escapeHtml(loc(blockedKey))}</p>` : ''}
+          <p class="hint">${escapeHtml(loc('GameOrchestra.CustomEditor.Inspector.ScriptSourceHint'))}</p>
+        `);
       }
     } else if (selectedNode.type === 'delay') {
       parts.push(`
@@ -338,15 +379,9 @@ export function buildInspectorHtml({ selectedNode, soundOptions, playlistOptions
           return;
         }
         const kindOptions = buildConditionKindOptions(exit.condition?.kind, loc);
+        const exitAttrs = `data-change-action="updateConditionExitValue" data-node-id="${escapeHtml(selectedNode.id)}" data-exit-index="${i}"`;
         const valueInput = CONDITION_KINDS_WITH_VALUE.has(exit.condition?.kind)
-          ? buildConditionValueSelect(
-              exit.condition?.kind,
-              exit.condition?.value ?? '',
-              `data-change-action="updateConditionExitValue" data-node-id="${escapeHtml(selectedNode.id)}" data-exit-index="${i}"`,
-              moodOptions,
-              phaseOptions,
-              loc
-            )
+          ? buildConditionValueSelect(exit.condition?.kind, exit.condition?.value ?? '', exitAttrs, moodOptions, phaseOptions, loc)
           : '';
         parts.push(`
           <div class="form-group game-orchestra-exit-row" ${exitRowAttributes(selectedNode.id, exit)}>

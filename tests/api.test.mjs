@@ -6,6 +6,7 @@ setupFoundryMocks();
 import { createApi, GameOrchestraApiError, API_VERSION } from '../scripts/api.mjs';
 import { CONST } from '../scripts/config.mjs';
 import { createEmptyGraph } from '../scripts/custom-playback-schema.mjs';
+import { beginScriptExecution, endScriptExecution, resetScriptExecution } from '../scripts/script-runtime.mjs';
 
 /**
  * The API is the module's only *contract* - the one surface a third party depends on and the one
@@ -309,6 +310,73 @@ describe('api.mjs (the public API contract)', () => {
       expect(error.validation.errors[0].messageKey).toMatch(/^GameOrchestra\./);
     });
 
+    /**
+     * set() promises it applies "the same bar as the editor's Save button". Every Script-node rule
+     * in graph-validation.mjs is environment-dependent and SELF-SKIPS when its context is missing,
+     * so for as long as set() passed no context that promise was false in the one direction that
+     * matters: a graph the editor would have refused went straight to the flag.
+     *
+     * The failure mode is not a crash but a graph that looks saved and can never do anything.
+     */
+    describe('holds Script nodes to the same bar as the editor', () => {
+      const scriptGraph = (script) => ({
+        version: 1,
+        nodes: [
+          { id: '1', type: 'start', x: 0, y: 0 },
+          { id: '2', type: 'script', script, x: 1, y: 0 },
+          { id: '3', type: 'end', x: 2, y: 0 }
+        ],
+        edges: [{ id: 'e1', from: '1', to: '2' }, { id: 'e2', from: '2', to: '3' }]
+      });
+
+      it('refuses inline source that cannot compile, and writes nothing', async () => {
+        await expect(api.graph.set('pl1', scriptGraph({ mode: 'inline', source: 'return (;' })))
+          .rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+        expect(playlist.getFlag(CONST.moduleId, 'customPlayback')).toBeUndefined();
+      });
+
+      it('returns macro warnings rather than throwing - warnings never block a save', async () => {
+        game.macros = [];
+        const result = await api.graph.set('pl1', scriptGraph({ mode: 'macro', macroUuid: 'Macro.gone' }));
+
+        expect(result.warnings.map((w) => w.messageKey))
+          .toContain('GameOrchestra.CustomEditor.Validation.ScriptMacroNotFound');
+        expect(playlist.getFlag(CONST.moduleId, 'customPlayback')).toBeTruthy();
+      });
+
+      it('resolves a real script macro with no complaint at all', async () => {
+        game.macros = [{ uuid: 'Macro.ok', name: 'Boss FX', type: 'script' }];
+        const result = await api.graph.set('pl1', scriptGraph({ mode: 'macro', macroUuid: 'Macro.ok' }));
+        expect(result.warnings.filter((w) => w.messageKey.includes('Script'))).toEqual([]);
+      });
+
+      /**
+       * The deliberate asymmetry with the editor (see api.mjs#scriptValidationContext): canAuthor
+       * gates an editor FIELD, and asking it of an API caller answers the wrong question - the
+       * module writing a graph is not the person who will later run it. inlineScriptsAllowed(), at
+       * execution time, is the check that actually decides anything.
+       */
+      it('does NOT consult MACRO_SCRIPT permission - that is an editor affordance, not a gate', async () => {
+        game.user.can = vi.fn(() => false);
+        const result = await api.graph.set('pl1', scriptGraph({ mode: 'inline', source: 'return 1;' }));
+
+        expect(result.warnings.map((w) => w.messageKey))
+          .not.toContain('GameOrchestra.CustomEditor.Validation.ScriptNoPermission');
+        expect(playlist.getFlag(CONST.moduleId, 'customPlayback')).toBeTruthy();
+      });
+
+      it('lets a caller override the environment context it supplies for itself', async () => {
+        // A module validating against a world it is not currently in - the reason set() takes
+        // options at all rather than hard-coding the live answers.
+        const result = await api.graph.set(
+          'pl1',
+          scriptGraph({ mode: 'inline', source: 'return (;' }),
+          { scripting: { inlineAllowed: true, compiles: () => true } }
+        );
+        expect(result.valid).toBe(true);
+      });
+    });
+
     it('validate() emits i18n KEYS, never localized strings', () => {
       const result = api.graph.validate({ version: 1, nodes: [], edges: [] });
       expect(result.valid).toBe(false);
@@ -361,6 +429,64 @@ describe('api.mjs (the public API contract)', () => {
     it('rejects an unknown sound with NOT_FOUND', async () => {
       await expect(api.mix.setVolume('pl1', 'ghost', 0.5)).rejects.toMatchObject({ code: 'NOT_FOUND' });
       expect(() => api.mix.effectiveVolume('pl1', 'ghost')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+    });
+  });
+
+  describe('the re-entrancy guard (D-B1)', () => {
+    /**
+     * A Script node runs on the head GM, so every API call in its context passes the head-GM and
+     * permission gates - there is no NOT_HEAD_GM to catch these. Two shapes eat their own engine:
+     * rewriting the running graph (which tears down and restarts from Start, H8/H9, while the
+     * script's node holds a token) and stopping playback from inside one of its own nodes.
+     *
+     * The throttle and the circuit breaker would eventually intervene, but a breaker trip is a
+     * diagnosis, not a guardrail - and the music restarts in a loop until it fires.
+     */
+    beforeEach(() => {
+      resetScriptExecution();
+    });
+
+    it('refuses to rewrite the graph of the playlist whose script is running', async () => {
+      beginScriptExecution(new Set(['pl1']));
+      await expect(api.graph.set('pl1', createEmptyGraph())).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+      await expect(api.graph.remove('pl1')).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+    });
+
+    it('refuses to stop or restart playback while any script is executing', async () => {
+      game.gameOrchestra.musicController = { playCurrentTrack: vi.fn(), transitionToContext: vi.fn() };
+      beginScriptExecution(new Set(['pl1']));
+      await expect(api.playback.stop()).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+      await expect(api.playback.play()).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+      await expect(api.transport.refresh()).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+    });
+
+    it('covers the whole engine TREE, not just the root', async () => {
+      // Child engines share the registry by reference, so a script in a nested Playlist node's
+      // target must not be able to restart the root.
+      const nested = createMockPlaylist('pl2', 'Nested', []);
+      game.playlists.get = vi.fn((id) => (id === 'pl1' ? playlist : id === 'pl2' ? nested : null));
+      beginScriptExecution(new Set(['pl1', 'pl2']));
+      await expect(api.graph.set('pl2', createEmptyGraph())).rejects.toMatchObject({ code: 'SELF_REENTRANT' });
+    });
+
+    it('still allows a script to rewrite a DIFFERENT playlist - the point of having the node', async () => {
+      const other = createMockPlaylist('pl2', 'Other', [], -1);
+      game.playlists.get = vi.fn((id) => (id === 'pl1' ? playlist : id === 'pl2' ? other : null));
+      beginScriptExecution(new Set(['pl1']));
+
+      const graph = {
+        version: 1,
+        nodes: [{ id: '1', type: 'start', x: 0, y: 0 }, { id: '2', type: 'end', x: 1, y: 0 }],
+        edges: [{ id: 'e1', from: '1', to: '2' }]
+      };
+      await expect(api.graph.set('pl2', graph)).resolves.toBeTruthy();
+    });
+
+    it('lifts the refusal once execution ends', async () => {
+      const registry = new Set(['pl1']);
+      beginScriptExecution(registry);
+      endScriptExecution(registry);
+      await expect(api.graph.remove('pl1')).resolves.toBeUndefined();
     });
   });
 

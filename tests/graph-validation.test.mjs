@@ -910,3 +910,72 @@ describe('findUnreachableNodes', () => {
     expect(findUnreachableNodes(g)).toEqual(['orphan']);
   });
 });
+
+describe('Script nodes', () => {
+  const graphWith = (node) => ({
+    version: 1,
+    nodes: [{ id: 'start', type: 'start' }, { id: 'sc', type: 'script', ...node }, { id: 'end', type: 'end' }],
+    edges: [{ id: 'e1', from: 'start', to: 'sc' }, { id: 'e2', from: 'sc', to: 'end' }]
+  });
+  const keys = (result) => [...result.errors, ...result.warnings].map((i) => i.messageKey.split('.').pop());
+
+  it('requires exactly one exit', () => {
+    const graph = graphWith({ script: { mode: 'macro', macroUuid: 'Macro.a' } });
+    graph.edges = graph.edges.filter((e) => e.from !== 'sc');
+    expect(keys(validateGraph(graph))).toContain('ScriptExitMissing');
+  });
+
+  it('warns - does not error - on an unconfigured node', () => {
+    // A placeholder mid-authoring is legitimate, and at runtime it follows its exit fine. The bar
+    // for `error` is a state that can never work.
+    const result = validateGraph(graphWith({ script: { mode: 'macro', macroUuid: null } }));
+    expect(result.valid).toBe(true);
+    expect(keys(result)).toContain('ScriptMissingMacro');
+  });
+
+  it('warns when the referenced macro no longer exists', () => {
+    // The rule that makes the live link honest: a deleted macro, or a graph imported into another
+    // world, degrades to something VISIBLE rather than to silence.
+    const result = validateGraph(graphWith({ script: { mode: 'macro', macroUuid: 'Macro.gone' } }), { macros: [] });
+    expect(keys(result)).toContain('ScriptMacroNotFound');
+  });
+
+  it('warns when the referenced macro is a chat macro', () => {
+    const result = validateGraph(graphWith({ script: { mode: 'macro', macroUuid: 'Macro.chat' } }), {
+      macros: [{ uuid: 'Macro.chat', name: 'Roll', type: 'chat' }]
+    });
+    expect(keys(result)).toContain('ScriptMacroNotScript');
+  });
+
+  it('accepts a resolvable script macro with no complaint', () => {
+    const result = validateGraph(graphWith({ script: { mode: 'macro', macroUuid: 'Macro.ok' } }), {
+      macros: [{ uuid: 'Macro.ok', name: 'FX', type: 'script' }]
+    });
+    expect(keys(result)).toEqual([]);
+  });
+
+  it('ERRORS on inline source that does not compile', () => {
+    // The one script rule that pays for itself: source that cannot compile can never do anything,
+    // and without this the first sign of a typo is silence during play.
+    const result = validateGraph(graphWith({ script: { mode: 'inline', source: 'return (;' } }), {
+      scripting: { compiles: () => false, inlineAllowed: true, canAuthor: true }
+    });
+    expect(result.valid).toBe(false);
+    expect(keys(result)).toContain('ScriptSyntaxError');
+  });
+
+  it('warns when inline scripts are disabled for the world', () => {
+    const result = validateGraph(graphWith({ script: { mode: 'inline', source: 'foo()' } }), {
+      scripting: { compiles: () => true, inlineAllowed: false, canAuthor: true }
+    });
+    expect(result.valid).toBe(true);
+    expect(keys(result)).toContain('ScriptInlineDisabled');
+  });
+
+  it('skips the environment checks entirely when no scripting context is supplied', () => {
+    // graph-validation stays PURE: with nothing passed in there is nothing to consult, and the
+    // rules simply do not fire rather than guessing at live state.
+    const result = validateGraph(graphWith({ script: { mode: 'inline', source: 'return (;' } }));
+    expect(keys(result)).toEqual([]);
+  });
+});

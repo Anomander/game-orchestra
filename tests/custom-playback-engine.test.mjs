@@ -4,6 +4,7 @@ import { setupFoundryMocks, setMockSetting, createMockPlaylist, createMockSound 
 setupFoundryMocks();
 
 import { CustomPlaybackEngine } from '../scripts/custom-playback-engine.mjs';
+import { isExecutingScriptFor, resetScriptExecution, setCanCompileScripts } from '../scripts/script-runtime.mjs';
 
 /**
  * Simulate a track finishing naturally: flips playing flags off, then fires 'end'.
@@ -1256,6 +1257,235 @@ describe('CustomPlaybackEngine', () => {
 
       expect(controller.stopTrack).toHaveBeenCalledWith(sA);
       expect(controller.stopTrack).toHaveBeenCalledWith(sB);
+    });
+  });
+
+  describe('Script nodes', () => {
+    /**
+     * The Script node's whole design rests on it being DURATIONAL, and every test here is really
+     * a test of one consequence of that: it holds a token, so it must always give it back.
+     *
+     * The unifying rule: whatever goes wrong - no macro, blocked gate, bad syntax, a throw, a
+     * hang - the token FOLLOWS THE EXIT. A broken script degrades to a no-op, never to silence.
+     * That is the same reasoning that makes a Playlist node's refusal a zero-length pass rather
+     * than a dead end, and it is the only thing standing between a typo and a graph that stops.
+     */
+    const scriptGraph = (script) => ({
+      version: 1,
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'sc', type: 'script', script },
+        { id: 't1', type: 'track', soundId: 's1', loop: { mode: 'count', count: 1 } }
+      ],
+      edges: [{ id: 'e1', from: 'start', to: 'sc' }, { id: 'e2', from: 'sc', to: 't1' }]
+    });
+
+    const buildEngine = (script) => {
+      const s1 = createMockSound('s1', 'Track 1');
+      const playlist = createMockPlaylist('pl1', 'Graph', [s1], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', scriptGraph(script));
+      return { s1, playlist, engine: new CustomPlaybackEngine({ playlist }, controller) };
+    };
+
+    beforeEach(() => {
+      setCanCompileScripts(null);
+      resetScriptExecution();
+      game.user.can = vi.fn(() => true);
+    });
+
+    it('runs a macro and then follows its exit', async () => {
+      const execute = vi.fn().mockResolvedValue(undefined);
+      globalThis.fromUuid = vi.fn().mockResolvedValue({ type: 'script', name: 'Boss FX', execute });
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.abc' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      // The context arrives as scope.gameOrchestra, which is what the inspector's hint promises.
+      expect(execute.mock.calls[0][0].gameOrchestra).toMatchObject({ playlist: expect.anything() });
+    });
+
+    it('follows its exit when the macro no longer exists, reporting why', async () => {
+      globalThis.fromUuid = vi.fn().mockResolvedValue(null);
+      const seen = [];
+      Hooks.on('gameOrchestraScriptError', (p) => seen.push(p));
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.gone' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(seen[0]).toMatchObject({ phase: 'missing' });
+    });
+
+    it('follows its exit when the macro THROWS', async () => {
+      globalThis.fromUuid = vi.fn().mockResolvedValue({
+        type: 'script', name: 'Bad', execute: vi.fn().mockRejectedValue(new Error('boom'))
+      });
+      const seen = [];
+      Hooks.on('gameOrchestraScriptError', (p) => seen.push(p));
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.bad' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(seen[0]).toMatchObject({ phase: 'execute' });
+    });
+
+    it('forwards the thrown object to the log, not just its message', async () => {
+      // The 'execute' phase is the only failure mode where the exception carries a stack, and it
+      // is the one anyone actually has to debug. An arity that quietly dropped the third argument
+      // logged every user-code throw as a bare string, which is the least useful possible form.
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const boom = new Error('boom');
+      globalThis.fromUuid = vi.fn().mockResolvedValue({
+        type: 'script', name: 'Bad', execute: vi.fn().mockRejectedValue(boom)
+      });
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.bad' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(spy.mock.calls.some((args) => args.includes(boom))).toBe(true);
+      spy.mockRestore();
+    });
+
+    it('still runs MACRO mode when this deployment blocks function construction', async () => {
+      // The claim D-B5's whole union rests on: core compiled the macro, we did not, so a CSP that
+      // kills inline source leaves macro mode entirely intact. Asserted in three comments and,
+      // until now, nowhere else.
+      setCanCompileScripts(false);
+      const execute = vi.fn().mockResolvedValue(undefined);
+      globalThis.fromUuid = vi.fn().mockResolvedValue({ type: 'script', name: 'Boss FX', execute });
+      const seen = [];
+      Hooks.on('gameOrchestraScriptError', (p) => seen.push(p));
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.abc' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual([]);
+    });
+
+    it('does not follow its exit a SECOND time when a timed-out script later settles', async () => {
+      // The timeout abandons the script rather than cancelling it, so the work promise stays live
+      // and resolves on its own schedule. If that resolution were also wired to the exit, the token
+      // would have forked silently.
+      //
+      // Asserted on _followSingleExit rather than on playTrack, and the difference matters: a
+      // second hop into an already-playing Track node is absorbed by the SINGLETON rule at the
+      // destination, so the audible symptom would be invisible here while the token count was
+      // already wrong. Checking the hop itself is what makes this test bite.
+      setMockSetting('game-orchestra', 'allowInlineScripts', true);
+      setMockSetting('game-orchestra', 'scriptTimeout', 1000);
+      vi.useFakeTimers();
+      const { s1, engine } = buildEngine({
+        mode: 'inline',
+        source: 'await new Promise((resolve) => setTimeout(resolve, 5000));'
+      });
+      const hops = vi.spyOn(engine, '_followSingleExit');
+
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(controller.playTrack).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5000); // the abandoned script finally settles
+
+      expect(hops.mock.calls.filter(([nodeId]) => nodeId === 'sc')).toHaveLength(1);
+      expect(controller.playTrack).toHaveBeenCalledTimes(1);
+      expect(controller.playTrack).toHaveBeenCalledWith(s1);
+      vi.useRealTimers();
+    });
+
+    it('refuses inline source when the world setting is off, and still advances', async () => {
+      const seen = [];
+      Hooks.on('gameOrchestraScriptError', (p) => seen.push(p));
+      const { s1, engine } = buildEngine({ mode: 'inline', source: 'globalThis.__ranScript = true;' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(globalThis.__ranScript).toBeUndefined();
+      expect(seen[0]).toMatchObject({ phase: 'blocked' });
+    });
+
+    it('runs inline source when the world setting is on', async () => {
+      setMockSetting('game-orchestra', 'allowInlineScripts', true);
+      delete globalThis.__ranScript;
+      const { s1, engine } = buildEngine({ mode: 'inline', source: 'globalThis.__ranScript = run.id;' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(globalThis.__ranScript).toBeDefined();
+      delete globalThis.__ranScript;
+    });
+
+    it('TIMES OUT rather than stranding the token forever', async () => {
+      // The failure this exists to prevent is silent and permanent: a hanging promise (an
+      // un-awaited dialog, a fetch to a dead host) holds the token with no error anywhere.
+      setMockSetting('game-orchestra', 'allowInlineScripts', true);
+      setMockSetting('game-orchestra', 'scriptTimeout', 1000);
+      const seen = [];
+      Hooks.on('gameOrchestraScriptError', (p) => seen.push(p));
+      vi.useFakeTimers();
+      const { s1, engine } = buildEngine({ mode: 'inline', source: 'await new Promise(() => {});' });
+
+      await engine.start();
+      expect(controller.playTrack).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1100);
+
+      expect(controller.playTrack).toHaveBeenCalledWith(s1);
+      expect(seen[0]).toMatchObject({ phase: 'timeout' });
+      vi.useRealTimers();
+    });
+
+    it('is subject to the singleton rule - two Fork branches produce one execution', async () => {
+      const execute = vi.fn().mockResolvedValue(undefined);
+      globalThis.fromUuid = vi.fn().mockResolvedValue({ type: 'script', name: 'Once', execute });
+      const s1 = createMockSound('s1', 'Track 1');
+      const playlist = createMockPlaylist('pl1', 'Graph', [s1], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'fork', type: 'fork' },
+          { id: 'sc', type: 'script', script: { mode: 'macro', macroUuid: 'Macro.abc' } },
+          { id: 't1', type: 'track', soundId: 's1', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [
+          { id: 'e1', from: 'start', to: 'fork' },
+          { id: 'e2', from: 'fork', to: 'sc' },
+          { id: 'e3', from: 'fork', to: 'sc' },
+          { id: 'e4', from: 'sc', to: 't1' }
+        ]
+      });
+      const engine = new CustomPlaybackEngine({ playlist }, controller);
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalled());
+
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks its whole engine tree as executing, and releases the mark even on a throw', async () => {
+      // The release is what the re-entrancy guard's correctness rests on: a leaked mark makes that
+      // playlist permanently unwritable through the API for the rest of the session.
+      let duringExecution = null;
+      globalThis.fromUuid = vi.fn().mockResolvedValue({
+        type: 'script',
+        name: 'Peek',
+        execute: vi.fn(() => { duringExecution = isExecutingScriptFor('pl1'); throw new Error('boom'); })
+      });
+      const { s1, engine } = buildEngine({ mode: 'macro', macroUuid: 'Macro.peek' });
+
+      await engine.start();
+      await vi.waitFor(() => expect(controller.playTrack).toHaveBeenCalledWith(s1));
+
+      expect(duringExecution).toBe(true);
+      expect(isExecutingScriptFor('pl1')).toBe(false);
     });
   });
 

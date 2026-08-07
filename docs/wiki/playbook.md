@@ -277,8 +277,11 @@ re-resolution is what restarts things.
   sub-playlist's sound can get briefly faded on a re-resolution it didn't need — a crossfade blip,
   never wrong playback. The running engine remains the source of truth; that list only feeds the
   outer controller's fade bookkeeping.
-- **`renderPlaylistConfig` and `select[name="mode"]` are unverified against live Foundry v14.**
-  Flagged in `hooks.mjs` as requiring manual verification.
+- ~~**`renderPlaylistConfig` and `select[name="mode"]` are unverified against live Foundry v14.**~~
+  **Verified** by `itest/specs/005-platform-assumptions.spec.mjs`, which opens a real
+  `PlaylistConfig` and asserts the hook fires, the anchor exists inside a `.form-group`, and
+  `hooks.mjs` actually injects its button. Left visible rather than deleted: this was carried as an
+  open risk long enough that its absence would read as an oversight.
 
 ---
 

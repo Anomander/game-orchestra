@@ -1,6 +1,7 @@
 import { CONST } from './config.mjs';
-import { log, getCustomGraph, isHeadGM, getGraphTargetPlaylists, writeCustomGraph, removeCustomGraph } from './helpers.mjs';
-import { createEmptyGraph, createDefaultLoop, createDefaultUntilLoop } from './custom-playback-schema.mjs';
+import { log, getCustomGraph, isHeadGM, getGraphTargetPlaylists, macroValidationList, writeCustomGraph, removeCustomGraph } from './helpers.mjs';
+import { canAuthorInlineScripts, inlineScriptsAllowed, scriptCompiles } from './script-runtime.mjs';
+import { createEmptyGraph, createDefaultLoop, createDefaultUntilLoop, createDefaultScript, resolveScript } from './custom-playback-schema.mjs';
 import { PlaylistMixerApp } from './playlist-mixer.mjs';
 import { MixerController } from './playlist-mixer-controller.mjs';
 import { graphToDrawflowExport, drawflowExportToGraph, portIndex } from './graph-drawflow-bridge.mjs';
@@ -114,7 +115,8 @@ const NODE_DEFAULTS = {
   delay: { inputs: 1, outputs: 1, data: { delay: { min: 1, max: 1 } } },
   random: { inputs: 1, outputs: 1, data: { exits: [{ weight: 1, cooldown: 0 }], avoidRepeat: false } },
   condition: { inputs: 1, outputs: 1, data: { exits: [{ condition: { kind: 'default' } }] } },
-  playlist: { inputs: 1, outputs: 1, data: { playlistRef: createDefaultPlaylistRef(), loop: createDefaultLoop() } }
+  playlist: { inputs: 1, outputs: 1, data: { playlistRef: createDefaultPlaylistRef(), loop: createDefaultLoop() } },
+  script: { inputs: 1, outputs: 1, data: { script: createDefaultScript() } }
 };
 
 /**
@@ -136,6 +138,7 @@ const NODE_PALETTE = [
   { type: 'playlist', label: 'GameOrchestra.CustomEditor.NodeType.Playlist' },
   { type: 'fork', label: 'GameOrchestra.CustomEditor.NodeType.Fork' },
   { type: 'delay', label: 'GameOrchestra.CustomEditor.NodeType.Delay' },
+  { type: 'script', label: 'GameOrchestra.CustomEditor.NodeType.Script' },
   { type: 'random', label: 'GameOrchestra.CustomEditor.NodeType.Random' },
   { type: 'condition', label: 'GameOrchestra.CustomEditor.NodeType.Condition' },
   { type: 'end', label: 'GameOrchestra.CustomEditor.NodeType.End' }
@@ -243,7 +246,10 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     updatePlaylistOverlayMode: 'handleUpdatePlaylistOverlayMode',
     updatePlaylistOverlayId: 'handleUpdatePlaylistOverlayId',
     updatePlaylistInfinite: 'handleUpdatePlaylistInfinite',
-    updatePlaylistLoopCount: 'handleUpdatePlaylistLoopCount'
+    updatePlaylistLoopCount: 'handleUpdatePlaylistLoopCount',
+    updateScriptMode: 'handleUpdateScriptMode',
+    updateScriptMacro: 'handleUpdateScriptMacro',
+    updateScriptSource: 'handleUpdateScriptSource'
   };
 
   /**
@@ -321,7 +327,18 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     const configuredPhases = game.settings.get(CONST.moduleId, CONST.settings.configuredPhases) || CONST.defaultPhases;
     const moodIds = configuredMoods.map((m) => m.id);
     const phaseIds = configuredPhases.map((p) => p.id);
-    const validation = validateGraph(this.graph, { playlist: this.playlist, playlists: targetPlaylists, moodIds, phaseIds });
+    // `macros` and `scripting` are ENVIRONMENT-dependent validation inputs - the first in this
+    // module. Whether a graph is valid now partly depends on a world setting and on who is asking.
+    // They are passed in rather than read inside graph-validation.mjs, which is pure and must stay
+    // that way; `compiles` in particular would otherwise have that module constructing functions.
+    const validation = validateGraph(this.graph, {
+      playlist: this.playlist,
+      playlists: targetPlaylists,
+      moodIds,
+      phaseIds,
+      macros: this._macroValidationList(),
+      scripting: { inlineAllowed: inlineScriptsAllowed(), canAuthor: canAuthorInlineScripts(), compiles: scriptCompiles }
+    });
     const selectedNode = this.graph.nodes.find((n) => n.id === this.selectedNodeId) || null;
     const sounds = this._playlistSounds();
     const soundOptions = sounds.map((s) => ({
@@ -740,7 +757,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     // All three captured synchronously, before the fromUuid() await below - the event object is
     // not reliable to read from once an event handler has yielded.
     const point = this._pointFromEvent(event);
-    const dropTargetNodeId = this._trackNodeUnderDrop(event);
+    const dropTarget = this._nodeUnderDrop(event);
     const insertEdge = connectionEndpoints(this._edgeUnderPointer(event)?.classList);
     // The offer is consumed by the drop whether or not it ends up applying (a rejected drop
     // leaves nothing lit).
@@ -765,7 +782,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       return;
     }
 
-    if (!['Playlist', 'PlaylistSound'].includes(data?.type) || !data.uuid) return;
+    if (!['Playlist', 'PlaylistSound', 'Macro'].includes(data?.type) || !data.uuid) return;
 
     const document = await fromUuid(data.uuid);
     if (!this._drawflow) return; // the window may have closed while the lookup above was pending
@@ -773,7 +790,9 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     const dropped =
       data.type === 'PlaylistSound'
         ? { type: 'PlaylistSound', playlistId: document?.parent?.id ?? null, soundId: document?.id ?? null }
-        : { type: 'Playlist', playlistId: document?.id ?? null, soundId: null };
+        : data.type === 'Macro'
+          ? { type: 'Macro', playlistId: null, soundId: null, macroUuid: document?.uuid ?? null, macroType: document?.type ?? null }
+          : { type: 'Playlist', playlistId: document?.id ?? null, soundId: null };
 
     const result = resolveGraphDrop(dropped, { editedPlaylistId: this.playlist?.id ?? null });
     if (result.action === 'reject') {
@@ -781,7 +800,10 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       return;
     }
     // Dropped ON an existing Track node: repoint that node instead of creating a second one.
-    if (result.action === 'track' && dropTargetNodeId) return this._repointTrackNode(dropTargetNodeId, result.soundId);
+    if (result.action === 'track' && dropTarget?.type === 'track') return this._repointTrackNode(dropTarget.nodeId, result.soundId);
+    // The same gesture for a Script node: dropping a macro onto one repoints it rather than
+    // leaving the GM with two nodes to reconcile.
+    if (result.action === 'script' && dropTarget?.type === 'script') return this._repointScriptNode(dropTarget.nodeId, result.macroUuid);
 
     // Dropped on a WIRE: the new node is spliced into it, so auto-chaining is suppressed - the
     // edge already says where this node belongs, and the chain anchor would wire it a second
@@ -789,7 +811,9 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     const [type, overrides] =
       result.action === 'track'
         ? ['track', { soundId: result.soundId }]
-        : ['playlist', { playlistRef: { source: 'direct', playlistId: result.playlistId } }];
+        : result.action === 'script'
+          ? ['script', { script: { mode: 'macro', macroUuid: result.macroUuid } }]
+          : ['playlist', { playlistRef: { source: 'direct', playlistId: result.playlistId } }];
     const nodeId = this._addNodeOfType(type, overrides, point, { chain: !insertEdge });
     if (nodeId && insertEdge) this._insertNodeOnEdge(nodeId, insertEdge);
   }
@@ -829,11 +853,13 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
    * @returns {string|null}
    * @private
    */
-  _trackNodeUnderDrop(event) {
+  _nodeUnderDrop(event) {
     const element = event.target?.closest?.('.drawflow-node');
     const nodeId = element?.id?.startsWith?.('node-') ? element.id.slice(5) : null;
     if (!nodeId) return null;
-    return this._liveNode(nodeId)?.name === 'track' ? nodeId : null;
+    // Drawflow's own `name` field holds the node TYPE (see graph-drawflow-bridge.mjs) - the
+    // user-facing label lives in data.label.
+    return { nodeId, type: this._liveNode(nodeId)?.name ?? null };
   }
 
   /**
@@ -854,6 +880,24 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (!node) return;
     if (node.data?.soundId === soundId) return; // dropped a sound onto the node already playing it
     this._patchNodeData(nodeId, { ...node.data, soundId });
+  }
+
+  /**
+   * Point an existing Script node at a different macro, keeping its wires, position and name.
+   *
+   * The Script counterpart of _repointTrackNode, and the same reasoning: dropping the right macro
+   * onto the wrong node should be fixable with the gesture that created it, not with a delete and
+   * two rewires. Switches the node to macro mode, since that is what was dropped - an inline node
+   * receiving a macro drop is a mode change the GM just expressed.
+   * @param {string} nodeId
+   * @param {string} macroUuid
+   * @private
+   */
+  _repointScriptNode(nodeId, macroUuid) {
+    const node = this._liveNode(nodeId);
+    if (!node) return;
+    if (resolveScript({ script: node.data?.script }).macroUuid === macroUuid) return;
+    this._patchNodeData(nodeId, { ...node.data, script: { mode: 'macro', macroUuid } });
   }
 
   /**
@@ -1125,7 +1169,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       case 'condition':
         return Math.max(1, data.exits?.length ?? 1);
       default:
-        return 1; // start, delay
+        return 1; // start, delay, script
     }
   }
 
@@ -1211,6 +1255,8 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
         overlayOptions,
         moodOptions,
         phaseOptions,
+        macroOptions: this._macroOptions(),
+        scripting: { inlineAllowed: inlineScriptsAllowed(), canAuthor: canAuthorInlineScripts() },
         selectedExits,
         localize: localizeIssue
       });
@@ -1906,7 +1952,8 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (EXPANDABLE_EXIT_NODE_TYPES.has(node.type)) {
       exitCount = liveNode ? Object.keys(liveNode.outputs || {}).length : exitCount;
     }
-    const detail = computeNodeDetail(node, { soundName, refLabel, exitCount, localize: localizeIssue });
+    const macroName = node.type === 'script' ? this._macroNameForNode(node) : undefined;
+    const detail = computeNodeDetail(node, { soundName, refLabel, exitCount, macroName, localize: localizeIssue });
     const contentEl = this._drawflow.container?.querySelector(`#node-${nodeId} .drawflow_content_node`);
     if (contentEl) {
       contentEl.innerHTML = buildNodeInnerHtml(node.type, detail, { label: nodeDisplayLabel(node) });
@@ -2090,6 +2137,52 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
    * @returns {string}
    * @private
    */
+  /**
+   * Every script macro in this world, for the Script inspector's picker.
+   *
+   * Only `type === 'script'` macros: a chat macro has no JS in `command`, so offering one would
+   * let a GM configure a node that can never do anything - and validation would then have to
+   * explain a choice the UI itself suggested.
+   * @returns {Array<{uuid: string, name: string}>}
+   * @private
+   */
+  /**
+   * Every macro in the world, with its type, for validation's uuid checks. Unlike _macroOptions()
+   * this is NOT filtered to script macros - ScriptMacroNotScript exists to tell a GM that the
+   * macro they referenced is a chat macro, and filtering it out here would make that case
+   * indistinguishable from a deleted one.
+   * @returns {Array<{uuid: string, name: string, type: string}>}
+   * @private
+   */
+  _macroValidationList() {
+    return macroValidationList();
+  }
+
+  _macroOptions() {
+    const macros = game.macros?.contents || Array.from(game.macros ?? []);
+    return macros
+      .filter((m) => m.type === 'script')
+      .map((m) => ({ uuid: m.uuid, name: m.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * A Script node's referenced macro's LIVE name, for the canvas detail line.
+   *
+   * Live rather than stored, which is the whole point of the reference being a uuid (D-B5):
+   * renaming the macro renames the node's line, and DELETING it leaves the line unresolved - the
+   * same fact ScriptMacroNotFound reports in validation, shown in the channel that owns it.
+   * @param {object} node
+   * @returns {string|undefined}
+   * @private
+   */
+  _macroNameForNode(node) {
+    const uuid = resolveScript(node).macroUuid;
+    if (!uuid) return undefined;
+    const macros = game.macros?.contents || Array.from(game.macros ?? []);
+    return macros.find((m) => m.uuid === uuid)?.name;
+  }
+
   _describePlaylistRefForNode(node) {
     const configuredMoods = game.settings.get(CONST.moduleId, CONST.settings.configuredMoods) || CONST.defaultMoods;
     const configuredPhases = game.settings.get(CONST.moduleId, CONST.settings.configuredPhases) || CONST.defaultPhases;
@@ -2965,6 +3058,49 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     if (!node) return;
     node.data.loop = { mode: 'count', count: Math.max(1, parseInt(target.value, 10) || 1) };
     this._patchNodeData(target.dataset.nodeId, node.data);
+  }
+
+  /**
+   * Switch a Script node between macro and inline mode.
+   *
+   * Routed through resolveScript() rather than spread over the old value, so switching modes
+   * cannot leave a half-populated union behind - the same discipline the Track loop's mode switch
+   * follows, and for the same reason a flattened union cost this codebase an entire loop mode.
+   */
+  static handleUpdateScriptMode(event, target) {
+    const node = this._liveNode(target.dataset.nodeId);
+    if (!node) return;
+    const previous = resolveScript({ script: node.data.script });
+    node.data.script = target.value === 'inline'
+      ? { mode: 'inline', source: previous.source ?? '' }
+      : { mode: 'macro', macroUuid: previous.macroUuid ?? null };
+    this._patchNodeData(target.dataset.nodeId, node.data);
+  }
+
+  static handleUpdateScriptMacro(event, target) {
+    const node = this._liveNode(target.dataset.nodeId);
+    if (!node) return;
+    node.data.script = { mode: 'macro', macroUuid: target.value || null };
+    this._patchNodeData(target.dataset.nodeId, node.data);
+  }
+
+  /**
+   * Commit inline source.
+   *
+   * Deliberately NOT followed by _patchNodeData's usual _renderInspector(): that rebuilds the
+   * inspector's innerHTML wholesale (HR-A), which would destroy the textarea the user is typing
+   * in - losing the caret, the selection, and the focus on every keystroke that fires a change.
+   * The canvas display still refreshes, so the node's detail line stays honest.
+   */
+  static handleUpdateScriptSource(event, target) {
+    const node = this._liveNode(target.dataset.nodeId);
+    if (!node) return;
+    node.data.script = { mode: 'inline', source: String(target.value ?? '') };
+    if (!this._drawflow) return;
+    this._drawflow.updateNodeDataFromId(target.dataset.nodeId, node.data);
+    this._syncFromDrawflow(this._drawflow);
+    this._refreshNodeDisplay(target.dataset.nodeId);
+    this._renderValidation();
   }
 
   /**

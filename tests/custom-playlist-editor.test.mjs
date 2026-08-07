@@ -1844,6 +1844,135 @@ describe('CustomPlaylistEditor', () => {
     });
   });
 
+  describe('Script nodes', () => {
+    /** Mount an editor with one Script node selected, and return both. */
+    function withScriptNode() {
+      global.Drawflow = createFakeDrawflowClass();
+      const playlist = createMockPlaylist('pl1', 'Playlist', []);
+      const editor = new CustomPlaylistEditor(playlist);
+      editor.element = createFakeElement();
+      editor._mountDrawflow();
+      CustomPlaylistEditor.handleAddNode.call(editor, { preventDefault: vi.fn() }, { dataset: { nodeType: 'script' } });
+      const nodeId = editor.graph.nodes.find((n) => n.type === 'script').id;
+      return { editor, nodeId, node: () => editor.graph.nodes.find((n) => n.id === nodeId) };
+    }
+
+    it('starts in macro mode with no macro - never with an implicit one', () => {
+      const { node } = withScriptNode();
+      expect(node().script).toEqual({ mode: 'macro', macroUuid: null });
+    });
+
+    it('handleUpdateScriptMacro stores the uuid, and blank clears it to null', () => {
+      const { editor, nodeId, node } = withScriptNode();
+
+      CustomPlaylistEditor.handleUpdateScriptMacro.call(editor, {}, { value: 'Macro.abc', dataset: { nodeId } });
+      expect(node().script).toEqual({ mode: 'macro', macroUuid: 'Macro.abc' });
+
+      // '' rather than undefined: an empty <select> option, not a missing field.
+      CustomPlaylistEditor.handleUpdateScriptMacro.call(editor, {}, { value: '', dataset: { nodeId } });
+      expect(node().script.macroUuid).toBeNull();
+    });
+
+    it('handleUpdateScriptMode swaps the stored shape wholesale, not field by field', () => {
+      const { editor, nodeId, node } = withScriptNode();
+
+      CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId } });
+      expect(node().script).toEqual({ mode: 'inline', source: '' });
+
+      CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'macro', dataset: { nodeId } });
+      expect(node().script).toEqual({ mode: 'macro', macroUuid: null });
+    });
+
+    it('handleUpdateScriptSource commits the source verbatim', () => {
+      const { editor, nodeId, node } = withScriptNode();
+      CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId } });
+
+      CustomPlaylistEditor.handleUpdateScriptSource.call(editor, {}, { value: '  await foo();  ', dataset: { nodeId } });
+
+      // Not trimmed: leading indentation is meaningful in a multi-line body, and trimming here
+      // would fight the author's editor on every change event.
+      expect(node().script).toEqual({ mode: 'inline', source: '  await foo();  ' });
+    });
+
+    /**
+     * HR-A, and the reason handleUpdateScriptSource does not go through _patchNodeData like every
+     * other change action: _renderInspector() rebuilds the pane's innerHTML wholesale, which
+     * destroys the very textarea firing the event. The symptom is a lost caret and lost focus on
+     * every keystroke that commits - invisible in review, obvious and infuriating in use.
+     */
+    it('does NOT re-render the inspector while typing into the source textarea', () => {
+      const { editor, nodeId } = withScriptNode();
+      CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId } });
+      const spy = vi.spyOn(editor, '_renderInspector');
+
+      CustomPlaylistEditor.handleUpdateScriptSource.call(editor, {}, { value: 'x', dataset: { nodeId } });
+
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('still refreshes the canvas and validation on every source change', () => {
+      // The other half of the same trade: skipping the inspector must not mean skipping the two
+      // surfaces that would otherwise go stale - the node's detail line and the issue list.
+      const { editor, nodeId } = withScriptNode();
+      CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId } });
+      const display = vi.spyOn(editor, '_refreshNodeDisplay');
+      const validation = vi.spyOn(editor, '_renderValidation');
+
+      CustomPlaylistEditor.handleUpdateScriptSource.call(editor, {}, { value: 'x', dataset: { nodeId } });
+
+      expect(display).toHaveBeenCalledWith(nodeId);
+      expect(validation).toHaveBeenCalled();
+    });
+
+    it('every script handler is a no-op on a node id that no longer exists', () => {
+      const { editor } = withScriptNode();
+      expect(() => {
+        CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId: 'gone' } });
+        CustomPlaylistEditor.handleUpdateScriptMacro.call(editor, {}, { value: 'Macro.a', dataset: { nodeId: 'gone' } });
+        CustomPlaylistEditor.handleUpdateScriptSource.call(editor, {}, { value: 'x', dataset: { nodeId: 'gone' } });
+      }).not.toThrow();
+    });
+
+    describe('_repointScriptNode (dropping a macro onto an existing Script node)', () => {
+      it('repoints the node at the dropped macro instead of creating a second one', () => {
+        const { editor, nodeId, node } = withScriptNode();
+        const before = editor.graph.nodes.length;
+
+        editor._repointScriptNode(nodeId, 'Macro.new');
+
+        expect(node().script).toEqual({ mode: 'macro', macroUuid: 'Macro.new' });
+        expect(editor.graph.nodes).toHaveLength(before);
+      });
+
+      it('converts an INLINE node to macro mode - the drop is an explicit instruction', () => {
+        const { editor, nodeId, node } = withScriptNode();
+        CustomPlaylistEditor.handleUpdateScriptMode.call(editor, {}, { value: 'inline', dataset: { nodeId } });
+        CustomPlaylistEditor.handleUpdateScriptSource.call(editor, {}, { value: 'old();', dataset: { nodeId } });
+
+        editor._repointScriptNode(nodeId, 'Macro.new');
+
+        expect(node().script).toEqual({ mode: 'macro', macroUuid: 'Macro.new' });
+      });
+
+      it('does nothing when the node already points at that macro', () => {
+        const { editor, nodeId } = withScriptNode();
+        editor._repointScriptNode(nodeId, 'Macro.same');
+        const patch = vi.spyOn(editor, '_patchNodeData');
+
+        editor._repointScriptNode(nodeId, 'Macro.same');
+
+        expect(patch).not.toHaveBeenCalled();
+        patch.mockRestore();
+      });
+
+      it('is a no-op on a node id that no longer exists', () => {
+        const { editor } = withScriptNode();
+        expect(() => editor._repointScriptNode('gone', 'Macro.new')).not.toThrow();
+      });
+    });
+  });
+
   describe('Playlist node references (docs/playlist-node-plan.md)', () => {
     afterEach(() => {
       delete global.Drawflow;
@@ -4861,7 +4990,7 @@ describe('CustomPlaylistEditor', () => {
       const types = editor._prepareContext({}).palette.map((entry) => entry.type);
 
       expect(types).not.toContain('track');
-      expect(types).toEqual(['start', 'playlist', 'fork', 'delay', 'random', 'condition', 'end']);
+      expect(types).toEqual(['start', 'playlist', 'fork', 'delay', 'script', 'random', 'condition', 'end']);
     });
 
     // Each chip is a miniature of the node it adds, so its glyph has to be the glyph that node

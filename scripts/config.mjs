@@ -15,7 +15,9 @@ export const CONST = {
     configuredPhases: 'configuredPhases',
     resetPhaseOnCombatEnd: 'resetPhaseOnCombatEnd',
     moodWidgetPosition: 'moodWidgetPosition',
-    activeDuck: 'activeDuck'
+    activeDuck: 'activeDuck',
+    allowInlineScripts: 'allowInlineScripts',
+    scriptTimeout: 'scriptTimeout'
   },
   defaultMoods: [
     { id: 'calm', label: 'GameOrchestra.Mood.Calm', icon: 'fas fa-leaf', color: '#4caf50' },
@@ -60,7 +62,13 @@ export const CONST = {
      * the axis, not two - config.mjs#overlayAxes models the two axes as one mechanism, and
      * docs/wiki/ux.md D4 is the record of what splitting them into two of everything cost.
      */
-    OVERLAY_CHANGED: 'gameOrchestraOverlayChanged'
+    OVERLAY_CHANGED: 'gameOrchestraOverlayChanged',
+    /**
+     * A Script node failed: {phase, playlistId, nodeId, message}. `phase` is
+     * one of 'blocked' | 'compile' | 'execute' | 'timeout' | 'missing'. Emitted for every failure
+     * shape so a listener never has to distinguish "did not run" from "ran and threw" by absence.
+     */
+    SCRIPT_ERROR: 'gameOrchestraScriptError'
   }),
   /**
    * Which overlay axis each music section resolves against: area music is

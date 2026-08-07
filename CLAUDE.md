@@ -13,7 +13,7 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **1926 tests, 42 files, all passing.** ~4s. |
+| `npm test` | Full vitest suite. Baseline: **2023 tests, 43 files, all passing.** ~4s. |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
 | `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~10 min, 19 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
@@ -75,7 +75,7 @@ code it guards, update the comment to match.
 |---|---|
 | [api.md](docs/wiki/api.md) | **Touching `scripts/api.mjs`, or adding/changing a hook.** The one surface third parties depend on |
 | [architecture.md](docs/wiki/architecture.md) | Anything touching playback, priority, or context resolution |
-| [invariants.md](docs/wiki/invariants.md) | **Always.** H1–H16 hazards + house rules |
+| [invariants.md](docs/wiki/invariants.md) | **Always.** H1–H17 hazards + house rules |
 | [graph-engine.md](docs/wiki/graph-engine.md) | Touching the token-walk engine, node types, or concurrency |
 | [editor.md](docs/wiki/editor.md) | Touching the Drawflow graph editor or any ApplicationV2 window |
 | [mixer.md](docs/wiki/mixer.md) | Touching volume, mute, fades, the crossfade chain, or the `game-orchestra.mix` flag |

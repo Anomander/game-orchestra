@@ -70,3 +70,43 @@ describe('locale file parity', () => {
     });
   }
 });
+
+/**
+ * Keys the code **derives** rather than writes out, and which the parity test above therefore
+ * cannot see.
+ *
+ * `lang.test.mjs` guarantees en.json and pt-BR.json agree with each other. It says nothing about
+ * whether either agrees with the code - so a key written to the wrong path is consistent, passes
+ * parity, and renders the raw key string to the user. That shipped: the `script` condition kind's
+ * label went to `CustomEditor.ConditionKind.Script` while the inspector reads
+ * `CustomEditor.Inspector.ConditionKind.Script`, and the dropdown showed the bare key.
+ *
+ * Only the derived FAMILIES are checked here, not every literal in the codebase. These are the
+ * ones with no lookup table to grep - node-anatomy.md's own "a new condition kind needs a lang
+ * entry and no lookup table" is exactly the property that makes them easy to miss.
+ */
+describe('derived key families', () => {
+  const en = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../lang/en.json'), 'utf8'));
+  const cap = (s) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+
+  // Mirrors custom-playlist-inspector.mjs#CONDITION_KIND_LABELS. Listed rather than imported so
+  // the test fails when a kind is added there without a label, instead of silently following it.
+  const CONDITION_KINDS = ['combatActive', 'combatIdle', 'mood', 'moodChanged', 'phase', 'phaseChanged', 'enemiesDefeated'];
+
+  it.each(CONDITION_KINDS)('has an inspector label for the %s condition kind', (kind) => {
+    expect(en[`GameOrchestra.CustomEditor.Inspector.ConditionKind.${cap(kind)}`]).toBeTruthy();
+  });
+
+  it.each([...CONDITION_KINDS, 'default'])('has an exit chip label for the %s condition kind', (kind) => {
+    expect(en[`GameOrchestra.CustomEditor.ExitChip.${cap(kind)}`]).toBeTruthy();
+  });
+
+  // Every palette entry's label (custom-playlist-editor.mjs#NODE_PALETTE). Track is deliberately
+  // absent from the palette - see that file's comment.
+  it.each(['start', 'playlist', 'fork', 'delay', 'script', 'random', 'condition', 'end'])(
+    'has a palette label for the %s node type',
+    (type) => {
+      expect(en[`GameOrchestra.CustomEditor.NodeType.${cap(type)}`]).toBeTruthy();
+    }
+  );
+});

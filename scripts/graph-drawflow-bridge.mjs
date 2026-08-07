@@ -22,9 +22,9 @@
  */
 
 import { normalizePlaylistRef } from './playlist-ref.mjs';
-import { resolveLoop } from './custom-playback-schema.mjs';
+import { resolveLoop, resolveScript } from './custom-playback-schema.mjs';
 
-const FIXED_OUTPUT_COUNT = { start: 1, delay: 1, end: 0 };
+const FIXED_OUTPUT_COUNT = { start: 1, delay: 1, script: 1, end: 0 };
 
 /**
  * Start is the graph's sole entry point and never has an incoming edge (by
@@ -71,6 +71,13 @@ function nodeDataFor(node) {
       return { ...base, delay: { min: node.delay?.min ?? 0, max: node.delay?.max ?? node.delay?.min ?? 0 } };
     case 'playlist':
       return { ...base, playlistRef: normalizePlaylistRef(node.playlistRef), loop: loopDataFor(node) };
+    case 'script':
+      // Through resolveScript(), on BOTH directions - `script` is a discriminated union and this
+      // file already carries the scar from collapsing one. Flattening a Track's `loop` here
+      // silently reverted every until-loop to a 1-count loop the moment any other field on the
+      // node changed; an inline script flattened to macro mode would lose its source just as
+      // quietly. tests/graph-drawflow-bridge.test.mjs pins the round-trip directly.
+      return { ...base, script: resolveScript(node) };
     default:
       return base;
   }
@@ -179,6 +186,9 @@ export function drawflowExportToGraph(exported) {
       node.soundId = raw.data?.soundId ?? null;
       // See nodeDataFor's track case: this must round-trip 'until' loops too.
       node.loop = resolveLoop({ loop: raw.data?.loop });
+    } else if (type === 'script') {
+      // See nodeDataFor's script case: the union must survive the round trip intact.
+      node.script = resolveScript({ script: raw.data?.script });
     } else if (type === 'delay') {
       node.delay = { min: raw.data?.delay?.min ?? 0, max: raw.data?.delay?.max ?? 0 };
     } else if (type === 'random') {

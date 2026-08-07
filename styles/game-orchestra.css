@@ -1852,6 +1852,39 @@
   z-index: 1;
 }
 
+/* Script: the same 160px box as Track and Playlist, because like them it carries a detail line
+   that has to be readable (~26 characters - node-anatomy.md R2). A slate accent keeps it distinct
+   from Track's and Playlist's without joining the achromatic-channel rule's exceptions: hue here
+   is per-TYPE identity, exactly as every other node's accent is, not state (R5).
+
+   NO drain overlay, deliberately: DRAIN_NODE_TYPES covers the two types whose token-holding time
+   the engine knows in advance, and a script's duration is unknowable. A drain that guessed would
+   be worse than none. */
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-script,
+.game-orchestra-node-swatch.game-orchestra-node-script {
+  --game-orchestra-node-accent: #94a3b8;
+}
+.game-orchestra-drawflow-canvas .drawflow-node.game-orchestra-node-script::before,
+.game-orchestra-node-swatch.game-orchestra-node-script::before {
+  border-radius: 6px;
+}
+
+/* The inline script field. A monospace textarea, because it holds code and a proportional font
+   makes indentation and bracket-matching unreadable. `resize: vertical` only - horizontal resize
+   would let it escape the 300px inspector pane. */
+.game-orchestra-script-source {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: vertical;
+  white-space: pre;
+  tab-size: 2;
+}
+.game-orchestra-script-source[readonly] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 /* The drain overlay, shared by Delay (a wait) and Track (one pass of a sound) -
    the two node types whose token-holding time the engine knows in advance. The
    outer element covers the node box and is clipped to that type's own shape;

@@ -6,11 +6,52 @@
 > documentation is [docs/wiki/api.md](wiki/api.md); this document keeps the *reasoning and the
 > alternatives*, which the wiki page deliberately does not repeat.
 >
-> **Part B (the Script node) is not started** — steps 4–7. Its four open questions are still open,
-> and step 4 (verifying the two live Foundry assumptions) still blocks step 6.
+> **Part B (the Script node) is shipped** — steps 5, 6a–6c. Decisions D-B1, D-B4, D-B5, D-B6, D-B7
+> (D-B2 and D-B3 were each taken and then reversed; **step 7, the `script` condition kind, was
+> built and then removed** — a different approach will be designed later). Durable documentation:
+> [graph-engine.md](wiki/graph-engine.md) § *Script*, [node-anatomy.md](wiki/node-anatomy.md),
+> [invariants.md](wiki/invariants.md) **H17**, and [api.md](wiki/api.md) § *Scripts calling the API*.
 >
-> One deviation from the reviewed plan, recorded where it happened: `api.bind` ships **one
-> polymorphic `set(target, …)`** rather than `setDefault`/`setScene`/`setToken`. See § A2.
+> **Coverage pass (after the condition removal).** An audit of what the Script node actually
+> guaranteed versus what was tested found one behavioural gap and two false comments:
+>
+> - **`graph.set()` skipped every Script rule.** Each one is environment-dependent and self-skips
+>   when its context is absent, so the API held script nodes to a *lower* bar than the editor while
+>   documenting the opposite. Fixed by `api.mjs#scriptValidationContext()`; `macroValidationList()`
+>   moved to helpers.mjs so both write paths read one definition. `set()` now takes `options`.
+> - **`fail()` dropped its third argument**, so every user-code throw was logged without its stack —
+>   the one failure mode where the stack is the whole point.
+> - **`canAuthorInlineScripts`'s doc claimed it gated `api.graph.set()`.** It never did, and it
+>   should not: the comment was corrected rather than the code. See api.md for the reasoning.
+>
+> 29 tests added across five files, each mutation-verified. The one that needed rewriting to bite:
+> the timed-out-script test originally asserted on `playTrack`, where a second hop is absorbed by
+> the singleton rule at the *destination* — it now asserts on the hop itself.
+>
+> **Step 4 is run and green.** `itest/specs/005-platform-assumptions.spec.mjs`, all four tests
+> passing against a live v14 build. Every assumption this plan deferred is now discharged:
+>
+> - **`Macro#execute` forwards an arbitrary scope, and returns the script's value.** The fallback —
+>   compiling `macro.command` ourselves, keeping the permission check and losing core's execution
+>   semantics — **is not needed and should not be built.** `_runMacroScript` stands as written.
+> - **Both access shapes work.** Core passes `scope` *and* spreads its keys as named parameters, so
+>   a macro can read either `scope.gameOrchestra` or a bare `gameOrchestra`. The inspector hint
+>   documents `scope.gameOrchestra` — the explicit one, and the one that cannot collide with a
+>   local. See B5.
+> - **`this` inside the macro is the Macro document**, not the node or the engine. Nothing in the
+>   design reads it; recorded so nobody later assumes it is the context.
+> - **CSP permits `Function` and `AsyncFunction`** on stock Foundry, with no CSP meta tag present.
+>   This does **not** retire D-B6: it proves the pinned container, not The Forge or any self-host
+>   behind a hardening proxy. The runtime probe remains the thing that answers it per deployment.
+> - **A chat macro is a distinct `type` with a non-JS `command`**, so `graph-drop.mjs`'s rejection
+>   is correct rather than merely cautious.
+> - **`renderPlaylistConfig` fires, `select[name="mode"]` exists inside a `.form-group`, and the
+>   module's button lands in the sheet** — end to end, not just the handler in isolation.
+>
+> Two deviations from the originally reviewed text, each recorded where it happened:
+> `api.bind` ships **one polymorphic `set(target, …)`** rather than `setDefault`/`setScene`/`setToken`
+> (§ A2); and B5's claim that inline source was "gated twice" **was wrong** — the second gate is a
+> no-op and has been removed rather than kept as reassurance (§ B5).
 
 Two changes that look separate and are not. A Script node is only useful if there is a supported
 surface for it to call, and a public API is only interesting if something inside the graph can
@@ -37,6 +78,67 @@ Settled at review. The rest of this document is written as if these hold.
 One smaller call taken by default, flagged rather than asked: **`api.graph.set()` refuses on
 error-level issues only, and returns any warnings**, matching what the editor already does. A stricter
 API than the UI would be its own surprise.
+
+### Part B
+
+Settled at review after Part A shipped. Two of them interact, and the order matters.
+
+| | Decision | Consequence |
+|---|---|---|
+| **D-B1** | **A script gets the full `api`, plus a re-entrancy guard.** Calls that would restart or stop the engine currently executing the script are refused with a new `SELF_REENTRANT` code. | The engine must pass its own identity into the execution context, and `api.mjs` gains a notion of "currently executing". |
+| ~~**D-B2**~~ | ~~**The `script` condition kind is in scope.**~~ | **Reversed by D-B7.** Built, then removed — a different approach will be taken later. |
+| ~~**D-B3**~~ | ~~**Inline only. One storage shape everywhere**~~ | **Superseded by D-B5.** Kept here because the reasoning still explains why *conditions* are inline. |
+| **D-B4** | **`SCRIPT_TIMEOUT_MS` is a world setting, default 5000 ms.** | One setting, one lang key pair in **both** locales (HR-E). |
+| **D-B5** | **A Script node stores a `macroUuid` *or* inline `source`, with `macro` the default** — the union D-B3 had removed. Conditions stay inline regardless (D-B2). | Restores core's authorship gate for nodes, two execution paths, and the `fromUuid` lookup at playback. Enables a **live link** when a macro is dragged onto the graph — see B9. |
+| **D-B6** | **CSP is probed at runtime and degrades**, not verified once. | Inline node source goes inert with a visible reason on a locked-down host; step 4 stops gating the design. See B5. |
+| **D-B7** | **The `script` condition kind is removed**, reversing D-B2. A different approach will be designed later. | Step 7 is unshipped: the kind, its inspector input, its chip, its validation rules and the synchronous compile path are all gone. Nothing else in Part B depended on it — see below. |
+
+> **What D-B7 changed, and what it deliberately did not.** The condition kind was the *only* consumer
+> of a synchronous compile path, so `compileConditionExpression` and the two-shape table in
+> `script-runtime.mjs` went with it; that module now has one shape. `CONDITION_KINDS_WITH_SOURCE`
+> is gone and `conditionMissingValue`/`conditionSignature` are back to consulting overlay kinds only.
+>
+> **The Script node is untouched.** It never used the condition path — it compiles as an
+> `AsyncFunction` and may `await`. D-B5's union survives on its own merit (the live macro link a
+> drag implies), which is worth noting because D-B3's reversal was *argued* partly from D-B2: that
+> argument is now void, and the conclusion still holds for the reason recorded under D-B5.
+>
+> One thing genuinely got smaller: with conditions gone, **inline node source is the only thing this
+> module compiles itself**, so a blocked CSP now costs one mode rather than a mode and a whole
+> condition vocabulary. D-B6 handles it either way.
+
+> **Why D-B3 was reversed, recorded because the reversal is the interesting part.** D-B3 was taken
+> on the reasoning that D-B2 had already paid inline's costs, so a second mechanism earned nothing.
+> That held right up until the **drag-a-macro-onto-the-graph** gesture was raised. Under inline-only
+> that drop can only ever *copy* a macro's source, so a GM who later edits the original macro is
+> silently running a stale snapshot — no error, no console warning, nothing on the node to see. A
+> live link is the difference between the gesture meaning "link this macro" and meaning "paste this
+> macro once", and the first is what a GM will assume from a drag.
+>
+> Neither the interaction with D-B2 nor the correction in B5 is invalidated: **conditions are still
+> inline-only** (they must be synchronous), and inline source is still gated by one world setting
+> whose companion gate was a no-op. What changes is that the node gets a second, safer mode back,
+> and it is the default.
+
+> **D-B2 is why the *condition* has no macro form.** A `script` condition must be synchronous —
+> `_evaluateCondition` is polled at 2 Hz and is injected into `planNextHandoff`, a *pure* module —
+> and macro execution is async. So a script condition can only ever be an inline expression stored
+> in the graph. Choosing to build them committed the project to inline source, self-compilation, the
+> CSP dependency, and an execution gate before the node's own storage was even discussed. Macro mode
+> would then have been a *second* mechanism covering a subset of the same ground.
+
+> **What *inline* gives up, stated once so it is not rediscovered as a surprise.** Core gates
+> *authorship* of script macros behind the `MACRO_SCRIPT` user permission, so a player without it
+> cannot write one at all. Inline source has no equivalent we can fully enforce: the graph is a flag
+> on a Playlist, and any **owner** of that playlist can write it through `api.graph.set()` or a raw
+> `setFlag()`. The module gates the two write paths it owns (B5) and cannot gate the third.
+> **Execution** is therefore the real boundary for inline, and it is one world-scoped, GM-only,
+> default-off switch.
+>
+> Under D-B5 this applies to **inline node source and every script condition** — not to a
+> macro-mode node, which is back inside core's own permission model. That is the strongest argument
+> for keeping `macro` the default mode, and for the setting's hint saying which of the two it
+> governs.
 
 ---
 
@@ -401,15 +503,23 @@ moved on is a real and confusing possibility.
 
 ## B3. Schema
 
+A discriminated union (D-B5), with `macro` the default:
+
 ```js
 {
   id, type: 'script', label?, x, y,
   script: {
     mode: 'macro' | 'inline',
-    macroUuid?: string | null,   // mode === 'macro'
+    macroUuid?: string | null,   // mode === 'macro' — a LIVE link, resolved at run time
     source?: string              // mode === 'inline'
   }
 }
+```
+
+and the condition form, which has **no macro variant** (D-B2 — it must be synchronous):
+
+```js
+{ kind: 'script', value: 'game.combat?.round > 3' }
 ```
 
 Read through **`resolveScript(node)`** in `custom-playback-schema.mjs`, never `node.script`
@@ -418,6 +528,13 @@ field existed, or one written by an API caller, must degrade identically everywh
 having each of the four readers (engine, inspector, node renderer, validator) invent its own
 default. Default: `{mode: 'macro', macroUuid: null}` — an unconfigured script node is a no-op that
 follows its exit, never an error at runtime.
+
+> **`resolveScript()` matters more here than it would have under D-B3.** This is a *union*, and
+> `graph-drawflow-bridge.mjs` already carries the scar from the last one: routing a Track's `loop`
+> through anything that collapsed the union on the way out silently reverted every `until` loop to a
+> 1-count loop the moment any other field on the node changed. Route `script` through `resolveScript()`
+> on **both** the export and the import side of the bridge, and add a round-trip test that a
+> `mode: 'inline'` node survives an unrelated edit — that is the exact bug this schema shape invites.
 
 Other schema-adjacent edits:
 
@@ -444,7 +561,7 @@ One argument, an object, so the signature can grow without breaking callers:
     id,              // the engine's _runId
     ctx              // plain object, shared by reference across one run — scratch space
   },
-  api,               // the Part A object
+  api,               // the Part A object, with the re-entrancy guard armed (D-B1)
   log                // the module's log(), pre-tagged with the node id
 }
 ```
@@ -459,6 +576,35 @@ callback does.
 
 **Return value is ignored.** See B7.
 
+### The re-entrancy guard (D-B1)
+
+A script runs on the head GM, so **every** API call in its context succeeds — there is no
+`NOT_HEAD_GM` to save it. That includes the two shapes that eat the engine executing them:
+
+| Call | What actually happens |
+|---|---|
+| `api.graph.set(ownPlaylist, …)` | fires `updatePlaylist` → `onCustomGraphChanged` → engine torn down and rebuilt from Start (H8/H9), **while this script's node is holding a token** |
+| `api.playback.stop()` / `.play()` | retires the running engine tree from inside one of its own nodes |
+
+Neither is caught by anything today. The 300 ms throttle and the 15/2 s circuit breaker would
+eventually intervene, but a breaker trip is a diagnosis, not a guardrail — and the user hears the
+music restart in a loop until it fires.
+
+So the API gains a sixth error code, **`SELF_REENTRANT`**, and a small piece of ambient state: the
+playlist id whose engine is currently executing a script. `api.graph.set`/`remove` refuse when the
+target is that playlist; `api.playback.play`/`stop` refuse outright while a script is executing.
+
+Three properties this must have:
+
+- **It is scoped to the executing engine, not global.** A script may legitimately rewrite a
+  *different* playlist's graph — that is one of the better reasons to have the node at all.
+- **It covers the whole engine tree.** A script inside a Playlist node's child engine must not be
+  able to restart the root, so the guard is keyed on the run's registry (which children already
+  share by reference), not on one engine instance.
+- **It must be released on every exit path**, timeout and throw included — the same discipline as
+  `_releaseTrackNode`/`_releasePlaylistNode`, and for the same reason: a leaked entry makes that
+  playlist permanently unwritable through the API for the rest of the session.
+
 ## B5. Security
 
 A script node's source lives in a **world flag on a Playlist document**, and executes on the **head
@@ -466,39 +612,97 @@ GM's client with GM privileges**. Anyone with OWNER on that playlist can therefo
 runs as the GM. Default Foundry permissions do not give players playlist ownership, but they can be
 granted, and "can be granted" is enough.
 
-Foundry's own answer to this is the `MACRO_SCRIPT` user permission. The design leans on it rather
-than inventing a parallel model.
+### Correcting the plan's original design
 
-**Two modes, and `macro` is the default:**
+An earlier draft of this section claimed inline source was "gated **twice**": the
+`allowInlineScripts` world setting, **and** `game.user.can('MACRO_SCRIPT')` on the executing client.
 
-- **`mode: 'macro'`** — stores a **UUID**, not source. Execution is `macro.execute({ gameOrchestra: ctx })`,
-  which routes through core's own `Macro#canExecute` permission check and gives the author core's
-  macro editor, core's ownership model, and a document that can be exported and shared. The script
-  reads its context as `scope.gameOrchestra`.
+**The second gate does nothing.** The engine runs on the head GM and nowhere else, so the executing
+client is always a GM, who always has `MACRO_SCRIPT`. Against the threat that actually matters — a
+player with playlist ownership storing JS that the GM's client then runs with GM privileges — it is
+a no-op. It is removed rather than kept as reassurance; a gate that cannot fail is worse than no
+gate, because it makes the design look twice as defended as it is.
 
-  > **Verify against v14 before building on it:** that `Macro#execute` forwards an arbitrary `scope`
-  > into a script macro's compiled function, and what it returns. This is asserted from memory of
-  > earlier versions and is exactly the kind of assumption this codebase's comments exist to record
-  > as *unverified*. If the scope does not forward, fall back to compiling `macro.command` ourselves
-  > with our own signature — which keeps the permission check but loses core's execution semantics.
+### Two mechanisms, two postures (D-B5)
 
-- **`mode: 'inline'`** — raw source on the node. Gated **twice**:
-  1. a new world setting **`allowInlineScripts`, default `false`**, GM-only;
-  2. `game.user.can('MACRO_SCRIPT')` on the **executing** client at execution time — not at save
-     time, because the stored flag outlives whoever wrote it.
+**`mode: 'macro'` — inside core's model.** Stores a UUID and resolves it at run time, so execution
+goes through `macro.execute({ gameOrchestra: ctx })` and inherits core's `Macro#canExecute` check,
+core's ownership model, and — the part inline can never replicate — core's gating of *authorship*:
+a user without `MACRO_SCRIPT` cannot create a script macro at all. The script reads its context as
+`scope.gameOrchestra`.
 
-  Failing either gate is a **level-2 log plus a `SCRIPT_ERROR` hook, then follow the exit** — never
-  a throw, never a silent skip. The editor shows it as a validation warning so it is visible before
-  playback rather than only in the console.
+> **Verify against v14 before building on it** (step 4): that `Macro#execute` forwards an arbitrary
+> `scope` into a script macro's compiled function, and what it returns. Asserted from memory of
+> earlier versions. If the scope does not forward, fall back to compiling `macro.command` ourselves
+> with our own signature — which keeps the permission check but loses core's execution semantics.
 
-  Compilation uses the same `AsyncFunction` construction core uses for script macros, compiled
-  **once per node per run** and cached. **Foundry's CSP must be checked live** — if `new Function`
-  is blocked in a deployment, inline mode is dead and macro mode is the only path. That check is a
-  prerequisite task, not a follow-up.
+**Inline source, and every script condition — one gate, and no authorship check that holds.**
+Gated by **`allowInlineScripts`**: a world setting, GM-only, **default `false`**. Why the obvious
+companions are absent:
 
-The editor's inline `<textarea>` renders **read-only** for a user without `MACRO_SCRIPT`, with the
-reason shown (UX-9: disabled with a reason, never hidden — and here it genuinely would not work,
-which is the bar UX-9 sets).
+- **There is no authorship gate we can fully enforce.** The graph is a flag on a Playlist document,
+  so any **owner** can write it.
+- **The module still gates the two write paths it owns**, as defence in depth rather than as a
+  boundary: the editor's inline source field renders **read-only** without `MACRO_SCRIPT` (UX-9 —
+  disabled with a reason, never hidden), and `api.graph.set()` refuses a graph whose script source
+  *differs from what is already stored* when the caller lacks `MACRO_SCRIPT`. The diff matters:
+  gating on "contains any script" would stop a legitimate caller from moving a node it did not author.
+- **The third path — a raw `playlist.setFlag()` — cannot be gated at all**, and pretending otherwise
+  would be the same mistake as the no-op second gate above.
+
+So: **anyone who can edit a playlist can store inline code; only a GM can let any of it run.** Write
+that in the setting's own hint rather than leaving a GM to infer it — and say which of the two modes
+it governs, since a macro-mode node is unaffected by it.
+
+That asymmetry is the argument for **`macro` being the default mode**: the safe path is the one a GM
+falls into without choosing.
+
+Failing the gate is a **level-2 log plus a `SCRIPT_ERROR` hook, then follow the exit** — never a
+throw, never a silent skip. The editor surfaces it as a validation warning so it is visible before
+playback rather than only in the console.
+
+### Compilation
+
+Compiled **once per node per run** and cached — a `script` condition is polled at 2 Hz, so
+recompiling per evaluation is not an option.
+
+| | Node, `mode: 'macro'` | Node, `mode: 'inline'` | Condition |
+|---|---|---|---|
+| Compiled by | **core**, via `macro.execute()` | us, `AsyncFunction` | us, **plain `Function`** |
+| May await | yes | yes | **no** — see B8 |
+| Result | ignored | ignored | coerced to boolean |
+
+> **What D-B5 does to the CSP risk.** Under D-B3 a blocked `new Function` killed the whole feature.
+> With macro mode back, it no longer does: a macro-mode node runs on core's own compilation, so it
+> survives. **Script conditions and inline node mode do not.**
+
+### CSP is detected at runtime, not verified once (D-B6)
+
+An integration test can only ever prove that **stock Foundry at the pinned version** permits
+function construction. It cannot prove a *hosted* Foundry does — The Forge, Molten, or any self-host
+behind a hardening reverse proxy can add CSP headers the test container never sees. A verification
+step that answers "yes" for one deployment and is then assumed for all of them is the wrong shape
+for this question.
+
+So the module **probes once, at `init`, and degrades**:
+
+```js
+canCompileScripts()   // try { new Function('return 1')() } catch { false }, cached
+```
+
+When it answers `false`, inline node source and every script condition are inert — logged once,
+surfaced as a validation warning, and shown in the editor as **disabled with a reason** (UX-9).
+Macro-mode nodes are unaffected, because core compiled those.
+
+Three things this buys over a one-off verification:
+
+- it is correct on **every** deployment, not just the pinned one;
+- a GM on a locked-down host gets an explanation instead of silence;
+- the integration spec becomes a **regression test for the probe** rather than a gate on the design,
+  which means step 4 no longer blocks anything.
+
+`itest/specs/005-platform-assumptions.spec.mjs` still runs the check — the point is that a red run
+there is now information, not a stop-work.
 
 Errors from a script are caught, logged at level 1, and emitted as `SCRIPT_ERROR`. **The token
 always follows the exit.** A broken script must degrade to a no-op, not to silence — the same
@@ -511,19 +715,40 @@ New rules in `graph-validation.mjs`, emitting i18n keys as always:
 | Key | Severity | When |
 |---|---|---|
 | `ScriptExitMissing` | error | no outgoing edge (Script has exactly one, like Track/Delay) |
-| `ScriptMissingMacro` | **warning** | `mode: 'macro'` with no `macroUuid` — a no-op, not broken |
-| `ScriptMacroNotFound` | warning | uuid does not resolve (needs `macros` in `validateGraph`'s options, alongside `playlists`) |
+| `ScriptSyntaxError` | **error** | inline source, or a condition expression, that does not compile |
+| `ScriptMissingMacro` | warning | `mode: 'macro'` with no `macroUuid` — a no-op, not broken |
+| `ScriptMacroNotFound` | warning | the uuid does not resolve — needs `macros` in `validateGraph`'s options, alongside `playlists` |
+| `ScriptMacroNotScript` | warning | the uuid resolves to a **chat** macro, which has no JS to run |
 | `ScriptMissingSource` | warning | `mode: 'inline'` with empty source |
-| `ScriptInlineDisabled` | warning | inline source present while `allowInlineScripts` is off |
-| `ScriptNoPermission` | warning | inline source present, current user lacks `MACRO_SCRIPT` |
+| `ScriptInlineDisabled` | warning | inline source or a script condition present while `allowInlineScripts` is off |
+| `ScriptNoPermission` | warning | as above, and the current user lacks `MACRO_SCRIPT` |
 
-All warnings, except the missing exit. An unconfigured script node is a legitimate placeholder
-mid-authoring, and per [node-anatomy.md](wiki/node-anatomy.md)'s rule the bar for *error* is "the
-chip renders a state that can never work" — a missing macro follows its exit fine.
+D-B5 brings back the three macro rules that D-B3 had deleted, and with them `validateGraph`'s
+`macros` option — the same shape as `playlists`, so a live lookup stays outside the pure module.
 
-The last two are the interesting ones: they are **environment-dependent validation**, which nothing
-in this module has today. Their inputs must arrive through `validateGraph`'s options object like
-every other live value, so `graph-validation.mjs` stays Foundry-free.
+`ScriptMacroNotFound` is the rule that makes the **live link** honest: a dropped macro that is later
+deleted, or a graph imported into a world that has no such macro, degrades to a visible warning
+rather than to silence. This is the same class of cross-world fragility a Playlist node's
+`source: 'direct'` already has, handled the same way.
+
+`ScriptSyntaxError` is an **error**, and it is the one that pays for itself. Source that does not
+compile can never do anything, which is exactly [node-anatomy.md](wiki/node-anatomy.md)'s bar for
+error severity — and unlike every other rule here, it is checkable for free by attempting the
+compile at validation time. Without it the first sign of a typo is silence during play. It does
+**not** apply to macro mode: that source belongs to a document this graph does not own, and failing
+a graph's save over someone else's macro would be the wrong boundary.
+
+> Compiling inside the validator means `graph-validation.mjs` — a **pure** module — would construct
+> a function. Rather than break that, the compile is done by the caller and its result passed in
+> through the options object, exactly like `playlists` and `moodIds`. The pure module stays pure and
+> the rule stays testable with a plain boolean.
+
+The last two rows are **environment-dependent validation**, which nothing in this module has today:
+whether a graph is "valid" now depends on a world setting and on who is asking. Their inputs must
+arrive through `validateGraph`'s options like every other live value.
+
+An unconfigured script node is a legitimate placeholder mid-authoring, so an empty source is a
+warning — it follows its exit fine.
 
 ## B7. Node anatomy
 
@@ -543,33 +768,71 @@ node type whose whole point is that it is opaque. It would also be a second, wea
 that no validation rule can check. A script that wants to route writes to state and lets a
 **Condition node** read it, or uses the `script` condition kind below.
 
-## B8. The `script` condition kind — phase 3, and the riskiest part
+## B8. The `script` condition kind — built, then removed (D-B7)
 
-Adding `kind: 'script'` to `GraphCondition` would let scripts guard **Condition exits** *and*
-`loop.mode: 'until'` escapes, reusing the entire existing vocabulary, chips, and inspector.
-
-It has one hard constraint that shapes everything:
+Shipped in an earlier pass and then taken out again; a different approach will be designed later.
+Kept as a section because **the constraint that shaped it has not gone away**, and any future design
+runs into it on the first day:
 
 > **`_evaluateCondition()` is synchronous, and must stay so.** It is called from
-> `_scheduleConditionalExit`'s 500 ms poll, from `_enterCondition`, and from **`planNextHandoff`**,
-> which is a *pure* module receiving `evaluateCondition` as an injected function. Making it async
-> would mean an async pure lookahead, an async poll, and re-entrancy in three places at once.
+> `_scheduleConditionalExit`'s poll, from `_enterCondition`, and from **`planNextHandoff`**, which is
+> a *pure* module receiving `evaluateCondition` as an injected function. Making it async would mean
+> an async pure lookahead, an async poll, and re-entrancy in three places at once.
 
-So a script condition is:
+Which is why the removed version was inline-expression-only: macro execution is async, so there was
+never a macro form available to it.
 
-- **inline expression only** — no macro mode, which is inherently async;
-- **synchronous** — a returned promise is truthy and would silently always match; detect and refuse;
-- **compiled once and cached**, since it is polled at 2 Hz;
-- **throwing → `false`**, logged **once per node per run** (a per-poll log at 2 Hz is its own
-  denial-of-service on the console);
-- added to `CONDITION_KINDS_WITH_VALUE`, so `conditionMissingValue()` and
-  `conditionSignature()` treat it correctly in all three consumers at once.
+Three further findings from having built it, all of which a replacement will meet again:
 
-And a note that will be needed later: the H7 relaxation in `planNextHandoff` means a script
-condition is evaluated **up to 500 ms early** and then **re-run at the seam**. A script condition
-with side effects therefore runs twice. That must be documented at the field, not discovered.
+- **A returned Promise is truthy**, so an `async` expression silently matches *every time* — the
+  opposite of "not met", and invisible without an explicit check.
+- **It is polled**, so failures must be logged once per condition per run rather than per tick, and
+  compilation must be cached including failures.
+- **`planNextHandoff` evaluates conditions early and re-runs them at the seam** (H7's recorded
+  relaxation), so **a condition with side effects runs twice.** Any replacement must either be
+  side-effect-free by construction or opt out of the lookahead.
 
-This is proposed as its own phase precisely because it is the part most likely to be cut.
+A fourth observation, which is the one that would most shape a different approach: a script
+condition put compiled user code on the engine's own 2 Hz timer, inside its hot path. That was the
+highest-risk property of the whole feature, and it is the property most worth designing away rather
+than re-accepting.
+
+## B9. Dragging a macro onto the graph
+
+The gesture that caused D-B5. A GM drags a macro from the hotbar (or the Macro directory) onto the
+canvas and gets a Script node wired into the graph.
+
+**The pipeline already exists.** `graph-drop.mjs#resolveGraphDrop` is a pure rule matrix and
+`custom-playlist-editor.mjs#_onDropExternal` already resolves a dropped document by uuid. A hotbar
+macro drag carries `{type: 'Macro', uuid: 'Macro.xyz'}` — the same payload shape as the Playlist and
+PlaylistSound drops already handled. Extending it is a third branch in `resolveGraphDrop` returning
+`{action: 'script', macroUuid}`, plus the corresponding case in `_onDropExternal`'s type gate and its
+`[type, overrides]` pair.
+
+Four rules, and three of them fall straight out of the existing matrix:
+
+| Case | Result |
+|---|---|
+| a **script** macro | `{action: 'script', macroUuid}` → a `mode: 'macro'` node |
+| a **chat** macro | reject, `Drop.ChatMacro` — no JS in `command`; nothing to run |
+| dropped **on an existing Script node** | repoint that node, exactly as a sound drop repoints a Track node (`_repointTrackNode`'s shape) |
+| dropped **on a wire** | splice in, auto-chaining suppressed — already handled generically by `_insertNodeOnEdge` |
+
+**The drop stores a uuid, not a copy** — that is the whole point of D-B5. Editing the macro
+afterwards changes what the graph runs, which is what a GM will assume a drag means. Under D-B3 the
+same gesture could only paste a snapshot, and a later edit to the original would have left the graph
+running stale code with nothing on the node to show it.
+
+Two things to get right, both of which the existing drop code already models:
+
+- **Read the drop point synchronously**, before the `fromUuid()` await. `_onDropExternal` opens with
+  a comment about exactly this; the event object is not reliable once the handler has yielded.
+- **Two new lang keys in both locales** (HR-E) — the rejection reason and the node's detail-line
+  label.
+
+The node's detail line (channel 3) shows the **macro's live name**, resolved for display only. A
+deleted macro therefore shows as unresolved on the canvas *and* raises `ScriptMacroNotFound` in
+validation — the same fact in the two channels that own it, rather than only in the console.
 
 ---
 
@@ -586,10 +849,28 @@ increment".
 | 1 | **Extract graph-write enforcement** (H1/H2) out of `handleSave()` into a shared writer | `custom-playlist-editor.mjs`, `helpers.mjs` | Low — pure refactor. **Blocks 2**: `api.graph.set()` cannot exist without it |
 | 2 | **`scripts/api.mjs` — the whole surface**, reads and writes: all five namespaces, `GameOrchestraApiError`, `isHeadGM`/`canControl`, the headless prototype-token host, the legacy-key deprecation getters + `tests/api.test.mjs` | new module, `game-orchestra.mjs`, `binding-store.mjs` | **Medium–High** — the largest single step in the plan; see the note below |
 | 3 | **The four new hooks**, each emitted through the non-fatal wrapper | `music-controller.mjs`, `settings.mjs`, engine | Medium — an unwrapped emit stops playback |
-| 4 | **Verify the two live assumptions**: `Macro#execute` scope forwarding, and CSP vs `new Function` | a running Foundry v14 | Low cost, **blocks 6** |
-| 5 | **Script node**, macro mode only | schema, engine, validation, bridge, inspector, node render, CSS, both lang files | **High** — a new durational node type |
-| 6 | **Inline mode** + `allowInlineScripts` setting + permission gates | as above, `settings.mjs` | Medium, gated on 4 |
-| 7 | **`script` condition kind** | schema, engine, validation, inspector, node render | **High** — see B8 |
+Part B's steps are revised for D-B1–D-B5. The condition kind is in (D-B2) rather than deferred; the
+node's two modes are back (D-B5) and split across 6a/6b; and the CSP check is **no longer a go/no-go
+for all of Part B** — macro-mode nodes survive a blocked `new Function`, so it gates only 6b and 7.
+
+| # | Change | Touches | Risk |
+|---|---|---|---|
+| 4 | ✅ **`itest/specs/005-platform-assumptions.spec.mjs`**: `Macro#execute` scope forwarding, CSP vs `new Function`, chat-vs-script macro types, plus the two `hooks.mjs` anchors that were flagged unverified | a running Foundry v14 | **Run, all four green.** Scope forwarding confirmed, so 6a's fallback was never needed. See the Status block |
+| 5 | **The machinery**: `SCRIPT_TIMEOUT_MS` + `allowInlineScripts` settings (+ both locales), the compile-and-cache helper, `SCRIPT_ERROR` hook, `SELF_REENTRANT` + the re-entrancy guard in `api.mjs` | `settings.mjs`, `api.mjs`, new module, both lang files | Medium — no user-visible feature yet, which is the point |
+| 6a | **Script node, macro mode**: schema union + `resolveScript`, durational `_enterScript`, timeout, validation, bridge round-trip, inspector, node render, CSS | schema, engine, validation, bridge, inspector, node render, CSS, both lang files | **High** — a new durational node type |
+| 6b | **Inline mode** on the node: the source field, the `MACRO_SCRIPT` read-only gate, `ScriptSyntaxError` | inspector, validation, `api.mjs` | Medium — degrades via the runtime probe rather than being gated on 4 |
+| 6c | **Macro drag-and-drop** (B9) | `graph-drop.mjs`, `custom-playlist-editor.mjs`, both lang files | Low — a third branch in an existing matrix |
+| ~~7~~ | ~~**`script` condition kind**~~ | — | **Removed (D-B7).** Built and then reverted; see B8 for the constraints a replacement inherits |
+
+> **Step 5 exists as its own step deliberately.** Everything security-relevant — the execution gate,
+> the compile path, the re-entrancy guard — lands with no node and no condition to exercise it, so it
+> can be reviewed and tested as security machinery rather than as a side-effect of a feature people
+> want to try. It is also entirely unit-testable, which 6a onward is not.
+
+> **6c is small but should not be first.** It is the gesture that motivated D-B5, so it is tempting
+> to build early — but it produces `mode: 'macro'` nodes, which means 6a has to exist for the drop to
+> land on anything. Building it right after 6a also means the drop is the *first* way most GMs create
+> a Script node, which is a good reason for 6a's inspector to be finished rather than provisional.
 
 > **Step 2 is now big enough to be worth building in a deliberate order**, even though it lands as
 > one change: the namespaces first with every write throwing `NOT_PERMITTED` unconditionally, then
@@ -632,18 +913,34 @@ the more wanted half it can be pulled forward ahead of the writers.
 
 ---
 
-## Open questions for review
+## Open questions
 
-Part A's four are settled above. These remain, and all four are **Part B** — none blocks starting
-Part A.
+All nine review questions are settled — Part A's four as D-A1–D-A4, Part B's as D-B1, D-B2, D-B4 and
+D-B5 (with D-B3 taken and then reversed). What remains are **two facts nobody has checked**, and
+they now block different things:
 
-1. **Inline scripts at all?** Macro mode is strictly safer, reuses core's permissions, and gives a
-   better editor. Inline's only real advantage is that the graph is self-contained when exported.
-   Recommendation: build macro mode (step 5), ship it, and let demand decide step 6.
-2. **`SCRIPT_TIMEOUT_MS` — 5 s, and world-configurable?** 5 s is long enough for a chat message and
-   a document update, short enough that a stranded token is noticed. Making it configurable invites
-   someone to set it to 60 s and then wonder why the music stopped.
-3. **Does `run.ctx` want to be persistable?** A script that wants state across runs can already use
-   a flag. Recommendation: no — keep it in-memory, and let flags be flags.
-4. **Is the `script` condition kind (step 7) in scope at all?** It is the highest-risk item here and
-   the one most likely to be cut; B8 is written so that cutting it costs nothing already built.
+| Verification | Blocks | If it fails |
+|---|---|---|
+| `Macro#execute` forwards an arbitrary `scope` | **6a** | compile `macro.command` ourselves — keeps the permission check, loses core's execution semantics |
+| CSP permits `new Function` | **6b, 7** | inline node mode and script conditions are both dead; macro-mode nodes are unaffected |
+
+Very likely both are fine — core compiles script macros the same way, so a CSP blocking it would
+already have broken core — but "very likely" is not the standard the rest of this codebase's
+comments hold things to.
+
+One thing deliberately **not** decided, because it costs nothing to defer: whether shipping Part B
+bumps `api.version` to `1.0.0`. A4 says the Script node is what earns that, being the first in-repo
+consumer of the API — but the guard in D-B1 adds a code and a behaviour to the contract, so the
+shape is still moving. Revisit when step 7 lands.
+
+One reading to confirm if it was not what was meant: **D-B5 is taken as restoring the original
+two-mode union**, with `macro` the default and inline still available on the node. "Macro-only for
+nodes" would be a slightly different decision — it would delete step 6b, remove `ScriptSyntaxError`
+and the inline gate from the node (though not from conditions, which still need both), and make
+`allowInlineScripts` govern conditions alone.
+
+Also resolved along the way, without needing to be asked:
+
+- **`run.ctx` is not persistable.** A script wanting state across runs can already use a flag; keep
+  the scratch space in memory and let flags be flags.
+- **A script's return value is ignored** (B7) — routing by return value stays rejected under R1.

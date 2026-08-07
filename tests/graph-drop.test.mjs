@@ -60,3 +60,26 @@ describe('resolveGraphDrop', () => {
     expect(result).toEqual({ action: 'playlist', playlistId: 'pl-anything' });
   });
 });
+
+describe('dropping a Macro', () => {
+  const drop = (dropped) => resolveGraphDrop(dropped, { editedPlaylistId: 'pl1' });
+
+  it('creates a Script node holding the macro UUID - a LIVE link, not a copy', () => {
+    // The whole point of D-B5: editing the macro afterwards changes what the graph runs. A copied
+    // snapshot would leave a GM running stale code with nothing on the node to show it.
+    expect(drop({ type: 'Macro', macroUuid: 'Macro.abc', macroType: 'script' }))
+      .toEqual({ action: 'script', macroUuid: 'Macro.abc' });
+  });
+
+  it('rejects a chat macro with its own reason', () => {
+    // A chat macro has no JS in `command`, so a node built from one could never do anything. The
+    // drop is the moment the GM can still pick a different macro, so it is refused there rather
+    // than accepted and flagged afterwards.
+    expect(drop({ type: 'Macro', macroUuid: 'Macro.chat', macroType: 'chat' }))
+      .toEqual({ action: 'reject', reasonKey: 'GameOrchestra.CustomEditor.Drop.ChatMacro' });
+  });
+
+  it('rejects a macro drop carrying no uuid', () => {
+    expect(drop({ type: 'Macro', macroUuid: null, macroType: 'script' }).action).toBe('reject');
+  });
+});

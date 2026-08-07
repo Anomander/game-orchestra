@@ -59,7 +59,7 @@ breakage, until someone works it out.
 | **Armed starts against a suspended context** | `custom-playback-engine.mjs` schedules against the `AudioContext` clock. A suspended context makes the delay never elapse. Real clock, real context, by definition. |
 | **Fades, crossfades, ducking** | Modelled in unit tests, never exercised. A duck applied twice and a duck applied once differ only by a number no state inspection reveals. |
 | **Fork — layering vs. sequencing** | A fake controller records three `playTrack()` calls and cannot tell three layers from three tracks in a row. Nor can `expectExactlyAudible`: over a window covering a sequential walk it reports the same tone set a Fork produces. Only a per-frame simultaneity test (`expectConcurrent`) separates them — and the failure that matters is a forked branch surviving an interruption as an orphaned sound under the combat track. |
-| **Foundry version compatibility** | `hooks.mjs` flags the `renderPlaylistConfig` hook name and `select[name="mode"]` anchor as unverified against a live v14 build. |
+| **Platform assumptions** | Whether `Macro#execute` forwards a scope, whether a CSP permits function construction, whether `renderPlaylistConfig` fires against a real `select[name="mode"]`. `tests/mocks/foundry.mjs` can only report what we wrote into it, so asking the mock is circular. Covered by `005-platform-assumptions`, which asserts *and logs the full shape* — a wrong assumption there decides a fallback, and a bare "expected X to be Y" would hide what to fall back to. |
 
 ---
 

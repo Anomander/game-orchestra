@@ -59,6 +59,7 @@ class GameOrchestraApiError extends Error { code; }
 | `INVALID_ARGUMENT` | The caller passed something unusable |
 | `NOT_FOUND` | A referenced playlist, sound, or document does not exist |
 | `VALIDATION_FAILED` | A graph had error-level issues — carries `.validation` |
+| `SELF_REENTRANT` | The call would tear down the engine currently executing the script that made it |
 
 Branch on `code`, never on the message. `api.isHeadGM()` and `api.canControl()` let a caller check
 *before* calling — which is why they ship in the same increment; throwing with no way to test first
@@ -161,7 +162,7 @@ stored, still read at resolution time, and `api.bind.read()` reports it.
 
 ```js
 api.graph.get(playlist)                  // deep clone, or null
-await api.graph.set(playlist, graph)     // validates; returns the validation result
+await api.graph.set(playlist, graph, options?)  // validates; returns the validation result
 await api.graph.remove(playlist)
 api.graph.validate(graph, options?)      // emits i18n KEYS
 api.graph.localizeIssue(issue)
@@ -181,6 +182,16 @@ api.graph.schema                         // resolveLoop, DURATIONAL_NODE_TYPES, 
   write paths is not enforcement.
 - **`set()` on a playing playlist restarts it from Start** (H8 + H9). There is no in-place patch,
   deliberately.
+- **`set()` supplies the environment context Script-node validation needs**, so "matching the
+  editor" holds there too. Every Script rule in `graph-validation.mjs` is environment-dependent and
+  **self-skips when its context is absent** — so an API that passed none silently held script nodes
+  to a *lower* bar than the UI, and inline source that could never compile went straight to the flag
+  with no error. Pass `options` to override any of it (validating against a world you are not in).
+- **`set()` deliberately does not check `MACRO_SCRIPT`.** That permission gates an editor *field*;
+  asking it of an API caller answers the wrong question, since the module writing a graph is not the
+  person who will later run it — and a raw `setFlag()` bypasses any gate here anyway. The check that
+  decides whether inline source *executes* is `inlineScriptsAllowed()`, at execution time, where it
+  covers every write path including the ones this module does not own.
 
 ### `api.mix` — J4
 
@@ -233,6 +244,7 @@ strings.
 | `TRACK_STARTED` | `gameOrchestraTrackStarted` | `{playlistId, soundId, soundName}` |
 | `TRACK_STOPPED` | `gameOrchestraTrackStopped` | `{playlistId, soundId, soundName}` |
 | `OVERLAY_CHANGED` | `gameOrchestraOverlayChanged` | `{axis: 'mood'\|'phase', from, to}` |
+| `SCRIPT_ERROR` | `gameOrchestraScriptError` | `{phase, playlistId, nodeId, message}` — `phase` is `blocked` \| `compile` \| `execute` \| `timeout` \| `missing` |
 
 > ### Every hook is fire-and-forget and non-fatal — this is a hard rule
 >
@@ -267,6 +279,53 @@ All of these fire on the **head GM** only, except `OVERLAY_CHANGED` (a world set
 client sees it). They report what the module *decided*, not what any given client is hearing.
 
 ---
+
+## Scripts calling the API
+
+A Script node runs on the head GM, so **every** API call in its execution context passes the
+head-GM and permission gates. There is no `NOT_HEAD_GM` to catch a script doing something
+self-destructive, which is why `SELF_REENTRANT` exists.
+
+Refused while a script is executing:
+
+| Call | Why |
+|---|---|
+| `graph.set` / `graph.remove` on the **running** playlist | fires `updatePlaylist` → `onCustomGraphChanged` → teardown and restart from Start (H8/H9), while this script's node holds a token |
+| `playback.play` / `playback.stop` / `transport.refresh` | retires the engine tree from inside one of its own nodes |
+
+The guard is **scoped to the executing tree, never global** — rewriting a *different* playlist's
+graph from a script is one of the better reasons to have the node at all — and it is keyed on the
+run's shared registry, so it covers nested child engines too. See
+[H17](invariants.md#h17--a-script-node-runs-foreign-code-while-holding-a-token-so-it-must-always-give-the-token-back).
+
+The context a script receives:
+
+```js
+{ playlist, node, graph, run: { id, ctx }, api, log }
+```
+
+`run.ctx` is scratch space shared by reference down the whole engine tree — a run is one musical
+event — and is never persisted.
+
+**The two modes do not read the same way**, and the inspector hint for each says which:
+
+```js
+// macro mode - the whole context arrives under one scope key
+const { playlist, api } = scope.gameOrchestra;
+
+// inline mode - compiled with the keys as named parameters
+playlist.name; api.mix.get(playlist);   // and `ctx` for the whole object
+```
+
+Macro mode additionally exposes a bare `gameOrchestra` identifier, because core spreads a scope's
+keys as named parameters as well as passing `scope` itself. Documented as `scope.gameOrchestra`
+anyway: it is explicit, and it cannot be shadowed by a local of the same name.
+
+Both halves are **verified against a live build**, not inferred from core's source — `Macro#execute`
+forwarding an arbitrary scope is the assumption macro mode is built on, and the unit suite can only
+report what `tests/mocks/foundry.mjs` was told to say. See
+`itest/specs/005-platform-assumptions.spec.mjs`. (`this` inside a macro is the Macro document;
+nothing here reads it.)
 
 ## Stability
 

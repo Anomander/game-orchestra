@@ -36,6 +36,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/playlist-ref.mjs` | 133 | Playlist-node reference normalization, axis-aware resolution, description. **Pure.** |
 | `scripts/graph-builder.mjs` | 94 | Shared programmatic graph construction; enforces numeric ids + port-order edges; `track()`'s `loop` option overrides `infinite` with any full `LoopSpec`. **Pure.** |
 | `scripts/graph-presets.mjs` | 221 | Eight starter graphs, including `loop-until-combat-ends`. **Pure.** |
+| `scripts/script-runtime.mjs` | 250 | **Everything about user-supplied code**: the runtime CSP probe (`canCompileScripts`), the one execution gate (`inlineScriptsAllowed`), compile-and-cache for both shapes, the re-entrancy registry behind `SELF_REENTRANT`, and `reportScriptError`. Not a sandbox — see its header. |
 
 ## Editor
 

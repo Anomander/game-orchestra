@@ -132,6 +132,7 @@ the direction at `_routeConnections()`'s single call site.
 | Track | `Sound × 3` · `Sound × ∞` · `Sound × 2–8` · `Sound × 2+` | until only: the escape condition |
 | Delay | `1–5s` | — |
 | Playlist | `Ref × 2` | — |
+| Script | the macro's **live** name · `⟨inline⟩` | — |
 | Fork | `3 exits` (R1a) | — |
 | Random | `no repeat` when `avoidRepeat` | `40%`, normalized; `⧗2` appended when cooldown > 0 |
 | Condition | *(none)* | `Combat` · `No Combat` · `Mood = Tense` · `Mood Δ` · `Defeated` · `else` |
@@ -147,6 +148,29 @@ saving**, and both they and the chip read emptiness through the same
 The general rule for a future guard: **if a chip can render a "not configured" state, that state
 needs a validation rule to match.** A chip that quietly says something is missing, on a graph that
 saves happily, is worse than no chip.
+
+### Script, as a worked example of R3 and R1
+
+The Script node is the cleanest illustration of both rules, because both of them said *no* to
+something that looked reasonable.
+
+**R3 said no chips.** A Script node has exactly one exit and nothing guards it, so the absence of a
+chip is correct and is itself information: the token always leaves this way. It is not in
+`EXPANDABLE_EXIT_NODE_TYPES` or `EXIT_STACK_METRICS`.
+
+**R1 rejected routing by return value.** The obvious feature — `return 'combat'` selects the exit
+labelled `combat` — is exactly what R1 forbids: a fact **indexed by exit**, guarded, needing chips,
+on a node type whose whole point is that it is opaque. It would also be a second, weaker Condition
+node that no validation rule could check, since the routing lives inside code the validator cannot
+read. A script that wants to route writes to state and lets a **Condition node** read it.
+
+**Its detail line resolves the macro's name live** (channel 3), which is why a deleted macro renders
+unresolved on the canvas *and* raises `ScriptMacroNotFound` in validation — the same fact in the two
+channels that own it, per the `(not set)` rule below.
+
+**It gets no drain overlay.** `DRAIN_NODE_TYPES` covers the two types whose token-holding time the
+engine knows in advance; a script's duration is unknowable, and a drain that guessed would be worse
+than none.
 
 ### The until-loop, as a worked example of R1
 
