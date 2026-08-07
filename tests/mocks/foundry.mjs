@@ -181,6 +181,11 @@ export function setupFoundryMocks(overrides = {}) {
       format: vi.fn((key, data = {}) => `${key} ${Object.values(data).map(String).join(' ')}`.trim())
     },
     keybindings: { register: vi.fn() },
+    // Foundry's module registry. Present because the entry point publishes the public API at
+    // `game.modules.get('game-orchestra').api` (the convention another module author will guess)
+    // alongside the legacy `game.gameOrchestra` name - without this the canonical half is
+    // silently skipped and every test of it would pass against nothing.
+    modules: new Map([['game-orchestra', { id: 'game-orchestra', active: true }]]),
     ...overrides
   };
 

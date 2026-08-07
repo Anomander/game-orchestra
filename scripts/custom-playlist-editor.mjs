@@ -1,5 +1,5 @@
 import { CONST } from './config.mjs';
-import { log, getCustomGraph, isHeadGM, getGraphTargetPlaylists } from './helpers.mjs';
+import { log, getCustomGraph, isHeadGM, getGraphTargetPlaylists, writeCustomGraph, removeCustomGraph } from './helpers.mjs';
 import { createEmptyGraph, createDefaultLoop, createDefaultUntilLoop } from './custom-playback-schema.mjs';
 import { PlaylistMixerApp } from './playlist-mixer.mjs';
 import { MixerController } from './playlist-mixer-controller.mjs';
@@ -2968,8 +2968,18 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
   }
 
   /**
-   * Validate, force the playlist into UNSEQUENCED mode (required - see H1),
-   * and persist the graph to the playlist's customPlayback flag.
+   * Validate and persist the graph to the playlist's customPlayback flag.
+   *
+   * The storage rules - validation, forcing UNSEQUENCED (H1), never inventing an
+   * initialTrack (H2), and leaving the live rebuild to the 'updatePlaylist' hook
+   * (H8) - live in helpers.mjs#writeCustomGraph, because scripts/api.mjs is a
+   * second writer and enforcement on only one of two paths is not enforcement.
+   *
+   * This still validates *first*, before calling it. Not redundant: the editor
+   * needs the issue list to paint the inspector, which the writer's thrown error
+   * also carries but only on the failing path. Validating here keeps the
+   * early-return readable; the writer re-checks because it cannot trust that
+   * every future caller did.
    */
   static async handleSave(event, target) {
     event.preventDefault();
@@ -2981,20 +2991,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
       return;
     }
     try {
-      const unsequencedMode = globalThis.CONST?.PLAYLIST_MODES?.UNSEQUENCED ?? -1;
-      // UNSEQUENCED is the only Foundry playlist mode that neither auto-advances
-      // a finished sound nor stops one sound to start another - the graph engine
-      // (and Fork's simultaneous playback) require both properties (H1).
-      if (this.playlist.mode !== unsequencedMode) await this.playlist.update({ mode: unsequencedMode });
-      // setFlag() fires Foundry's 'updatePlaylist' hook, which hooks.mjs's
-      // handleUpdatePlaylist() already forwards to onCustomGraphChanged() for
-      // exactly this flag - that is the single designed trigger for a live
-      // rebuild (custom-playlist-plan.md H8/Phase 5.1), including for a graph
-      // edited from another client. Calling onCustomGraphChanged() again here
-      // would rebuild the engine twice per save, racing its own teardown
-      // against itself (see CustomPlaybackEngine.stop()'s doc comment for the
-      // exact race two overlapping stop/start pairs can hit).
-      await this.playlist.setFlag(CONST.moduleId, 'customPlayback', this.graph);
+      await writeCustomGraph(this.playlist, this.graph);
       ui.notifications.info(game.i18n.localize('GameOrchestra.CustomEditor.Saved'));
       // Deliberately does NOT close. Saving is the only way to hear the graph - the engine
       // rebuilds off the 'updatePlaylist' hook this setFlag() just fired - so closing on save
@@ -3037,10 +3034,7 @@ export class CustomPlaylistEditor extends EditorSelectionMixin(EditorHighlightMi
     });
     if (!confirmed) return;
     try {
-      // See handleSave()'s comment above: unsetFlag() fires 'updatePlaylist' too,
-      // and hooks.mjs's handleUpdatePlaylist() is the single designed trigger for
-      // onCustomGraphChanged() - calling it again here would rebuild twice.
-      await this.playlist.unsetFlag(CONST.moduleId, 'customPlayback');
+      await removeCustomGraph(this.playlist);
       ui.notifications.info(game.i18n.localize('GameOrchestra.CustomEditor.Removed'));
       this.close();
     } catch (error) {

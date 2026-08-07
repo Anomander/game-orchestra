@@ -14,7 +14,7 @@
 import { CONST } from './config.mjs';
 import { getCustomGraph, getPlaylistById, log } from './helpers.mjs';
 import { applyGroupGain, coerceVolume, effectiveVolume, normalizeMix, resolveCrossfadeOverride, setGroupVolume } from './playlist-mix.mjs';
-import { applyMixToPlaylist, applyMixToSound, clearSolo, getPlaylistMix, getSoloIds, mixedVolume, toggleSolo } from './playlist-mix-apply.mjs';
+import { applyMixToPlaylist, applyMixToSound, clearSolo, getPlaylistMix, getSoloIds, mixedVolume, patchPlaylistMix, setPlaylistMuted, toggleSolo } from './playlist-mix-apply.mjs';
 import { buildMixerHtml } from './playlist-mixer-render.mjs';
 
 /** Matches PlaylistSound.VOLUME_DEBOUNCE_MS - one write per settling slider, not one per pixel. */
@@ -331,10 +331,7 @@ export class MixerController {
    * @returns {Promise<void>}
    */
   async patchMix(patch) {
-    const playlist = this.playlist;
-    if (!playlist) return;
-    const current = normalizeMix(getPlaylistMix(playlist));
-    await playlist.setFlag(CONST.moduleId, 'mix', { ...current, ...patch });
+    return patchPlaylistMix(this.playlist, patch);
   }
 
   /**
@@ -762,12 +759,10 @@ export class MixerController {
    */
   async toggleMute(soundId) {
     if (!soundId) return;
+    // The muted-array rebuild lives in playlist-mix-apply.mjs#setPlaylistMuted, shared with the
+    // public API - see that function for why the list is rebuilt whole rather than patched.
     const mix = normalizeMix(getPlaylistMix(this.playlist));
-    // An ARRAY, rebuilt whole. A flag write is a recursive merge server-side, so removing an id
-    // from a `{id: true}` map would merge the old `true` straight back in and unmute would
-    // silently never persist - see PlaylistMix#muted's own comment.
-    const muted = mix.muted.includes(soundId) ? mix.muted.filter((id) => id !== soundId) : [...mix.muted, soundId];
-    await this.patchMix({ muted });
+    await setPlaylistMuted(this.playlist, soundId, !mix.muted.includes(soundId));
     this._commit();
     this.refresh();
   }

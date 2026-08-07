@@ -18,6 +18,7 @@ are the detail behind it.
 | [editor.md](editor.md) | The Drawflow graph editor: the no-re-render rule, Drawflow's limits and their workarounds, validation, drag-in, styling constraints. |
 | [mixer.md](mixer.md) | The Playlist Mixer: the two storage layers, the crossfade chain, and the one place rule 5 does not apply. |
 | [ux.md](ux.md) | Which surface serves which job, why the current set doesn't cohere, and the UX-1–UX-9 principles for adding or moving any UI. |
+| [api.md](api.md) | The public API: the five namespaces, the head-GM/permission contract, the hooks, and the stability rules. **The one surface third parties depend on.** |
 | [module-map.md](module-map.md) | File-by-file index with purity annotations and a dependency diagram. |
 | [testing.md](testing.md) | The Foundry mock, test conventions, structural guard tests, and what is deliberately not covered. |
 | [integration-testing.md](integration-testing.md) | The audio tier: real Foundry at a pinned version, driven by Playwright, asserted on what the speakers actually output. |

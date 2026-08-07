@@ -1,9 +1,53 @@
 import { MoodWidget } from './mood-widget.mjs';
 import { PlaylistTreeApp } from './playlist-tree.mjs';
 import { CONST } from './config.mjs';
-import { setDebugEnabled } from './helpers.mjs';
+import { setDebugEnabled, emitHook } from './helpers.mjs';
 import { setSuppression } from './transport.mjs';
 import { reassertDuck } from './playlist-mix-apply.mjs';
+
+/**
+ * The last active id seen on each overlay axis, so `gameOrchestraOverlayChanged` can report what
+ * the value changed *from*.
+ *
+ * Foundry's `onChange` is handed only the new value, and by the time it runs the setting has
+ * already been written - so there is no way to read the previous one back out. Cached here
+ * instead.
+ * @type {{mood: string|null, phase: string|null}}
+ */
+const _lastOverlayId = { mood: null, phase: null };
+
+/**
+ * Seed {@link _lastOverlayId} from the stored settings.
+ *
+ * Called from the `ready` hook, not from registerSettings(): registration runs during `init`,
+ * where a setting's stored value is not necessarily readable yet. Priming at all is what makes
+ * the **first** overlay change of a session report a correct `from` - seeding lazily inside the
+ * change handler instead would silently swallow exactly that one, which is the change a listener
+ * is most likely to be watching for.
+ */
+export function primeOverlayBaseline() {
+  for (const axis of Object.keys(_lastOverlayId)) {
+    try {
+      _lastOverlayId[axis] = game.settings.get(CONST.moduleId, CONST.overlayAxes[axis].activeSetting) || '';
+    } catch {
+      _lastOverlayId[axis] = '';
+    }
+  }
+}
+
+/**
+ * Fire `gameOrchestraOverlayChanged` for one axis, tracking the previous value.
+ *
+ * One hook carrying its axis rather than two hooks - see CONST.hooks.OVERLAY_CHANGED.
+ * @param {'mood'|'phase'} axis
+ * @param {string} to - The new active id ('' when cleared).
+ */
+function emitOverlayChanged(axis, to) {
+  const from = _lastOverlayId[axis] ?? '';
+  _lastOverlayId[axis] = to || '';
+  if (from === (to || '')) return;
+  emitHook(CONST.hooks.OVERLAY_CHANGED, { axis, from, to: to || '' });
+}
 
 /**
  * Register module settings and configuration menu
@@ -37,6 +81,7 @@ export function registerSettings() {
     type: String,
     default: '',
     onChange: (newMood) => {
+      emitOverlayChanged('mood', newMood);
       game.gameOrchestra?.musicController?.playCurrentTrack();
 
       const refreshApp = (app) => {
@@ -90,6 +135,7 @@ export function registerSettings() {
     type: String,
     default: '',
     onChange: (newPhase) => {
+      emitOverlayChanged('phase', newPhase);
       game.gameOrchestra?.musicController?.playCurrentTrack();
 
       const refreshApp = (app) => {

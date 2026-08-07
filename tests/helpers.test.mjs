@@ -17,7 +17,9 @@ import {
   isCustomPlaylist,
   resolveInitialTrack,
   getAvailablePlaylists,
-  buildPlaylistEntry
+  buildPlaylistEntry,
+  emitHook,
+  describePlaylistContext
 } from '../scripts/helpers.mjs';
 
 describe('helpers.mjs', () => {
@@ -793,6 +795,60 @@ describe('helpers.mjs', () => {
         spy.mockRestore();
         getSpy.mockRestore();
       });
+    });
+  });
+
+  describe('emitHook (every public hook is fire-and-forget and non-fatal)', () => {
+    it('forwards the payload to Hooks.callAll under the given name', () => {
+      const seen = [];
+      Hooks.on('gameOrchestraTrackStarted', (payload) => seen.push(payload));
+
+      emitHook('gameOrchestraTrackStarted', { soundId: 's1' });
+
+      expect(seen).toEqual([{ soundId: 's1' }]);
+    });
+
+    it('SWALLOWS a throwing listener, because Hooks.callAll runs listeners synchronously', () => {
+      // This is the entire reason emitHook exists. Several of these hooks are emitted from
+      // inside the graph engine's token walk; an exception from a third-party listener would
+      // otherwise propagate straight back into the walk and silently stop playback. A listener
+      // is an observer - it must never be able to break audio.
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      Hooks.on('gameOrchestraTrackStarted', () => { throw new Error('third-party listener bug'); });
+
+      expect(() => emitHook('gameOrchestraTrackStarted', { soundId: 's1' })).not.toThrow();
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('tolerates Hooks being absent entirely', () => {
+      const saved = globalThis.Hooks;
+      delete globalThis.Hooks;
+      expect(() => emitHook('gameOrchestraTrackStarted', {})).not.toThrow();
+      globalThis.Hooks = saved;
+    });
+  });
+
+  describe('describePlaylistContext', () => {
+    it('flattens a context into a frozen descriptor carrying no live documents', () => {
+      const described = describePlaylistContext({
+        playlist: { id: 'p1', name: 'Cave' },
+        context: 'combat',
+        priority: 20,
+        isOverlay: true,
+        overlayAxis: 'phase',
+        contextEntity: { name: 'Ogre', documentName: 'Token' }
+      });
+
+      expect(described).toEqual({
+        playlistId: 'p1', playlistName: 'Cave', section: 'combat', priority: 20,
+        isOverlay: true, overlayAxis: 'phase', sourceName: 'Ogre', sourceType: 'Token'
+      });
+      expect(Object.isFrozen(described)).toBe(true);
+    });
+
+    it('returns null for no context', () => {
+      expect(describePlaylistContext(null)).toBeNull();
     });
   });
 });

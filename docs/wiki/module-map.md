@@ -11,9 +11,10 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/game-orchestra.mjs` | 63 | Entry point. Builds `game.gameOrchestra`, registers settings/keybindings, preloads templates, wires every hook. |
+| `scripts/game-orchestra.mjs` | 120 | Entry point. Publishes **one** object at both `game.modules.get(id).api` and `game.gameOrchestra` (legacy class keys warn once each via `logCompatibilityWarning`), registers settings/keybindings, preloads templates, wires every hook. |
+| `scripts/api.mjs` | 640 | **The public API** — the only surface a third party depends on. A facade with no logic of its own: five namespaces by job (`transport`/`bind`/`graph`/`mix`/`playback`), `GameOrchestraApiError`, the head-GM and GM gates, and the headless PrototypeToken binding store. See [api.md](api.md). |
 | `scripts/hooks.mjs` | 375 | All hook handlers. Button injection into Scene/Token/Playlist config (Scene opens the **scoped hub**); scene-control suppression toggles built from `transport.mjs`; combat/scene/flag change → `playCurrentTrack()`; phase reset on `deleteCombat` (O9). |
-| `scripts/config.mjs` | 49 | `CONST`: module id, setting keys, default moods/phases, baseline section priorities, `sectionAxis`/`overlayAxes` (O1/O3). **Pure.** |
+| `scripts/config.mjs` | 90 | `CONST`: module id, setting keys, default moods/phases, baseline section priorities, `sectionAxis`/`overlayAxes` (O1/O3), and `hooks` — every hook the module fires, published as `api.hooks`. **Pure.** |
 | `scripts/settings.mjs` | 290 | Setting + keybinding registration, `onChange` handlers, suppression toggles. **Exactly one `registerMenu` entry** (docs/wiki/ux.md UX-4). `activePhase`/`configuredPhases` mirror `activeMood`/`configuredMoods` exactly. |
 
 ## Playback core
@@ -21,7 +22,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | File | ~LoC | Purpose |
 |---|---|---|
 | `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layers (`_layers`, one independent root engine per layer beside `_customEngine`). |
-| `scripts/helpers.mjs` | 525 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `sectionBaselinePriority()` (the scope hierarchy, applied at resolution time — never written to a flag), `log`. The Foundry-touching side of several pure modules. |
+| `scripts/helpers.mjs` | 640 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `sectionBaselinePriority()` (the scope hierarchy, applied at resolution time — never written to a flag), `writeCustomGraph`/`removeCustomGraph` (the **shared** graph writer — H1/H2 enforcement both the editor and the API route through), `describePlaylistContext`, `emitHook` (the non-fatal hook wrapper — the only place `Hooks.callAll` may be called), `log`. The Foundry-touching side of several pure modules. |
 
 ## Graph engine
 
@@ -62,7 +63,7 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 | `scripts/playlist-mixer.mjs` | 100 | `PlaylistMixerApp` — the standalone window, a thin ApplicationV2 shell over the controller. One per playlist, **every playlist type**. |
 | `scripts/playlist-mixer-render.mjs` | 290 | The mixer body as an HTML string: full, `compact` (the editor's 300px pane), and `graphTools` (rows as canvas drag sources with add-node buttons). Supersedes the deleted `custom-playlist-tracks.mjs`. **Pure.** |
 | `scripts/playlist-mix.mjs` | 254 | The mix model: `effectiveVolume()`, `clampVolume()`, `normalizeMix()`, `resolveCrossfadeMs()` (the three-link chain), `applyGroupGain()`, `coerceDuckFactor()`. **Pure.** |
-| `scripts/playlist-mix-apply.mjs` | 245 | Applies a mix to live audio, holds session solo state, and reads the `activeDuck` world setting (`duckFactorFor`, `reassertDuck`). **Runs on every client** — the one part of the module that is not head-GM-only. |
+| `scripts/playlist-mix-apply.mjs` | 290 | Applies a mix to live audio, holds session solo state, owns the only writers for the `mix` flag (`patchPlaylistMix`, `setPlaylistMuted` — shared by `MixerController` and the API), and reads the `activeDuck` world setting (`duckFactorFor`, `reassertDuck`). **Runs on every client** — the one part of the module that is not head-GM-only. |
 
 ## Shared UI cores
 
@@ -122,6 +123,7 @@ Keep them pure — that is the only reason the harness's own correctness is know
 |---|---|
 | `CLAUDE.md` | Always-loaded agent instructions. |
 | `docs/wiki/*.md` | **This wiki.** Maintained. |
+| `docs/api-and-script-node-plan.md` | **Active plan.** Part A (the public API) is shipped; Part B (the Script node) is not started. |
 | `docs/overlays-and-loop-modes-plan.md` | **Archived plan.** Overlay axes (`O1`–`O10`) + loop modes (`L1`–`L7`) — both fully implemented; durable content folded into this wiki. |
 | `docs/playlist-node-plan.md` | **Archived plan.** Cited by code as `D1`–`D8`, `Phase 4.4`, etc. Do not move or rename. |
 | `docs/graph-editor-panel-plan.md` | **Archived plan.** Cited as `D2`, `D8`, `HR-A`–`HR-D`. Do not move or rename. |

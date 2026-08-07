@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Deliberately no explicit setupFoundryMocks() call here (unlike every other
 // test file): merely importing './mocks/foundry.mjs' already runs it once as
 // a side effect (see that file's own bottom comment), and ES import hoisting
@@ -41,6 +41,7 @@ import { MoodWidget } from '../scripts/mood-widget.mjs';
 import { MoodConfigApp, PhaseConfigApp } from '../scripts/mood-config.mjs';
 import { CustomPlaylistEditor } from '../scripts/custom-playlist-editor.mjs';
 import { GameOrchestraConfig } from '../scripts/app.mjs';
+import { PlaylistMixerApp } from '../scripts/playlist-mixer.mjs';
 
 import '../scripts/game-orchestra.mjs';
 
@@ -118,6 +119,62 @@ describe('game-orchestra.mjs (module entry point)', () => {
           'modules/game-orchestra/templates/custom-playlist-editor.hbs'
         ])
       );
+    });
+  });
+
+  describe('the public API surface', () => {
+    beforeEach(async () => {
+      game.gameOrchestra = undefined;
+      game.modules.get('game-orchestra').api = undefined;
+      // The registered handler, invoked directly rather than through Hooks.callAll('init'):
+      // these are `Hooks.once` registrations, so the mock registry - like the real one - drops
+      // them after the first dispatch, and an earlier test in this file has already spent it.
+      // Going through callAll here made every assertion below run against `undefined`, which the
+      // identity check was happy to accept.
+      const initHandler = Hooks.once.mock.calls.find(([event]) => event === 'init')[1];
+      await initHandler();
+    });
+
+    it('publishes ONE object under both names', () => {
+      // The canonical name is the Foundry convention and the only one another module author will
+      // guess; the legacy one already has consumers in the wild. One object, not two - two would
+      // be free to drift.
+      expect(game.gameOrchestra).toBeTruthy();
+      expect(game.modules.get('game-orchestra').api).toBe(game.gameOrchestra);
+    });
+
+    it('carries the API namespaces alongside the legacy keys', () => {
+      const published = game.gameOrchestra;
+      expect(published.version).toMatch(/^0\./);
+      for (const ns of ['transport', 'bind', 'graph', 'mix', 'playback', 'hooks']) {
+        expect(published[ns], ns).toBeTruthy();
+      }
+      expect(published.musicController).toBeInstanceOf(MusicController);
+    });
+
+    it('warns ONCE per legacy class key, and still returns the class', () => {
+      // Someone with a working macro did nothing wrong, so the key keeps working. Once, because
+      // a macro in a loop would otherwise flood the console - and a warning nobody can read is
+      // not a warning.
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      expect(game.gameOrchestra.PlaylistMixerApp).toBe(PlaylistMixerApp);
+      expect(game.gameOrchestra.PlaylistMixerApp).toBe(PlaylistMixerApp);
+      expect(game.gameOrchestra.CustomPlaylistEditor).toBe(CustomPlaylistEditor);
+
+      const messages = spy.mock.calls.map((call) => call.join(' '));
+      expect(messages.filter((m) => m.includes('PlaylistMixerApp'))).toHaveLength(1);
+      expect(messages.filter((m) => m.includes('CustomPlaylistEditor'))).toHaveLength(1);
+      spy.mockRestore();
+    });
+
+    it('does NOT warn on musicController - the module reads it through this object itself', () => {
+      // settings.mjs's own onChange handlers reach through game.gameOrchestra?.musicController on
+      // every mood/phase change, so warning on it would fire the deprecation at the module.
+      const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      void game.gameOrchestra.musicController;
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
     });
   });
 });

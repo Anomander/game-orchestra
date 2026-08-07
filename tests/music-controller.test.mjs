@@ -1140,6 +1140,75 @@ describe('MusicController', () => {
   });
 
   describe('transitionToContext', () => {
+    describe('public hooks (config.mjs#CONST.hooks)', () => {
+      /**
+       * These are the module's first hooks with third-party listeners, so both halves of the
+       * contract are pinned: that they fire with the documented payload, and that they cannot
+       * take playback down with them.
+       */
+      it('fires gameOrchestraContextChanged with plain from/to descriptors', async () => {
+        const seen = [];
+        Hooks.on('gameOrchestraContextChanged', (payload) => seen.push(payload));
+        const sound = createMockSound('n1', 'New');
+        const playlist = createMockPlaylist('np', 'New Playlist', [sound]);
+        vi.spyOn(controller, 'playTrack').mockResolvedValue();
+
+        await controller.transitionToContext({ playlist, tracks: [sound], context: 'area', scopeEntity: null });
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].from).toBeNull();
+        expect(seen[0].to).toMatchObject({ playlistId: 'np', playlistName: 'New Playlist', section: 'area' });
+        // A descriptor, never the live PlaylistContext - its internals are not contract.
+        expect(seen[0].to.playlist).toBeUndefined();
+      });
+
+      it('does NOT fire when a re-resolution lands on an identical context', async () => {
+        // Every re-resolution builds a brand-new PlaylistContext object, so diffing by identity
+        // would fire this on every unrelated mood change that resolved to the same music.
+        const seen = [];
+        const sound = createMockSound('n1', 'New');
+        const playlist = createMockPlaylist('np', 'New Playlist', [sound]);
+        vi.spyOn(controller, 'playTrack').mockResolvedValue();
+        const build = () => ({ playlist, tracks: [sound], context: 'area', scopeEntity: null });
+
+        await controller.transitionToContext(build());
+        Hooks.on('gameOrchestraContextChanged', (payload) => seen.push(payload));
+        await controller.transitionToContext(build());
+
+        expect(seen).toEqual([]);
+      });
+
+      it('fires gameOrchestraTrackStarted / TrackStopped around the module\'s own playback', async () => {
+        const started = [];
+        const stopped = [];
+        Hooks.on('gameOrchestraTrackStarted', (p) => started.push(p));
+        Hooks.on('gameOrchestraTrackStopped', (p) => stopped.push(p));
+        const sound = createMockSound('s1', 'Lute');
+        createMockPlaylist('p1', 'Tavern', [sound]);
+
+        await controller.playTrack(sound);
+        controller.stopTrack(sound);
+
+        expect(started).toEqual([{ playlistId: 'p1', soundId: 's1', soundName: 'Lute' }]);
+        expect(stopped).toEqual([{ playlistId: 'p1', soundId: 's1', soundName: 'Lute' }]);
+      });
+
+      it('a throwing listener cannot break a transition', async () => {
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        Hooks.on('gameOrchestraContextChanged', () => { throw new Error('third-party listener bug'); });
+        const sound = createMockSound('n1', 'New');
+        const playlist = createMockPlaylist('np', 'New Playlist', [sound]);
+        const playSpy = vi.spyOn(controller, 'playTrack').mockResolvedValue();
+
+        await expect(controller.transitionToContext({ playlist, tracks: [sound], context: 'area', scopeEntity: null })).resolves.not.toThrow();
+
+        // The transition completed: the listener was contained, not merely caught somewhere.
+        expect(playSpy).toHaveBeenCalledWith(sound);
+        expect(controller.currentContext?.playlist).toBe(playlist);
+        spy.mockRestore();
+      });
+    });
+
     it('fades out playing active tracks not in target context and starts new tracks', async () => {
       setMockSetting('game-orchestra', 'fadeDuration', 2); // 2 seconds
 

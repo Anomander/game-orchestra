@@ -1,5 +1,6 @@
 import { CONST } from './config.mjs';
 import { resolvePlaylistRefId } from './playlist-ref.mjs';
+import { validateGraph } from './graph-validation.mjs';
 
 /**
  * Utility helper functions
@@ -94,6 +95,90 @@ export function getCustomGraph(playlist) {
  */
 export function isCustomPlaylist(playlist) {
   return !!getCustomGraph(playlist);
+}
+
+/**
+ * Thrown by writeCustomGraph() when the graph it was handed would not save in
+ * the editor either. Carries the full validateGraph() result so a caller can
+ * render the issues rather than re-running validation to find out why.
+ */
+export class GraphValidationError extends Error {
+  /**
+   * @param {ReturnType<import('./graph-validation.mjs').validateGraph>} validation
+   */
+  constructor(validation) {
+    super(`Graph validation failed with ${validation.errors.length} error(s).`);
+    this.name = 'GraphValidationError';
+    this.validation = validation;
+  }
+}
+
+/**
+ * Persist a custom playback graph to a playlist, enforcing everything that
+ * must be true of a graph playlist's *storage* regardless of who is writing.
+ *
+ * This lived inside CustomPlaylistEditor.handleSave() while the editor was the
+ * only writer. It is extracted because the public API (scripts/api.mjs) is a
+ * second one, and H1/H2 enforcement that exists on only one of two write paths
+ * is not enforcement - a graph written through the other path saves happily and
+ * is then silently unplayable, with no console error anywhere.
+ *
+ * Three guarantees, in order:
+ *
+ * 1. **The graph validates.** Refusing here rather than writing an unplayable
+ *    graph matches what the editor already does; an API laxer than the UI would
+ *    be its own surprise. Errors block, warnings do not - same bar as the
+ *    editor's Save button.
+ * 2. **The playlist is forced to UNSEQUENCED (H1).** It is the only Foundry mode
+ *    that neither auto-advances a finished sound nor stops one sound to start
+ *    another, and the engine requires both absences - Fork's simultaneous
+ *    playback depends on the second.
+ * 3. **Nothing here invents an `initialTrack` (H2).** Stated as a guarantee
+ *    rather than as code because the correct implementation is to do nothing:
+ *    a stray track id on a custom playlist bypasses the entire graph, so any
+ *    future convenience added to this function must not "helpfully" assign one.
+ *    (An initialTrack stored on a *binding* before the playlist gained its graph
+ *    is a separate case, and is handled at read time by
+ *    PlaylistContext._resolveTracks() checking isCustomPlaylist first.)
+ *
+ * Deliberately does NOT call MusicController.onCustomGraphChanged(). setFlag()
+ * fires Foundry's 'updatePlaylist' hook, and hooks.mjs#handleUpdatePlaylist is
+ * the single designed trigger for a live rebuild (H8) - including for a graph
+ * edited from another client. Calling it here as well would rebuild the engine
+ * twice per save, racing its own teardown against itself.
+ * @param {object} playlist - Foundry Playlist document.
+ * @param {import('./custom-playback-schema.mjs').CustomGraph} graph
+ * @param {object} [options] - Extra context forwarded to validateGraph(); see its
+ *   own signature. `playlist` is supplied from the document and cannot be overridden.
+ * @returns {Promise<ReturnType<import('./graph-validation.mjs').validateGraph>>} The
+ *   validation result, so a caller can surface warnings on an otherwise successful save.
+ * @throws {GraphValidationError} When the graph has error-level issues.
+ */
+export async function writeCustomGraph(playlist, graph, options = {}) {
+  const validation = validateGraph(graph, { ...options, playlist });
+  if (!validation.valid) throw new GraphValidationError(validation);
+  const unsequencedMode = globalThis.CONST?.PLAYLIST_MODES?.UNSEQUENCED ?? -1;
+  if (playlist.mode !== unsequencedMode) await playlist.update({ mode: unsequencedMode });
+  await playlist.setFlag(CONST.moduleId, 'customPlayback', graph);
+  return validation;
+}
+
+/**
+ * Remove a playlist's custom playback graph, reverting it to native behavior.
+ *
+ * The counterpart to writeCustomGraph(), and here for the same reason: it is
+ * now called from two places. The playlist's *mode* is deliberately left as
+ * UNSEQUENCED rather than restored - there is nothing to restore it to, since
+ * the mode before the graph existed was never recorded, and guessing SEQUENTIAL
+ * would silently change how the playlist plays.
+ *
+ * Like writeCustomGraph(), does not call onCustomGraphChanged() - unsetFlag()
+ * fires 'updatePlaylist' too (H8).
+ * @param {object} playlist - Foundry Playlist document.
+ * @returns {Promise<void>}
+ */
+export async function removeCustomGraph(playlist) {
+  await playlist.unsetFlag(CONST.moduleId, 'customPlayback');
 }
 
 /**
@@ -618,5 +703,55 @@ export function log(level, ...args) {
     default:
       console.log(prefix, ...resolvedArgs);
       break;
+  }
+}
+
+/**
+ * Flatten a PlaylistContext into a plain, frozen descriptor - what the public API hands out and
+ * what the `gameOrchestraContextChanged` hook carries.
+ *
+ * A descriptor rather than the live object on purpose: PlaylistContext carries methods and live
+ * document references, and handing it out would make its internals part of the API contract.
+ * Both consumers share this one so the hook payload and `api.playback.currentContext()` can
+ * never describe the same context two different ways.
+ * @param {PlaylistContext|null} context
+ * @returns {object|null}
+ */
+export function describePlaylistContext(context) {
+  if (!context) return null;
+  return Object.freeze({
+    playlistId: context.playlist?.id ?? null,
+    playlistName: context.playlist?.name ?? null,
+    section: context.context ?? null,
+    priority: context.priority ?? null,
+    isOverlay: context.isOverlay ?? false,
+    overlayAxis: context.overlayAxis ?? null,
+    sourceName: context.contextEntity?.name ?? null,
+    sourceType: context.contextEntity?.documentName ?? null
+  });
+}
+
+/**
+ * Fire one of the module's public hooks (config.mjs#CONST.hooks).
+ *
+ * **The try/catch is the entire point of this function.** `Hooks.callAll()` runs its listeners
+ * synchronously, so an exception thrown by a third-party listener propagates straight back into
+ * whatever called it - and several of these are emitted from inside the graph engine's token
+ * walk, where that means playback silently stops with no error attributable to the module. A
+ * listener is an observer; it must never be able to break audio.
+ *
+ * This generalizes custom-playback-engine.mjs#_emitActivity, which has carried the same reasoning
+ * (and the same catch) since it was the only hook the module fired. Every hook added from here on
+ * goes through this - `Hooks.callAll` must not appear anywhere else.
+ *
+ * Also tolerates `Hooks` being absent entirely, which is what the unit suite runs against.
+ * @param {string} name - A value from CONST.hooks.
+ * @param {object} payload
+ */
+export function emitHook(name, payload) {
+  try {
+    globalThis.Hooks?.callAll?.(name, payload);
+  } catch (error) {
+    log(1, `A listener on '${name}' threw; ignoring it so playback is unaffected.`, error);
   }
 }

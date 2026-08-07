@@ -35,6 +35,34 @@ export const CONST = {
     Token: { combat: { label: 'GameOrchestra.PlaylistSection.Combat', priority: 20 } }
   },
   /**
+   * Every hook this module fires, by name. Part of the public API
+   * (`api.hooks`), so a listener need not hard-code strings.
+   *
+   * All of them are **fire-and-forget and non-fatal**, and that is a hard rule
+   * rather than a courtesy: `Hooks.callAll()` runs listeners *synchronously*, so
+   * an exception thrown by a third-party listener on a hook emitted inside the
+   * token walk propagates straight into the walk and SILENTLY STOPS PLAYBACK.
+   * Emit through helpers.mjs#emitHook, never `Hooks.callAll` directly, and read
+   * custom-playback-engine.mjs#_emitActivity - the original instance of this
+   * reasoning - before adding another.
+   */
+  hooks: Object.freeze({
+    /** Every graph node hop: {playlistId, runId, activeNodeIds, activeTimings, enteredNodeId, traversedEdgeIds}. */
+    GRAPH_ACTIVITY: 'gameOrchestraGraphActivity',
+    /** The winning context changed: {from, to} as plain descriptors (api.mjs#describeContext). */
+    CONTEXT_CHANGED: 'gameOrchestraContextChanged',
+    /** A track the module started began playing: {playlistId, soundId, soundName}. */
+    TRACK_STARTED: 'gameOrchestraTrackStarted',
+    /** A track the module started was stopped by it: {playlistId, soundId, soundName}. */
+    TRACK_STOPPED: 'gameOrchestraTrackStopped',
+    /**
+     * An overlay axis's active id changed: {axis: 'mood'|'phase', from, to}. ONE hook carrying
+     * the axis, not two - config.mjs#overlayAxes models the two axes as one mechanism, and
+     * docs/wiki/ux.md D4 is the record of what splitting them into two of everything cost.
+     */
+    OVERLAY_CHANGED: 'gameOrchestraOverlayChanged'
+  }),
+  /**
    * Which overlay axis each music section resolves against: area music is
    * overlaid by mood, combat music by phase. See overlays-and-loop-modes-plan.md
    * O1. Fixed and not user-extensible - two axes bound to two sections.

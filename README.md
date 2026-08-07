@@ -66,6 +66,32 @@ All GM-only, and all rebindable in *Configure Controls*.
 | Fade Duration | Crossfade time in seconds (0 = use per-sound fade) |
 | Default Music | World-level fallback combat playlist |
 
+## Macros & module integration
+
+Game Orchestra exposes a documented API for macros and other modules:
+
+```js
+const api = game.modules.get('game-orchestra').api;
+
+await api.transport.setMood('tense');          // switch the active mood
+await api.transport.setSuppression('combat');  // toggle combat-music suppression
+api.transport.describeCurrent();               // "Active Audio: this scene (tense)"
+
+api.playback.currentContext();                 // what is winning, and from where
+await api.graph.set(playlist, myGraph);        // build a playback graph in code
+
+Hooks.on(api.hooks.CONTEXT_CHANGED, ({ from, to }) => console.log(to?.playlistName));
+```
+
+Five namespaces — `transport`, `bind`, `graph`, `mix`, `playback` — plus five hooks. A call that
+cannot do what its name says on your client **throws** with a code (`NOT_HEAD_GM`, `NOT_PERMITTED`,
+…) rather than failing quietly; use `api.isHeadGM()` / `api.canControl()` to check first.
+
+Full reference: **[docs/wiki/api.md](docs/wiki/api.md)**.
+
+> The API contract is versioned separately from the module (`api.version`, currently `0.1.0`) and
+> is not frozen yet — signatures may still be corrected, always with a release note.
+
 ## Support
 
 - [GitHub Issues](https://github.com/Anomander/game-orchestra/issues)

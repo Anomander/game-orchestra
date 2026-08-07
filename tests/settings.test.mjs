@@ -3,7 +3,7 @@ import { setupFoundryMocks } from './mocks/foundry.mjs';
 
 setupFoundryMocks();
 
-import { registerSettings, registerKeybindings } from '../scripts/settings.mjs';
+import { registerSettings, registerKeybindings, primeOverlayBaseline } from '../scripts/settings.mjs';
 import { log } from '../scripts/helpers.mjs';
 import { CONST } from '../scripts/config.mjs';
 
@@ -240,6 +240,63 @@ describe('registerSettings', () => {
       for (const key of [CONST.settings.activeMood, CONST.settings.activePhase, CONST.settings.suppressArea, CONST.settings.suppressCombat]) {
         expect(() => onChangeFor(key)('x'), key).not.toThrow();
       }
+    });
+  });
+
+  describe('gameOrchestraOverlayChanged', () => {
+    /** The onChange for one axis, as registered. */
+    const onChangeFor = (settingKey) =>
+      game.settings.register.mock.calls.find(([, key]) => key === settingKey)[2].onChange;
+
+    beforeEach(() => {
+      registerSettings();
+      primeOverlayBaseline();
+    });
+
+    it('fires ONE hook carrying its axis, not two hooks', () => {
+      // config.mjs#overlayAxes models mood and phase as one mechanism on two axes; ux.md D4 is
+      // the record of what splitting them into two of everything cost last time.
+      const seen = [];
+      Hooks.on('gameOrchestraOverlayChanged', (payload) => seen.push(payload));
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+      onChangeFor(CONST.settings.activePhase)('enrage');
+
+      expect(seen).toEqual([
+        { axis: 'mood', from: '', to: 'tense' },
+        { axis: 'phase', from: '', to: 'enrage' }
+      ]);
+    });
+
+    it('reports what the value changed FROM, across successive changes', () => {
+      const seen = [];
+      Hooks.on('gameOrchestraOverlayChanged', (payload) => seen.push(payload));
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+      onChangeFor(CONST.settings.activeMood)('calm');
+
+      expect(seen.map((p) => `${p.from}->${p.to}`)).toEqual(['->tense', 'tense->calm']);
+    });
+
+    it('does not fire when the value did not actually change', () => {
+      const seen = [];
+      onChangeFor(CONST.settings.activeMood)('tense');
+      Hooks.on('gameOrchestraOverlayChanged', (payload) => seen.push(payload));
+
+      onChangeFor(CONST.settings.activeMood)('tense');
+
+      expect(seen).toEqual([]);
+    });
+
+    it('still re-resolves playback even if a listener throws', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const playCurrentTrack = vi.fn();
+      game.gameOrchestra = { musicController: { playCurrentTrack } };
+      Hooks.on('gameOrchestraOverlayChanged', () => { throw new Error('third-party listener bug'); });
+
+      expect(() => onChangeFor(CONST.settings.activeMood)('tense')).not.toThrow();
+      expect(playCurrentTrack).toHaveBeenCalled();
+      spy.mockRestore();
     });
   });
 

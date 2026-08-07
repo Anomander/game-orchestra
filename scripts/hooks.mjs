@@ -7,6 +7,7 @@ import { PlaylistMixerApp, refreshMixerViews } from './playlist-mixer.mjs';
 import { handleUpdatePlaylistMix, handleUpdatePlaylistSoundMix } from './playlist-mix-apply.mjs';
 import { suppressionState, setSuppression } from './transport.mjs';
 import { PlaylistTreeApp } from './playlist-tree.mjs';
+import { primeOverlayBaseline } from './settings.mjs';
 
 const _loc = (key) => game.i18n.localize(key);
 
@@ -505,6 +506,11 @@ export function handleTokenConfigRender(app, html, _context, _options) {
  * Handle game ready to start music after delay
  */
 export async function handleReady() {
+  // Before anything can change an overlay: this records what mood/phase the session STARTED on,
+  // which is what lets the first gameOrchestraOverlayChanged of the session report a correct
+  // `from` rather than swallowing itself (settings.mjs#primeOverlayBaseline).
+  primeOverlayBaseline();
+
   setTimeout(() => {
     game.gameOrchestra?.musicController?.playCurrentTrack();
   }, 1000);

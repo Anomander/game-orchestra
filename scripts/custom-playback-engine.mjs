@@ -1,5 +1,5 @@
 import { CONST } from './config.mjs';
-import { log, isHeadGM, getCustomGraph, resolvePlaylistRef, PlaylistContext } from './helpers.mjs';
+import { log, isHeadGM, getCustomGraph, resolvePlaylistRef, PlaylistContext, emitHook } from './helpers.mjs';
 import { EngineClock } from './engine-clock.mjs';
 import { AudioEndWatcher } from './audio-end-watcher.mjs';
 import { buildNativeModeGraph } from './native-mode-graph.mjs';
@@ -252,6 +252,10 @@ export class CustomPlaybackEngine {
    * otherwise propagate straight into the token walk and silently stop
    * playback. Highlighting is cosmetic; it must never be able to break audio.
    *
+   * That reasoning started here and now governs every hook the module fires, so
+   * the try/catch lives in helpers.mjs#emitHook rather than being repeated -
+   * `Hooks.callAll` appears nowhere else in the module (docs/wiki/api.md).
+   *
    * Note this only ever reaches the head GM's own client - the engine doesn't
    * run anywhere else (see isHeadGM()), and nothing here is broadcast over a
    * socket. The editor tells the user as much when it can't show a highlight.
@@ -261,18 +265,14 @@ export class CustomPlaybackEngine {
    * @private
    */
   _emitActivity({ enteredNodeId = null, traversedEdgeIds = [] } = {}) {
-    try {
-      globalThis.Hooks?.callAll?.('gameOrchestraGraphActivity', {
-        playlistId: this.playlist?.id ?? null,
-        runId: this._runId,
-        activeNodeIds: [...this._activeNodes.keys()],
-        activeTimings: this._activeTimings(),
-        enteredNodeId,
-        traversedEdgeIds
-      });
-    } catch (error) {
-      log(2, 'CustomPlaybackEngine: a gameOrchestraGraphActivity listener threw; ignoring it.', error);
-    }
+    emitHook(CONST.hooks.GRAPH_ACTIVITY, {
+      playlistId: this.playlist?.id ?? null,
+      runId: this._runId,
+      activeNodeIds: [...this._activeNodes.keys()],
+      activeTimings: this._activeTimings(),
+      enteredNodeId,
+      traversedEdgeIds
+    });
   }
 
   /**

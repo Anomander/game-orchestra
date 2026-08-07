@@ -218,6 +218,53 @@ export function applyMixToPlaylist(playlist, { duration = REASSERT_FADE_MS } = {
 }
 
 /**
+ * Merge a patch into a playlist's `game-orchestra.mix` flag.
+ *
+ * The single writer for that flag. `MixerController#patchMix` and the public API
+ * (scripts/api.mjs) both route through here rather than each doing their own
+ * read-normalize-merge-write - a second copy of this is exactly how the `muted`
+ * bug (docs/wiki/mixer.md) got in, and the normalize step is not optional: merging
+ * a patch onto a raw stored mix lets a legacy or malformed field survive into the
+ * written value.
+ *
+ * `mix` is deliberately its own flag and not part of `game-orchestra.customPlayback`
+ * (HR-H): a customPlayback change rebuilds a running engine (H8), which restarts the
+ * graph from Start (H9), so sharing the flag would mean nudging a volume slider
+ * audibly restarted the music.
+ * @param {object|null} playlist - Foundry Playlist document.
+ * @param {object} patch - Fields to merge over the current normalized mix.
+ * @returns {Promise<void>}
+ */
+export async function patchPlaylistMix(playlist, patch) {
+  if (!playlist) return;
+  const current = normalizeMix(getPlaylistMix(playlist));
+  await playlist.setFlag(CONST.moduleId, 'mix', { ...current, ...patch });
+}
+
+/**
+ * Set one sound's muted state in a playlist's mix.
+ *
+ * The `muted` list is an **array, rebuilt whole**, and that is the whole reason this
+ * function exists rather than each caller assembling a patch. A flag write is a
+ * recursive merge server-side, so removing an id from a `{id: true}` map would merge
+ * the old `true` straight back in and unmuting would silently never persist. Shipped
+ * broken once; see PlaylistMix#muted's own comment.
+ * @param {object|null} playlist - Foundry Playlist document.
+ * @param {string} soundId
+ * @param {boolean} muted
+ * @returns {Promise<boolean>} The resulting muted state.
+ */
+export async function setPlaylistMuted(playlist, soundId, muted) {
+  if (!playlist || !soundId) return false;
+  const mix = normalizeMix(getPlaylistMix(playlist));
+  const isMuted = mix.muted.includes(soundId);
+  if (isMuted === !!muted) return isMuted;
+  const next = muted ? [...mix.muted, soundId] : mix.muted.filter((id) => id !== soundId);
+  await patchPlaylistMix(playlist, { muted: next });
+  return !!muted;
+}
+
+/**
  * Re-level every playing sound in the world after the duck changed, gliding over the duck's own
  * `fadeMs` so the base dips as the layer arrives and recovers as it leaves.
  *

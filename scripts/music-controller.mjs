@@ -1,5 +1,5 @@
 import { CONST } from './config.mjs';
-import { log, PlaylistContext, FadingTrack, isHeadGM, isCustomPlaylist, getCustomGraph, resolvePlaylistRef, readMusicSection } from './helpers.mjs';
+import { log, PlaylistContext, FadingTrack, isHeadGM, isCustomPlaylist, getCustomGraph, resolvePlaylistRef, readMusicSection, describePlaylistContext, emitHook } from './helpers.mjs';
 import { buildNativeModeGraph } from './native-mode-graph.mjs';
 import { CustomPlaybackEngine } from './custom-playback-engine.mjs';
 import { getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
@@ -216,7 +216,7 @@ export class MusicController {
       this._customEngine.playlist?.id === targetContext.playlist.id
     ) {
       log(3, `Custom graph for playlist '${targetContext.playlist.name}' is already running; leaving it uninterrupted.`);
-      this.currentContext = targetContext;
+      this._setContext(targetContext);
       // The top-level graph itself isn't restarting, but this re-resolution
       // may still have been caused by (among other things) a mood or phase
       // change - any nested Playlist node currently mid-pass whose OWN
@@ -291,7 +291,7 @@ export class MusicController {
     this._fadeOutSounds(soundsToFade, fadeDurationMs);
 
     if (isCustomPlaylist(targetContext?.playlist)) {
-      this.currentContext = targetContext;
+      this._setContext(targetContext);
       // Custom graphs own their own playback lifecycle and always restart from
       // Start (custom-playlist-plan.md GM-handoff decision); leaving this empty
       // stops the save-position loop above from persisting resume offsets for
@@ -303,7 +303,7 @@ export class MusicController {
       return;
     }
 
-    this.currentContext = targetContext;
+    this._setContext(targetContext);
     this.currentTracks = targetTracks;
     for (const track of targetTracks) this._managedSoundIds.add(track.id);
     this._refreshUI();
@@ -363,6 +363,32 @@ export class MusicController {
    * @returns {number} Milliseconds; 0 means "cut, don't fade".
    * @private
    */
+  /**
+   * Assign the winning context and fire `gameOrchestraContextChanged` when it actually changed.
+   *
+   * The single assignment point inside transitionToContext, which has three of them (the
+   * already-running-graph early return, the custom-graph branch, and the native branch). One
+   * function so a listener cannot be told about two of the three.
+   *
+   * **Diffed by descriptor, not by identity.** Every re-resolution builds a brand-new
+   * PlaylistContext object, so an identity check would fire this on every unrelated mood change
+   * that happened to resolve to the same music - which is precisely the noise the early return
+   * above exists to avoid causing in the engine.
+   *
+   * `currentContext = null` in onCustomGraphChanged() deliberately does NOT come through here: it
+   * is an internal reset that forces a real transition (H8), and emitting there would report a
+   * spurious stop immediately followed by a start of the same context.
+   * @param {PlaylistContext|null} next
+   * @private
+   */
+  _setContext(next) {
+    const from = describePlaylistContext(this.currentContext);
+    const to = describePlaylistContext(next);
+    this.currentContext = next;
+    if (JSON.stringify(from) === JSON.stringify(to)) return;
+    emitHook(CONST.hooks.CONTEXT_CHANGED, { from, to });
+  }
+
   _resolveFadeMs(playlist) {
     const override = resolveCrossfadeOverride(getPlaylistMix(playlist)?.crossfadeMs);
     const fadeDurationSec = game.settings.get(CONST.moduleId, CONST.settings.fadeDuration) ?? 3;
@@ -1158,7 +1184,12 @@ export class MusicController {
         return;
       }
       log(1, `Error playing track '${sound.name}':`, error);
+      return;
     }
+    // After the await, and only on the paths that did not bail: a listener told a track started
+    // that never did would be worse than no hook at all. Note this fires on the head GM only -
+    // it reports what the module DECIDED to play, not what any given client is hearing.
+    emitHook(CONST.hooks.TRACK_STARTED, { playlistId: sound.parent?.id ?? null, soundId: sound.id, soundName: sound.name });
   }
 
   /**
@@ -1179,6 +1210,10 @@ export class MusicController {
   stopTrack(sound) {
     if (!sound) return;
     this._managedSoundIds.delete(sound.id);
+    // Emitted before the stop rather than after it: this method deliberately returns the stop
+    // promise instead of awaiting it (see the doc comment), so there is no "after" to hook on
+    // that would not change that contract. The decision to stop has already been made here.
+    emitHook(CONST.hooks.TRACK_STOPPED, { playlistId: sound.parent?.id ?? null, soundId: sound.id, soundName: sound.name });
     try {
       if (sound.parent?.stopSound) {
         const res = sound.parent.stopSound(sound);
