@@ -538,8 +538,8 @@ const graph = {
    *
    * Two consequences worth knowing before calling this on a live playlist:
    * - it force-writes `mode: UNSEQUENCED` (H1) and never assigns an `initialTrack` (H2);
-   * - saving a graph that is **currently playing restarts it from Start** (H8 + H9). There is no
-   *   in-place patch, deliberately.
+   * - saving a graph that is **currently playing restarts it from Start** (H8 + H9), and discards
+   *   any suspended-run snapshot for it. There is no in-place patch, deliberately.
    * @param {object|string} playlistOrId
    * @param {import('./custom-playback-schema.mjs').CustomGraph} newGraph
    * @param {object} [options] - Extra validation context, merged over the environment context this

@@ -125,6 +125,16 @@ const UNTIL_POLL_INTERVAL_MS = 500;
 const MAX_PLAYLIST_NESTING_DEPTH = 4;
 
 /**
+ * Shape version for the snapshots suspend() produces and resume() consumes. Bump it whenever a
+ * field is added, removed, or reinterpreted; a snapshot whose version does not match is refused
+ * and the engine begins at Start instead. Snapshots live in memory for one session (see
+ * MusicController#_suspendedRuns), so this can never meet a snapshot from an older release - it
+ * exists to stop a stale in-flight snapshot being read against new code during a hot reload, and
+ * to make "the shape changed" a one-line, impossible-to-forget change.
+ */
+const SNAPSHOT_VERSION = 1;
+
+/**
  * Hand-off arming (docs/gapless-handoff-plan.md G3/G4). The engine starts the
  * next track's audio itself, on the browser's audio clock, at the exact seam -
  * but Foundry's PlaylistSound#_onStart stops any Sound whose DOCUMENT doesn't
@@ -500,6 +510,233 @@ export class CustomPlaybackEngine {
    */
   get isRunning() {
     return this._runId !== -1;
+  }
+
+  /**
+   * Capture this engine tree's playback position, then tear it down - so a later engine over the
+   * same graph can pick the run up where it left off instead of beginning at Start (H9).
+   *
+   * Only the controller decides when this is appropriate: a teardown it expects to be UNDONE
+   * (suppression toggled on, a base context displaced by a combat that will end) suspends; a
+   * teardown that genuinely retires the context (a different combatant, a scene change, a live
+   * graph edit) still calls stop() and begins at Start next time. See
+   * MusicController#_retainablePlaylistIds.
+   *
+   * Ordering is load-bearing: stop() destroys the clock, cancels the armed hand-off, clears
+   * _activeNodes/_activeSoundOwners and releases every _registry slot, so the capture has to come
+   * first. Equally load-bearing in the other direction: suspend ALWAYS goes through the real
+   * stop(). Capturing without stopping would strand this tree's registry slots, and a stranded
+   * slot makes that playlist unreferenceable by any Playlist node for the rest of the session.
+   * @param {object} [options]
+   * @param {boolean} [options.stopAudio] - Passed to stop(). Defaults to false so the caller's own
+   *   fade-out crossfades the sounds rather than hard-cutting them (H11), which is what every
+   *   current caller wants.
+   * @returns {Promise<object|null>} The snapshot, or null when there is nothing resumable.
+   */
+  async suspend({ stopAudio = false } = {}) {
+    const snapshot = this._captureSnapshot();
+    await this.stop({ stopAudio });
+    return snapshot;
+  }
+
+  /**
+   * Freeze this engine tree's live token state into a plain, serializable object.
+   *
+   * **Synchronous by construction, and it must stay that way.** `_activeNodes` is mutated from
+   * EngineClock callbacks and AudioEndWatcher 'end' dispatches; an await anywhere in here would
+   * let the map move underneath the read and produce a snapshot describing a state that never
+   * actually existed. Same hazard, same reasoning as _enterTrack's synchronous registration.
+   * @returns {object|null} null when there is nothing worth resuming, or when something in flight
+   *   makes resuming unsafe. Every null degrades to an ordinary start() - which is what lets this
+   *   whole feature be additive.
+   * @private
+   */
+  _captureSnapshot() {
+    const nodes = [];
+    const capturedAt = Date.now();
+    for (const [nodeId, entry] of this._activeNodes) {
+      const node = this.graph.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+
+      if (node.type === 'script') {
+        // A Script node mid-execution is the one state that cannot be resumed OR skipped. Its
+        // code has already run its side effects (a chat message, a roll, an API write) and its
+        // exit was never taken, so re-running it is wrong and stepping over it is wrong too. The
+        // scratch object it shares (`_scriptScratch`) is discarded with the engine anyway, so a
+        // resumed script would see a different world than the one it started in. Refuse the whole
+        // snapshot and let the caller start cleanly - exactly today's behaviour (H17).
+        log(3, () => `CustomPlaybackEngine: refusing to snapshot - script node '${nodeId}' is mid-execution.`);
+        return null;
+      }
+
+      if (node.type === 'track') {
+        nodes.push({
+          nodeId,
+          kind: 'track',
+          soundId: node.soundId,
+          // CUMULATIVE across loop iterations, matching what every scheduler downstream expects
+          // (see _scheduleLoopStop's `loopCount * duration - elapsedMs`). null when the duration
+          // probe has not landed yet - see _recordTrackTiming, which populates asynchronously.
+          elapsedMs: entry.startedAt != null ? capturedAt - entry.startedAt : null,
+          durationMs: entry.durationMs ?? null,
+          loopBaseline: entry.loopBaseline ?? null
+        });
+      } else if (node.type === 'delay') {
+        nodes.push({
+          nodeId,
+          kind: 'delay',
+          durationMs: entry.durationMs ?? 0,
+          remainingMs: Math.max(0, (entry.startedAt ?? capturedAt) + (entry.durationMs ?? 0) - capturedAt)
+        });
+      } else if (node.type === 'playlist') {
+        const child = [...this._children].find((c) => c.playlist?.id === entry.targetPlaylistId) || null;
+        nodes.push({
+          nodeId,
+          kind: 'playlist',
+          targetPlaylistId: entry.targetPlaylistId,
+          passIndex: entry.passIndex ?? 1,
+          child: child ? child._captureSnapshot() : null
+        });
+      }
+    }
+
+    // An empty snapshot is not "resume nothing", it is a trap: resuming it registers no node at
+    // all, the engine goes idle immediately, and the result is permanent silence with no error
+    // anywhere. Never store one; _snapshotUsable refuses it again on the way back in.
+    if (nodes.length === 0) return null;
+
+    return {
+      version: SNAPSHOT_VERSION,
+      playlistId: this.playlist?.id ?? null,
+      // The H8 tripwire. A graph edited while suspended must not be resumed into: node ids may no
+      // longer exist, and an edit is precisely the case where restarting is intended.
+      graphJson: JSON.stringify(this.graph),
+      capturedAt,
+      moodAtStart: this._moodAtStart,
+      phaseAtStart: this._phaseAtStart,
+      recentPicks: [...this._recentPicks].map(([id, picks]) => [id, [...picks]]),
+      nodes
+    };
+  }
+
+  /**
+   * Whether `snapshot` can safely be resumed into THIS engine. All-or-nothing on purpose: a
+   * snapshot with one unusable node is refused whole rather than resumed partially, because
+   * dropping a node would silently delete a Fork branch and leave the graph one voice short for
+   * the rest of the run - the kind of failure that makes no sound and logs nothing.
+   * @param {object|null} snapshot
+   * @returns {boolean}
+   * @private
+   */
+  _snapshotUsable(snapshot) {
+    if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) return false;
+    if (!Array.isArray(snapshot.nodes) || snapshot.nodes.length === 0) return false;
+    if (!this.playlist) return false;
+    if (snapshot.graphJson !== JSON.stringify(this.graph)) {
+      log(3, () => `CustomPlaybackEngine: refusing a snapshot for '${this.playlist?.name}' - its graph changed while suspended.`);
+      return false;
+    }
+    for (const nodeSnapshot of snapshot.nodes) {
+      const node = this.graph.nodes.find((n) => n.id === nodeSnapshot.nodeId);
+      if (!node || node.type !== nodeSnapshot.kind) return false;
+      // A sound deleted from the playlist while suspended. _enterTrack would log an error and
+      // drop the token; refusing here turns that into a clean restart instead.
+      if (nodeSnapshot.kind === 'track' && !this.playlist.sounds?.get(nodeSnapshot.soundId)) {
+        log(3, () => `CustomPlaybackEngine: refusing a snapshot for '${this.playlist?.name}' - sound '${nodeSnapshot.soundId}' is gone.`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Begin playback from a snapshot rather than from the Start node: re-enter exactly the
+   * durational nodes that held a token when the run was suspended, at their recorded positions.
+   *
+   * The instantaneous nodes upstream (Start, Fork, Random, Condition) are deliberately NOT
+   * re-traversed - the token is already past them, and re-walking would re-decide choices that
+   * were made and acted on. That is what makes this a resume rather than a replay, and it is why
+   * the ambiguity a "walk forward to where we were" design would have (does a Random re-draw?
+   * does a Condition re-evaluate?) simply does not arise here.
+   * @param {object|null} snapshot
+   * @returns {Promise<boolean>} false when the snapshot was unusable - the caller must then call
+   *   start(), which is the ordinary begin-at-Start behaviour.
+   */
+  async resume(snapshot) {
+    if (!isHeadGM()) return false;
+    if (!this._snapshotUsable(snapshot)) return false;
+
+    // Mirrors start()'s reset block. _runId in particular MUST still be bumped: every scheduled
+    // callback in the engine guards on it, so reusing an id would let a callback left over from
+    // before the suspend fire against the resumed run.
+    this._runId = ++CustomPlaybackEngine._runCounter;
+    this._activeNodes = new Map();
+    this._enterTrackCallTimes = new Map();
+    this._activeSoundOwners = new Map();
+    this._pendingStops = new Map();
+    this._updateRttMs = null;
+    this._armedHandoff = null;
+    this._lastArmBail = null;
+    this._preloadedSoundIds = new Set();
+    this._warnedFadeSoundIds = new Set();
+    this._fadingOutSounds = new Set();
+    this._pendingWalks = 0;
+    this._idleFired = false;
+    // Restored, NOT re-read from settings as start() does. 'moodChanged'/'phaseChanged' Condition
+    // exits mean "differs from what it was when this RUN began", and a suspend/resume is one run
+    // interrupted, not two. Re-reading here would re-baseline to the state that caused the
+    // suspend, so a mood change that happened before it would be forgotten - silently.
+    this._moodAtStart = snapshot.moodAtStart;
+    this._phaseAtStart = snapshot.phaseAtStart;
+    // Random-node cooldown history, so the NEXT draw still respects what was recently picked.
+    this._recentPicks = new Map(snapshot.recentPicks.map(([id, picks]) => [id, [...picks]]));
+
+    log(3, `CustomPlaybackEngine: run ${this._runId} resuming ${snapshot.nodes.length} node(s) for playlist '${this.playlist?.name}'`);
+    // Concurrently, which is the Fork equivalent: a snapshot legitimately carries several nodes
+    // holding tokens at once, and they all have to come back.
+    await Promise.all(snapshot.nodes.map((nodeSnapshot) => this._resumeNode(nodeSnapshot)));
+    // Same reason start() calls it on its no-Start-node path: if every node above refused to
+    // register (all its sounds vanished, say), a parent Playlist node would otherwise wait
+    // forever for a pass that can never complete.
+    this._checkIdle();
+    return true;
+  }
+
+  /**
+   * Re-enter one snapshotted node at its recorded position. Goes through the ordinary
+   * _enterTrack/_enterDelay/_enterPlaylist, so the singleton rule, the `_activeSoundOwners`
+   * ownership check, MIN_CLEAN_START_INTERVAL_MS and the circuit breaker all still apply exactly
+   * as they do for a cold entry - a resume supplies arguments, it does not bypass anything.
+   * @param {object} nodeSnapshot
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _resumeNode(nodeSnapshot) {
+    const node = this.graph.nodes.find((n) => n.id === nodeSnapshot.nodeId);
+    if (!node) return;
+    this._emitActivity({ enteredNodeId: node.id });
+
+    if (nodeSnapshot.kind === 'track') {
+      const elapsedMs = nodeSnapshot.elapsedMs ?? 0;
+      const durationMs = nodeSnapshot.durationMs ?? 0;
+      // The cumulative/within-iteration split, computed in exactly one place. `elapsedMs` counts
+      // the whole run of the loop (what _scheduleLoopStop and _scheduleConditionalExit subtract
+      // from their absolute boundaries); `offsetMs` is the position inside the current iteration
+      // (what pausedTime seeks to). For a single-pass track they are the same number, which is
+      // why getting this wrong is invisible until someone loops a track.
+      const offsetMs = durationMs > 0 ? elapsedMs % durationMs : 0;
+      return this._enterTrack(node, { elapsedMs, offsetMs, loopBaseline: nodeSnapshot.loopBaseline ?? null });
+    }
+    if (nodeSnapshot.kind === 'delay') {
+      return this._enterDelay(node, { durationMs: nodeSnapshot.durationMs, remainingMs: nodeSnapshot.remainingMs });
+    }
+    if (nodeSnapshot.kind === 'playlist') {
+      return this._enterPlaylist(node, {
+        passIndex: nodeSnapshot.passIndex,
+        targetPlaylistId: nodeSnapshot.targetPlaylistId,
+        child: nodeSnapshot.child ?? null
+      });
+    }
   }
 
   /**
@@ -977,11 +1214,20 @@ export class CustomPlaybackEngine {
    * Play a Track node's sound loopCount times, then advance. See
    * custom-playlist-plan.md H3/H6 for why loops use native repeat + a timed
    * stop rather than replaying on each 'end' event (gapless looping), and why
-   * pausedTime is always forced to 0 (graphs restart, never resume).
+   * pausedTime is forced to 0 on an ordinary start (graphs begin at Start, H9).
+   *
+   * `resume` is the one exception, and it comes from the controller, never from
+   * here: a run suspended for a reason it expects to be undone (suppression
+   * toggled, a base context displaced by combat that will end) hands its
+   * position back through _resumeNode. See suspend()/resume().
    * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {{elapsedMs: number, offsetMs: number, loopBaseline: object|null}|null} [resume] - Position
+   *   this node is resuming at, or null for an ordinary entry. `elapsedMs` is CUMULATIVE across
+   *   loop iterations (what every scheduler below wants); `offsetMs` is the position WITHIN the
+   *   current iteration (what pausedTime wants). They are equal only for a single-pass track.
    * @private
    */
-  async _enterTrack(node) {
+  async _enterTrack(node, resume = null) {
     const runId = this._runId;
     if (this._tripCircuitBreakerIfRunaway(node.id)) return;
     if (this._activeNodes.has(node.id)) return; // singleton: drop this token
@@ -1050,7 +1296,12 @@ export class CustomPlaybackEngine {
     // Trusting the stale document field here (confirmed live) meant this branch
     // never stopped being taken, which is what let restarts cascade unthrottled.
     const alreadyPlaying = sound.sound ? sound.sound.playing === true : sound.playing === true;
-    let elapsedMs = 0;
+    // Seeded from the snapshot on a resume, 0 otherwise. The adopted branch below deliberately
+    // overwrites it with the LIVE currentTime when the audio never actually stopped (suspend uses
+    // stopAudio:false, so a fast suppress/unsuppress toggle lands inside the fade-out window and
+    // reclaims the still-playing sound) - a live reading beats a frozen one, so this is a seed,
+    // not an override.
+    let elapsedMs = resume?.elapsedMs ?? 0;
     // Native looping is wanted for every mode except a single-pass count - hoisted
     // out of the clean-start branch below because the armed path's verification
     // restart (_verifyArmedAudioStarted) has to reproduce the same loop setting.
@@ -1140,6 +1391,12 @@ export class CustomPlaybackEngine {
       // The update is a real server round-trip, and one that changes nothing
       // still costs the full round-trip - straight in the middle of the hand-off.
       //
+      // 0 for an ordinary start (H9), the resumed position otherwise. WITHIN-ITERATION, not
+      // cumulative: PlaylistSound#sync feeds this straight to Sound#play({offset}), which seeks
+      // inside the one buffer - handing it a cumulative figure would seek past the end of a
+      // multi-loop track. The cumulative number goes to the schedulers below instead.
+      const offsetSec = resume?.offsetMs ? resume.offsetMs / 1000 : 0;
+
       // pausedTime must be compared as `?? 0`, NOT against 0 directly: Foundry's
       // own Playlist#stopSound writes `pausedTime: null`, and PlaylistSound#sync
       // reads it as `this.pausedTime && !sound.playing ? this.pausedTime :
@@ -1147,10 +1404,12 @@ export class CustomPlaybackEngine {
       // is nothing to clear. Comparing against 0 made the guard true for every
       // track that had ever been stopped, i.e. every hand-off in a chain, so the
       // skip never actually fired (measured live: a steady ~30ms update on every
-      // transition, half the total gap, until this was corrected).
-      if ((sound.pausedTime ?? 0) !== 0 || sound.repeat !== wantRepeat) {
+      // transition, half the total gap, until this was corrected). The comparison
+      // is against the computed offset, not the literal 0, so a resume to position
+      // 0 still correctly skips the round-trip.
+      if ((sound.pausedTime ?? 0) !== offsetSec || sound.repeat !== wantRepeat) {
         const updateStart = Date.now();
-        await sound.update({ pausedTime: 0, repeat: wantRepeat });
+        await sound.update({ pausedTime: offsetSec, repeat: wantRepeat });
         marks.update = Date.now() - updateStart;
         if (this._runId !== runId) {
           this._releaseTrackNode(node); // engine stopped/restarted while awaiting
@@ -1178,7 +1437,10 @@ export class CustomPlaybackEngine {
         // itself bounded by the per-node throttle above and the circuit breaker.
         log(2, `CustomPlaybackEngine: track node '${node.id}' did not actually start playing after playTrack() (likely a silently-aborted/interrupted play) - retrying.`);
         this._releaseTrackNode(node);
-        return this._enterTrack(node);
+        // `resume` is forwarded: the retry is the same entry attempt, so it must land at the same
+        // position. Dropping it here would make a resume that lost one play() race silently
+        // restart from the top - the exact bug this whole path exists to prevent.
+        return this._enterTrack(node, resume);
       }
     }
 
@@ -1232,7 +1494,7 @@ export class CustomPlaybackEngine {
       // Also plays via native repeat (set above, same as forever) - the only
       // difference is WHEN this node takes its one exit. See
       // _scheduleConditionalExit's own doc comment.
-      this._scheduleConditionalExit(node, sound, loop, elapsedMs, runId);
+      this._scheduleConditionalExit(node, sound, loop, elapsedMs, runId, resume?.loopBaseline ?? null);
       return;
     }
     if (loopCount === 1) {
@@ -2065,20 +2327,35 @@ export class CustomPlaybackEngine {
    * @param {import('./custom-playback-schema.mjs').GraphNode} node
    * @param {object} sound
    * @param {import('./custom-playback-schema.mjs').LoopSpec} loop
-   * @param {number} elapsedMs - Position within the current loop iteration at entry (adoption only).
+   * @param {number} elapsedMs - Position at entry, CUMULATIVE across loop iterations (0 unless
+   *   adopting an already-playing sound or resuming a snapshot). Every boundary below is computed
+   *   absolutely from `startedAt = now - elapsedMs`, so this must count the whole run of the loop,
+   *   not the position within the current iteration.
    * @param {number} runId
+   * @param {{moodAtStart: string, phaseAtStart: string}|null} [restoredBaseline] - Supplied when
+   *   resuming a suspended run; see below.
    * @private
    */
-  _scheduleConditionalExit(node, sound, loop, elapsedMs, runId) {
+  _scheduleConditionalExit(node, sound, loop, elapsedMs, runId, restoredBaseline = null) {
     const startedAt = Date.now() - elapsedMs;
     // Baseline for 'moodChanged'/'phaseChanged' (see _evaluateCondition) - this
     // loop's own start, not the run's. A long-running 'forever'-with-escape
     // track can outlive several unrelated mood/phase changes that happened
     // before it was even entered; only a change from HERE on should count.
-    const baseline = {
+    //
+    // Restored rather than re-read when resuming: a suspend/resume is ONE loop
+    // interrupted, not two. Re-reading live here would re-baseline to the state
+    // that caused the suspend, so a 'moodChanged' escape would then never fire -
+    // silently, with the loop running forever.
+    const baseline = restoredBaseline ?? {
       moodAtStart: game.settings.get(CONST.moduleId, CONST.settings.activeMood) || '',
       phaseAtStart: game.settings.get(CONST.moduleId, CONST.settings.activePhase) || ''
     };
+    // Stashed on the entry so _captureSnapshot() can find it. It lives nowhere else - this
+    // closure is its only other home - and a snapshot that could not carry it would resume
+    // into the silent never-exits case described above.
+    const activeEntry = this._activeNodes.get(node.id);
+    if (activeEntry) activeEntry.loopBaseline = baseline;
 
     /** Cut the track and hop immediately - the original, un-armed behaviour. */
     const exitImmediately = () => {
@@ -2140,7 +2417,15 @@ export class CustomPlaybackEngine {
           checkAtBoundary(loopIndex + 1);
         }, { precise: true });
       };
-      checkAtBoundary(Math.max(1, minLoops));
+      // Which boundary to check FIRST. Seeding this at minLoops unconditionally was wrong for any
+      // entry with a non-zero elapsedMs: every already-past boundary schedules at Math.max(0, ...)
+      // = 0 and they cascade in one burst, so the exit can land on a boundary that is already
+      // history. Deriving the index from elapsedMs instead is exact, and cannot disagree with the
+      // boundary arithmetic above because both read the same two numbers. Also corrects the
+      // pre-existing adoption path, not just resume.
+      const loopMs = duration * 1000;
+      const elapsedLoops = loopMs > 0 ? Math.floor(elapsedMs / loopMs) : 0;
+      checkAtBoundary(Math.max(Math.max(1, minLoops), elapsedLoops + 1));
     };
 
     if (loop.boundary === 'loopEnd') {
@@ -2185,6 +2470,8 @@ export class CustomPlaybackEngine {
    * Wait a fixed or random interval, then follow the single exit. Durational
    * and subject to the singleton rule, exactly like Track.
    * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {{durationMs: number, remainingMs: number}|null} [resume] - Position this node is
+   *   resuming at, or null for an ordinary entry. See suspend()/resume().
    * @private
    */
   /**
@@ -2353,15 +2640,22 @@ export class CustomPlaybackEngine {
     };
   }
 
-  async _enterDelay(node) {
+  async _enterDelay(node, resume = null) {
     const runId = this._runId;
     if (this._activeNodes.has(node.id)) return; // singleton: drop this token
 
     const min = node.delay?.min ?? 0;
     const max = Math.max(min, node.delay?.max ?? min);
-    const ms = (min + this._rng() * (max - min)) * 1000;
+    const drawnMs = (min + this._rng() * (max - min)) * 1000;
+    // A resumed delay waits out what was LEFT of the interval it originally drew - re-drawing
+    // would let a suspend/resume silently re-roll a random wait.
+    const ms = resume ? resume.remainingMs : drawnMs;
+    // durationMs stays the FULL interval and startedAt is back-dated to match, so the editor's
+    // drain overlay (editor-highlight-mixin.mjs reconstructs progress from exactly this pair)
+    // picks the sweep up mid-flight instead of restarting it at full width.
+    const durationMs = resume ? resume.durationMs : drawnMs;
 
-    this._activeNodes.set(node.id, { sound: null, durationMs: ms, startedAt: Date.now() });
+    this._activeNodes.set(node.id, { sound: null, durationMs, startedAt: Date.now() - (durationMs - ms) });
     this._emitActivity();
     log(3, `CustomPlaybackEngine: delay '${node.id}' waiting ${Math.round(ms)}ms`);
     this.clock.schedule(node.id, Math.max(0, ms), () => {
@@ -2523,9 +2817,11 @@ export class CustomPlaybackEngine {
    * from its native Foundry mode (native-mode-graph.mjs, plan D5). node.loop
    * counts passes, exactly like Track counts native-repeat loops.
    * @param {import('./custom-playback-schema.mjs').GraphNode} node
+   * @param {{passIndex: number, targetPlaylistId: string, child: object|null}|null} [resume] -
+   *   Position this node is resuming at, or null for an ordinary entry. See suspend()/resume().
    * @private
    */
-  async _enterPlaylist(node) {
+  async _enterPlaylist(node, resume = null) {
     const runId = this._runId;
     if (this._tripCircuitBreakerIfRunaway(node.id)) return;
     if (this._activeNodes.has(node.id)) return; // singleton: drop this token
@@ -2545,7 +2841,14 @@ export class CustomPlaybackEngine {
       return this._skipPlaylistNode(node, runId);
     }
 
-    this._activeNodes.set(node.id, { sound: null, targetPlaylistId: target.id });
+    // A resume whose reference re-resolved to a DIFFERENT playlist is not a resume of that
+    // subtree: the child snapshot describes a run over a playlist this node no longer plays, and
+    // a pass count against it means nothing. Start that case clean instead. (The reference is
+    // re-resolved live above precisely because it may be an overlay-reactive one.)
+    const resumingSameTarget = !!resume && target.id === resume.targetPlaylistId;
+    const passIndex = resumingSameTarget ? resume.passIndex : 1;
+
+    this._activeNodes.set(node.id, { sound: null, targetPlaylistId: target.id, passIndex });
     this._registry.add(target.id);
     this._emitActivity();
 
@@ -2553,7 +2856,7 @@ export class CustomPlaybackEngine {
       this._releasePlaylistNode(node);
       return;
     }
-    return this._runPlaylistPass(node, target, runId, 1);
+    return this._runPlaylistPass(node, target, runId, passIndex, resumingSameTarget ? resume.child : null);
   }
 
   /**
@@ -2568,10 +2871,18 @@ export class CustomPlaybackEngine {
    * @param {object} target - The resolved target Playlist document.
    * @param {number} runId - This (parent) engine's run id when the node was entered.
    * @param {number} passIndex - 1-based.
+   * @param {object|null} [childSnapshot] - An EngineSnapshot for the child to resume from instead
+   *   of starting at its Start node. Refused silently (falling back to start()) if unusable.
    * @returns {Promise<void>}
    * @private
    */
-  async _runPlaylistPass(node, target, runId, passIndex) {
+  async _runPlaylistPass(node, target, runId, passIndex, childSnapshot = null) {
+    // Mirrored onto the entry here - the one place that knows which pass is actually starting -
+    // so _captureSnapshot() can see it. It is otherwise a closure argument and nothing else, and
+    // a snapshot without it would send a "play this playlist 3 times" node back to pass 1 on
+    // every resume.
+    const entry = this._activeNodes.get(node.id);
+    if (entry) entry.passIndex = passIndex;
     const graph = getCustomGraph(target) || buildNativeModeGraph(target, { rng: this._rng });
     const childContext = new PlaylistContext(
       this.playlistContext?.context ?? 'area',
@@ -2590,7 +2901,9 @@ export class CustomPlaybackEngine {
       onIdle: () => this._onPassComplete(node, target, runId, passIndex, child)
     });
     this._children.add(child);
-    await child.start();
+    // Added to _children BEFORE either entry point is awaited, for the reason in this method's
+    // doc comment: onIdle can fire synchronously inside a trivial target.
+    if (!(childSnapshot && (await child.resume(childSnapshot)))) await child.start();
   }
 
   /**

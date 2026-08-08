@@ -6,6 +6,49 @@ import { getPlaylistMix, mixedVolume } from './playlist-mix-apply.mjs';
 import { coerceDuckFactor, resolveCrossfadeOverride } from './playlist-mix.mjs';
 
 /**
+ * How long a suspended graph run stays resumable. The longest plausible legitimate gap is a
+ * combat that ran its whole course while the area ambience waited, and half an hour covers that
+ * comfortably. Past it, the musical moment the position belongs to is not the current one any
+ * more: dropping back in 28 minutes deep, into a state nobody remembers setting, is more
+ * surprising than simply starting the track again.
+ */
+const MAX_SUSPENDED_RUN_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * How many suspended runs to keep. Bounds memory, and bounds a pathological toggle loop (a macro
+ * flipping suppression repeatedly) from growing the map without limit. A GM cycling more than
+ * eight distinct graphs inside the age window loses the least recently suspended, which is the
+ * right one to lose.
+ */
+const MAX_SUSPENDED_RUNS = 8;
+
+/**
+ * Why a running engine is being torn down.
+ * - `'replaced'` - the context is genuinely gone: a different combatant, a scene change, a
+ *   deleted binding, a live graph edit. Nothing is kept and the next run begins at Start.
+ * - `'suspended'` - the context is still configured and still resolvable; only a filter or a
+ *   priority decision took it away, so it is expected back. Its position is captured and handed
+ *   to the next engine over the same playlist.
+ * @typedef {'replaced'|'suspended'} TeardownReason
+ */
+
+/**
+ * Whether a suspended-run snapshot tree plays `playlistId` anywhere - as its own playlist, or as
+ * the target of a Playlist node at any nesting depth. Used to invalidate a parent's snapshot when
+ * a nested target's graph is edited (H8).
+ * @param {object|null} snapshot
+ * @param {string} playlistId
+ * @returns {boolean}
+ */
+function snapshotReferencesPlaylist(snapshot, playlistId) {
+  if (!snapshot) return false;
+  if (snapshot.playlistId === playlistId) return true;
+  return (snapshot.nodes || []).some(
+    (node) => node.kind === 'playlist' && (node.targetPlaylistId === playlistId || snapshotReferencesPlaylist(node.child, playlistId))
+  );
+}
+
+/**
  * Main music controller class for Game Orchestra module
  */
 export class MusicController {
@@ -35,6 +78,18 @@ export class MusicController {
     // One-shot: whether this session has cleaned up playback Foundry restored
     // from a previous one (see reconcileRestoredPlayback).
     this._restoredPlaybackReconciled = false;
+    // playlistId -> the position of a graph run this controller tore down for a reason it expects
+    // to be undone (suppression toggled on, a base context displaced by a combat that will end).
+    // Handed back to the next engine over that playlist via CustomPlaybackEngine#resume.
+    //
+    // IN MEMORY, FOR THIS SESSION, ON THIS HEAD GM ONLY - never a flag, never persisted. That is
+    // what keeps the rest of H9 intact: a page refresh still begins at Start, so api.graph.set()'s
+    // documented restart contract, H8's restart-on-edit, reconcileRestoredPlayback()'s "stop
+    // everything Foundry resurrected", and the mixer's separate `mix` flag (HR-H) all keep
+    // holding without qualification. Keyed by playlist id because that is the identity the
+    // position belongs to - the same graph resumes whether it returns as the base or as a layer.
+    /** @type {Map<string, {snapshot: object, capturedAt: number}>} */
+    this._suspendedRuns = new Map();
   }
 
   /**
@@ -153,6 +208,10 @@ export class MusicController {
       // PlaylistSound from the base to a layer, and transitionToContext() has to know that before
       // it decides what to fade out - see its `layerSoundIds`.
       const incomingLayers = this._collectLayerContexts(winnerContext);
+      // Computed from the UNFILTERED pool above, and threaded into both calls below for the same
+      // reason incomingLayers is: the two must not disagree about which teardowns are expected to
+      // be undone. See _retainablePlaylistIds.
+      const retainable = this._retainablePlaylistIds(contexts);
       const targetTracks = winnerContext?.tracks || [];
       const primaryTrackName = targetTracks[0]?.name || 'none';
 
@@ -172,14 +231,14 @@ export class MusicController {
         if (contextUnchanged && !audioActuallyPlaying && targetTracks.length > 0) {
           log(3, 'Context unchanged but audio is not playing — restarting tracks.');
         }
-        await this.transitionToContext(winnerContext, incomingLayers);
+        await this.transitionToContext(winnerContext, incomingLayers, retainable);
       }
 
       // Always, including on the no-change path above: the base can be entirely unchanged while
       // a layer has to swap or stop, which is the normal case for a turn passing between two
       // combatants when neither is exclusive. Returning early here would strand the outgoing
       // combatant's theme playing over everyone else's turn.
-      await this._syncLayers(incomingLayers);
+      await this._syncLayers(incomingLayers, retainable);
     } catch (error) {
       log(1, 'Error in playCurrentTrack calculation:', error);
     } finally {
@@ -200,7 +259,7 @@ export class MusicController {
    *   this transition finishes ({@link MusicController#_collectLayerContexts}). Their sounds are
    *   held back from the fade-out below; see `layerSoundIds`.
    */
-  async transitionToContext(targetContext, incomingLayers = null) {
+  async transitionToContext(targetContext, incomingLayers = null, retainable = null) {
     // A custom graph already driving the exact playlist the resolver just
     // picked again must be left alone. Without this, every re-evaluation
     // that still resolves to the same running graph (e.g. an unrelated mood
@@ -251,7 +310,17 @@ export class MusicController {
     // stay in _managedSoundIds and (unless shared with the new target) are absent
     // from targetTrackIds, so the fade-out loop below crossfades them exactly like
     // a native transition instead of a hard cut (custom-playlist-plan.md H11).
-    await this._customEngine?.stop({ stopAudio: false });
+    //
+    // Suspended rather than stopped when the outgoing playlist is still configured and
+    // resolvable - the combat-starts-then-ends round trip - so it resumes where it was instead of
+    // beginning at Start. Awaited, as it always was: the replacement engine is constructed below
+    // with no yield in between, and the cross-engine stop-before-start race stop()'s own comment
+    // describes applies just the same to a suspend.
+    if (this._customEngine) {
+      const outgoingId = this._customEngine.playlist?.id ?? null;
+      const reason = outgoingId && retainable?.has(outgoingId) ? 'suspended' : 'replaced';
+      await this._retireEngine(this._customEngine, reason, { stopAudio: false });
+    }
     this._customEngine = null;
 
     // Clear any stale fading track entries in-place from previous transitions
@@ -295,11 +364,16 @@ export class MusicController {
       // Custom graphs own their own playback lifecycle and always restart from
       // Start (custom-playlist-plan.md GM-handoff decision); leaving this empty
       // stops the save-position loop above from persisting resume offsets for
-      // graph sounds on the *next* transition, since graphs never resume (H9).
+      // graph sounds on the *next* transition. A graph that does resume gets its position from a
+      // suspend/resume snapshot instead, never from this per-sound position memory (H9).
       this.currentTracks = [];
       this._customEngine = new CustomPlaybackEngine(targetContext, this);
       this._refreshUI();
-      await this._customEngine.start();
+      // Resumed when this exact playlist was suspended earlier and the snapshot still applies;
+      // resume() refuses (returning false) on a changed graph, a missing sound, or an expired
+      // capture, and start() is then the ordinary begin-at-Start path.
+      const suspended = this._takeSuspendedRun(targetContext.playlist?.id ?? null);
+      if (!(suspended && (await this._customEngine.resume(suspended)))) await this._customEngine.start();
       return;
     }
 
@@ -511,14 +585,24 @@ export class MusicController {
    * Each layer is its own independent CustomPlaybackEngine. None is a context in the winner pool,
    * none has a priority, and none is ever crossfaded against the base: the base simply keeps
    * playing underneath, which is the entire feature - no stop, no restart, and therefore nothing
-   * to resume (position memory can't help a graph anyway, H9).
+   * to resume for the BASE.
+   *
+   * The layer itself is a different matter. A layer taken away by something reversible - a
+   * suppression toggle, most notably - is suspended rather than stopped, and resumes its own
+   * position when it comes back (H9). That was the reported bug: the base layer resumed correctly
+   * while the overlay on top of it restarted from the beginning, because a layer always runs on an
+   * engine and an engine always began at Start.
    * @param {Map<string, PlaylistContext>} [desired] - Pre-resolved by playCurrentTrack() before
    *   the base transition, so this and transitionToContext() act on the identical set. Resolved
    *   here when called on its own.
+   * @param {Set<string>|null} [retainable] - Playlist ids still configured and resolvable, from
+   *   _retainablePlaylistIds. A layer whose playlist is in here was taken away by a decision that
+   *   can be taken back (suppression, combat outranking area) and is suspended rather than
+   *   discarded; anything else - a combatant's turn passing, most notably - is retired outright.
    * @returns {Promise<void>}
    * @private
    */
-  async _syncLayers(desired = this._collectLayerContexts()) {
+  async _syncLayers(desired = this._collectLayerContexts(), retainable = null) {
 
     // Every retirement first, before any start. A playlist moving from one layer key to another
     // (a phase overlay naming what the outgoing combatant was already playing) would otherwise be
@@ -529,7 +613,8 @@ export class MusicController {
       // lands on the playlist already layering (an unrelated mood/phase change, a combatant
       // update) must not restart it from Start.
       if (next && run.engine?.isRunning && run.engine.playlist?.id === next.playlist?.id) continue;
-      await this._retireLayer(key);
+      const layerPlaylistId = run.engine?.playlist?.id ?? null;
+      await this._retireLayer(key, layerPlaylistId && retainable?.has(layerPlaylistId) ? 'suspended' : 'replaced');
     }
 
     for (const [key, context] of desired) {
@@ -561,7 +646,11 @@ export class MusicController {
       // Before start(), so the base has already dipped by the time the layer's first track is
       // audible rather than a beat after it.
       await this._applyDuck();
-      await engine.start();
+      // A layer suspended earlier resumes where it was. This is the reported bug's path: an
+      // overlay dropped by a suppression toggle used to come back at the top of its track while
+      // the base layer underneath resumed correctly.
+      const suspended = this._takeSuspendedRun(playlist.id);
+      if (!(suspended && (await engine.resume(suspended)))) await engine.start();
     }
 
     // Re-published, not skipped when nothing changed: a running layer's engine registry may have
@@ -695,10 +784,13 @@ export class MusicController {
    * Stopped with `stopAudio: false` for the same reason transitionToContext does - it hands the
    * sounds to the fade instead of hard-cutting them (H11).
    * @param {string} key - A key from {@link MusicController#_collectLayerContexts}.
+   * @param {TeardownReason} [reason] - 'suspended' captures the layer's position first, so it
+   *   resumes if it comes back. Defaults to 'replaced' so every existing caller - notably
+   *   onCustomGraphChanged, where restarting is the point (H8) - keeps its behaviour.
    * @returns {Promise<void>}
    * @private
    */
-  async _retireLayer(key) {
+  async _retireLayer(key, reason = 'replaced') {
     const run = this._layers.get(key);
     if (!run) return;
     const engine = run.engine;
@@ -713,8 +805,11 @@ export class MusicController {
     const ownedElsewhere = this._soundIdsOwnedOutside(key);
     const sounds = engine.activeSounds.filter((sound) => !ownedElsewhere.has(sound?.id));
     this._layers.delete(key);
-    log(3, `Retiring music layer '${engine.playlist?.name || 'unknown'}' (${key}, fading ${sounds.length} track(s) over ${fadeDurationMs}ms)`);
-    await engine.stop({ stopAudio: false });
+    log(3, `Retiring music layer '${engine.playlist?.name || 'unknown'}' (${key}, reason=${reason}, fading ${sounds.length} track(s) over ${fadeDurationMs}ms)`);
+    // Both reads above (activeSounds, _soundIdsOwnedOutside) had to happen before the teardown,
+    // and _retireEngine wraps the same stop() this used to call directly - so the capture lands
+    // pre-teardown too, and the existing ordering still composes. Do not move these apart.
+    await this._retireEngine(engine, reason, { stopAudio: false });
     this._fadeOutSounds(sounds, fadeDurationMs);
     // Released here rather than in _syncLayers so that EVERY teardown path lifts this layer's
     // share of the duck - a stale duck is silent and invisible, and would leave the table's music
@@ -909,6 +1004,12 @@ export class MusicController {
     // either way, a live edit to ITS graph needs the same rebuild.
     const isCurrent = this.currentContext?.playlist?.id === playlist?.id;
     const isNested = this._customEngine?.isPlayingPlaylist?.(playlist?.id) ?? false;
+    // A live edit is THE case where beginning at Start is the intended behaviour (H8), so any
+    // suspended position for this graph is now void - as is any parent's, whose snapshot carries
+    // a child snapshot over the graph that just changed. The engine refuses a stale snapshot on
+    // its own too (resume() compares the serialized graph), but that is the backstop; a graph
+    // edited while nothing was playing would otherwise sit in the map looking valid.
+    this.forgetSuspendedRun(playlist?.id ?? null);
     // Each layer is a separate engine tree and rebuilds on its own: retiring it here is enough,
     // because the _syncLayers() at the end of the playCurrentTrack() below starts a fresh one
     // over the saved graph. Deliberately NOT folded into the base rebuild - an edit to a layer's
@@ -1089,6 +1190,11 @@ export class MusicController {
    * @private
    */
   _resolveCombatantContext(combat = this.currentCombat) {
+    // Only the CURRENT combatant, never a sweep of all of them. Besides being the definition of
+    // "whose turn it is", this is load-bearing for _retainablePlaylistIds: an outgoing combatant's
+    // theme is absent from the candidate pool entirely, which is what classes a turn passing as a
+    // real retirement rather than a suspend. Widen this and a boss theme would start resuming
+    // mid-track on some later turn, which reads as a glitch.
     const combatant = combat?.combatant;
     if (!combatant || combatant.isDefeated) return null;
     // First source that carries an override wins - see _getCombatantMusicSources(). Taking every
@@ -1142,9 +1248,14 @@ export class MusicController {
    * layer does not compete.
    * @param {PlaylistContext|null} [baseContext] - The base these layers will play over; defaults
    *   to the one currently playing.
+   * @param {object} [options]
+   * @param {boolean} [options.filtered] - false skips filterPlaylists() and the area-under-combat
+   *   rule, yielding every overlay that is merely CONFIGURED rather than every overlay that wins.
+   *   That is the reading _retainablePlaylistIds needs: an overlay suppressed a moment ago is
+   *   exactly the one whose position is worth keeping, and the filtered reading cannot see it.
    * @returns {PlaylistContext[]}
    */
-  getOverlayLayerContexts(baseContext = this.currentContext) {
+  getOverlayLayerContexts(baseContext = this.currentContext, { filtered = true } = {}) {
     const scene = this.currentScene;
     const defaultConfig = game.settings.get(CONST.moduleId, CONST.settings.defaultMusic) || null;
     const contexts = [];
@@ -1154,8 +1265,9 @@ export class MusicController {
         context = PlaylistContext.layerFromDocument(document, type, scene);
         if (context) break;
       }
-      if (!context || !this.filterPlaylists(context)) continue;
-      if (type === 'area' && baseContext?.context === 'combat') continue;
+      if (!context) continue;
+      if (filtered && !this.filterPlaylists(context)) continue;
+      if (filtered && type === 'area' && baseContext?.context === 'combat') continue;
       contexts.push(context);
     }
     return contexts;
@@ -1231,6 +1343,129 @@ export class MusicController {
     } catch (error) {
       // Ignore abort errors from rapid playback transitions
     }
+  }
+
+  /**
+   * Suspend `engine` and file the resulting position under its playlist id, so the next engine
+   * over that playlist can resume it. Falls back to an ordinary stop when the engine had nothing
+   * resumable to capture, so callers never have to distinguish the two.
+   * @param {CustomPlaybackEngine} engine
+   * @param {TeardownReason} reason
+   * @param {object} [options]
+   * @param {boolean} [options.stopAudio] - Passed through; false hands the sounds to the caller's
+   *   own fade-out rather than hard-cutting them (H11).
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _retireEngine(engine, reason, { stopAudio = false } = {}) {
+    if (!engine) return;
+    const playlistId = engine.playlist?.id ?? null;
+    if (reason !== 'suspended' || !playlistId) {
+      await engine.stop({ stopAudio });
+      return;
+    }
+    const snapshot = await engine.suspend({ stopAudio });
+    if (!snapshot) return;
+    this._sweepSuspendedRuns();
+    // A loop, not a single eviction: one delete per insert only holds the cap if the map was
+    // never already over it, which is not a property worth relying on.
+    while (this._suspendedRuns.size >= MAX_SUSPENDED_RUNS && !this._suspendedRuns.has(playlistId)) {
+      // Oldest by capture time, not by insertion order: an entry re-suspended just now is the
+      // most current thing in here regardless of when it first appeared.
+      let oldestKey = null;
+      let oldestAt = Infinity;
+      for (const [key, entry] of this._suspendedRuns) {
+        if (entry.capturedAt < oldestAt) {
+          oldestAt = entry.capturedAt;
+          oldestKey = key;
+        }
+      }
+      if (!oldestKey) break;
+      this._suspendedRuns.delete(oldestKey);
+    }
+    this._suspendedRuns.set(playlistId, { snapshot, capturedAt: Date.now() });
+    log(3, `Suspended the graph run for playlist '${engine.playlist?.name}' (${snapshot.nodes.length} active node(s)); it will resume if this context returns.`);
+  }
+
+  /**
+   * Take the suspended position for a playlist, if there is a usable one. Consumed on read: a
+   * snapshot is single-use, since once resumed it describes a run that has moved on, and leaving
+   * it behind would let an unrelated later start pick it up.
+   * @param {string|null} playlistId
+   * @returns {object|null}
+   * @private
+   */
+  _takeSuspendedRun(playlistId) {
+    if (!playlistId) return null;
+    this._sweepSuspendedRuns();
+    const entry = this._suspendedRuns.get(playlistId);
+    if (!entry) return null;
+    this._suspendedRuns.delete(playlistId);
+    return entry.snapshot;
+  }
+
+  /**
+   * Drop every suspended run older than MAX_SUSPENDED_RUN_AGE_MS. Lazy (called on read and on
+   * write) rather than timer-driven - there is no correctness need for a stale entry to disappear
+   * at any particular moment, only for it never to be used.
+   * @private
+   */
+  _sweepSuspendedRuns() {
+    const now = Date.now();
+    for (const [key, entry] of this._suspendedRuns) {
+      if (now - entry.capturedAt > MAX_SUSPENDED_RUN_AGE_MS) this._suspendedRuns.delete(key);
+    }
+  }
+
+  /**
+   * Forget any suspended position for a playlist, and for any suspended run whose tree references
+   * it through a Playlist node. Called when a graph is edited (H8): a live edit is exactly the
+   * case where restarting from Start is the intended behaviour, and a nested target's edit
+   * invalidates its parent's snapshot too, since that parent carries a child snapshot over the
+   * edited graph.
+   * @param {string|null} playlistId
+   */
+  forgetSuspendedRun(playlistId) {
+    if (!playlistId) return;
+    this._suspendedRuns.delete(playlistId);
+    for (const [key, entry] of this._suspendedRuns) {
+      if (snapshotReferencesPlaylist(entry.snapshot, playlistId)) this._suspendedRuns.delete(key);
+    }
+  }
+
+  /**
+   * Playlist ids that are still configured and resolvable right now, whether or not they won the
+   * resolution. This is what tells a teardown worth suspending from one worth discarding.
+   *
+   * A context that has vanished from THIS set has genuinely gone away - a different combatant, a
+   * scene change, a deleted binding - and its position is meaningless next time. One that is
+   * merely absent from the filtered/sorted result was taken away by a decision that can be taken
+   * back: suppression, or combat outranking area. Those are the ones expected back, and the ones
+   * whose position is worth keeping.
+   *
+   * Derived here rather than plumbed as a hint from each caller on purpose. There are roughly a
+   * dozen entry points into playCurrentTrack() (every setting onChange, every combat hook, the
+   * transport controls), and a missed one would fail SILENTLY in the restarts-from-the-top
+   * direction - indistinguishable from the bug this exists to fix. The unfiltered pool is already
+   * in hand at the one place that matters.
+   * @param {PlaylistContext[]} contexts - The unfiltered candidate pool (getAllCurrentPlaylists).
+   * @returns {Set<string>}
+   * @private
+   */
+  _retainablePlaylistIds(contexts) {
+    const ids = new Set();
+    for (const context of contexts || []) {
+      if (context?.playlist?.id) ids.add(context.playlist.id);
+    }
+    // Layers are resolved from their own sources and never appear in the base pool, so they need
+    // their own unfiltered pass - otherwise the reported bug (an overlay layer dropped by
+    // suppression) would never be classed retainable at all.
+    const combatant = this._resolveCombatantContext();
+    if (combatant?.context?.playlist?.id) ids.add(combatant.context.playlist.id);
+    for (const context of this.getOverlayLayerContexts(this.currentContext, { filtered: false })) {
+      if (context?.playlist?.id) ids.add(context.playlist.id);
+    }
+    return ids;
   }
 
   /**

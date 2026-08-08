@@ -167,20 +167,48 @@ starting the replacement.
 That `await` is not optional — see [graph-engine.md](graph-engine.md) § *The stop-before-start
 race*.
 
-## H9 — Graphs restart from Start; they never resume
+## H9 — Graphs begin at Start; they resume only from a same-session snapshot
 
-**Confidence: quoted.** Cited by `music-controller.mjs`. Described elsewhere as "the locked
-GM-handoff decision."
+**Confidence: quoted, amended.** Cited by `music-controller.mjs`. Described elsewhere as "the
+locked GM-handoff decision."
 
 Native playlists remember their offset across interruptions (that is a headline module feature).
-**Custom graphs do not.** Consequences that must be kept consistent:
+**A custom graph has no persisted position at all** — nothing about a run survives a page refresh,
+a world reload, or a change of head GM. `start()` always begins at the Start node and always
+forces `pausedTime: 0`.
 
-- `_enterTrack()` always forces `pausedTime: 0`.
-- `transitionToContext()` sets `currentTracks = []` for a custom playlist, which stops the
-  save-position loop from persisting resume offsets for graph sounds on the *next* transition.
-- `reconcileRestoredPlayback()` stops custom-playlist sounds that Foundry resurrected from
-  persisted `playing: true` document state — since nothing of a previous run should survive,
-  whereas native playlists keep resuming across a refresh as they always have.
+The one exception is deliberately narrow, in memory, and controller-driven. When `MusicController`
+tears down an engine for a reason it expects to be **undone** — suppression toggled on, or a base
+context displaced by a combat that will end — it calls `suspend()` rather than `stop()`, keeps the
+returned snapshot in `_suspendedRuns` (keyed by playlist id), and hands it to the next engine over
+that playlist via `resume()`. See [graph-engine.md](graph-engine.md) § *Suspend and resume*.
+
+The distinction is expressed once, as `_retainablePlaylistIds()`: a context still present in the
+*unfiltered* candidate pool was taken away by a decision that can be taken back, and is suspended;
+one that has left the pool entirely — a different combatant, a scene change, a deleted binding —
+is retired outright. It is derived there rather than passed as a hint from each caller because a
+missed caller would fail silently, in the restarts-from-the-top direction.
+
+What that exception does **not** touch, and must not start touching:
+
+- **`api.graph.set()` still restarts from Start** ([H8](#h8--a-live-graph-edit-restarts-the-run)).
+  A live edit is the case where a restart is *wanted*; `onCustomGraphChanged()` explicitly calls
+  `forgetSuspendedRun()` for the edited playlist and for any parent whose snapshot tree references
+  it. `resume()` independently refuses a snapshot whose serialized graph no longer matches, so a
+  missed hook and a graph edited while nothing played land on the same answer.
+- **Nothing is written to a flag.** The mixer's separate `game-orchestra.mix` flag exists because
+  a `customPlayback` write restarts the graph ([HR-H](#hr-h--keep-the-mix-out-of-the-customplayback-flag));
+  a persisted position would put that reasoning back in play. This is memory on the head GM, for
+  this session, and nothing else.
+- **`reconcileRestoredPlayback()` still stops every custom-playlist sound Foundry resurrects.** A
+  refresh destroys the map along with the page, so there is nothing to reconcile against.
+- **`transitionToContext()` still sets `currentTracks = []` for a custom playlist**, so the
+  save-position loop never persists resume offsets for graph sounds.
+- **A snapshot is whole-tree and all-or-nothing.** It is refused outright — falling back to
+  `start()` — if the graph changed, the playlist or any referenced sound is gone, a Script node
+  held a token, the capture is older than `MAX_SUSPENDED_RUN_AGE_MS`, or it carries no nodes.
+  Every refusal degrades to the pre-existing behaviour, which is what let this be added without
+  weakening anything above.
 
 ## H10 — "Play once and stop" requires an explicit End node
 

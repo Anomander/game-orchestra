@@ -109,8 +109,8 @@ The placement matters: this is the first point in the session where audio is kno
 requirement. Reconciling earlier would mean stopping sounds that were still only queued, then
 watching them start anyway a moment later.
 
-Only **custom** playlists are reconciled — graphs always restart from Start (H9), so nothing of a
-previous run should survive. Native playlists keep resuming across a refresh as they always have.
+Only **custom** playlists are reconciled — a graph never has a *persisted* position (H9), so
+nothing of a previous run should survive a refresh. Native playlists keep resuming across a refresh as they always have.
 The scan follows Playlist-node references transitively (including *indirect* ones, since this
 runs on the head GM with a ready game and live scene/mood state), because a Playlist node
 commonly targets a plain native playlist that the top-level loop would never otherwise examine.
@@ -141,7 +141,8 @@ scope entity used for position memory.
 A **layer** plays *alongside* the winner instead of against it. It is not in the candidate pool at
 all — it has no priority, it never competes, and it cannot be beaten. Each one runs on its **own
 independent `CustomPlaybackEngine`** beside the base one, so the base is never stopped, never
-restarts, and has nothing to resume (which matters: position memory can't help a graph — H9).
+restarts, and has nothing to resume. A layer that is itself torn down and later restored resumes
+from a same-session snapshot rather than position memory — H9.
 
 There are **two sources of layers, and both can be live at once.** `_collectLayerContexts()`
 returns them keyed by which one asked, and `_syncLayers()` reconciles that map against
@@ -383,7 +384,7 @@ first would start already in whatever phase the previous fight ended on (e.g. `E
   save positions of outgoing tracks
   fade out managed sounds not in the target
         │
-        ├─ target is custom → new CustomPlaybackEngine, currentTracks = []   ← H9
+        ├─ target is custom → new CustomPlaybackEngine (resume() if suspended), currentTracks = []   ← H9
         └─ target is native → pausedTime batch-update, playTrack, fade in
 ```
 
@@ -443,7 +444,7 @@ Both reads and writes count as a "use" and move the entry to the end of the Map.
 count too, or an entity whose music is merely being *checked* could be evicted while it is the
 one actively playing.
 
-Custom playlists never participate (H9).
+Custom playlists never participate (H9) — a suspended graph run carries its own snapshot instead.
 
 ---
 

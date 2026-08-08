@@ -26,6 +26,16 @@ vi.mock('../scripts/custom-playback-engine.mjs', () => {
       this.stop = vi.fn(() => {
         this.isRunning = false;
       });
+      // What a run with something worth resuming would produce. Tests that want the
+      // nothing-to-capture path set this to null per-instance.
+      this.snapshot = { version: 1, playlistId: this.playlist?.id ?? null, nodes: [{ nodeId: 'ta', kind: 'track' }] };
+      // Mirrors the real suspend(): capture, then go through the real stop() - so a test asserting
+      // teardown still sees stop() called, exactly as it would for a 'replaced' retirement.
+      this.suspend = vi.fn((options) => {
+        this.stop(options);
+        return Promise.resolve(this.snapshot);
+      });
+      this.resume = vi.fn(() => Promise.resolve(true));
       // Sensible single-engine defaults (no nested Playlist-node children);
       // tests exercising the nested case override these per-instance.
       this.isPlayingPlaylist = vi.fn((id) => !!id && this.playlist?.id === id);
@@ -1049,7 +1059,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map));
+      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map), expect.any(Set));
       vi.advanceTimersByTime(350);
       expect(controller.isDebouncing).toBe(false);
       vi.useRealTimers();
@@ -1071,7 +1081,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(combatCtx, expect.any(Map));
+      expect(transitionSpy).toHaveBeenCalledWith(combatCtx, expect.any(Map), expect.any(Set));
       vi.advanceTimersByTime(350);
       vi.useRealTimers();
     });
@@ -1088,7 +1098,7 @@ describe('MusicController', () => {
 
       await controller.playCurrentTrack();
 
-      expect(transitionSpy).toHaveBeenCalledWith(areaCtx, expect.any(Map));
+      expect(transitionSpy).toHaveBeenCalledWith(areaCtx, expect.any(Map), expect.any(Set));
       vi.advanceTimersByTime(350);
       vi.useRealTimers();
     });
@@ -1135,7 +1145,7 @@ describe('MusicController', () => {
       const transitionSpy = vi.spyOn(controller, 'transitionToContext').mockResolvedValue();
 
       await controller.playCurrentTrack();
-      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map));
+      expect(transitionSpy).toHaveBeenCalledWith(targetCtx, expect.any(Map), expect.any(Set));
     });
   });
 
@@ -2183,6 +2193,209 @@ describe('MusicController', () => {
 
       expect(soundsA[0].parent.stopSound).toHaveBeenCalledWith(soundsA[0]);
       expect(soundsB[0].parent.stopSound).toHaveBeenCalledWith(soundsB[0]);
+    });
+  });
+
+  describe('suspending a run that is expected to come back (H9 exception)', () => {
+    let basePl, overlayPl;
+
+    /** A scene whose `music.<section>` flag is exactly `sections`. */
+    function sceneWith(sections) {
+      const scene = new MockDocument({
+        name: 'Test Scene',
+        id: 'sc1',
+        getFlag: vi.fn((mod, key) => {
+          if (key === 'music.area') return sections.area ?? null;
+          if (key === 'music.combat') return sections.combat ?? null;
+          return null;
+        })
+      });
+      game.scenes.active = scene;
+      return scene;
+    }
+
+    /**
+     * playCurrentTrack() debounces itself for 150ms, and every case here needs two or three
+     * resolutions back to back. Clearing the flag is what the existing tests do too.
+     */
+    const resolve = async () => {
+      controller.isDebouncing = false;
+      await controller.playCurrentTrack();
+    };
+
+    beforeEach(() => {
+      basePl = createMockPlaylist('baseP', 'Scene Ambience', []);
+      overlayPl = createMockPlaylist('overlayP', 'Rain', []);
+      const map = { baseP: basePl, overlayP: overlayPl };
+      game.playlists.get = vi.fn((id) => map[id] || null);
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      setMockSetting('game-orchestra', 'activePhase', 'p1');
+    });
+
+    it('the reported bug: an overlay layer dropped by Suppress Area Music resumes instead of restarting', async () => {
+      sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+      await resolve();
+      const layerEngine = controller._layers.get('overlay:area').engine;
+      expect(layerEngine).toBeTruthy();
+
+      // Suppress Area Music. filterPlaylists() drops the overlay from the desired layer set, so
+      // _syncLayers retires it - but it is still CONFIGURED, so it is retained, not discarded.
+      setMockSetting('game-orchestra', 'suppressArea', true);
+      await resolve();
+      expect(layerEngine.suspend).toHaveBeenCalledWith({ stopAudio: false });
+      expect(controller._suspendedRuns.has('overlayP')).toBe(true);
+
+      // Unsuppress. The layer comes back on a fresh engine, which resumes rather than starting.
+      setMockSetting('game-orchestra', 'suppressArea', false);
+      await resolve();
+      const revived = controller._layers.get('overlay:area').engine;
+      expect(revived).not.toBe(layerEngine);
+      expect(revived.resume).toHaveBeenCalledWith(layerEngine.snapshot);
+      expect(revived.start).not.toHaveBeenCalled();
+      // Consumed on read: a snapshot is single-use.
+      expect(controller._suspendedRuns.has('overlayP')).toBe(false);
+    });
+
+    it('a base graph displaced by combat resumes when the combat ends', async () => {
+      const combatPl = createMockPlaylist('combatP', 'Battle', []);
+      const graphPl = createMockPlaylist('graphP', 'Ambience Graph', []);
+      graphPl.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [{ id: 'start', type: 'start' }],
+        edges: []
+      });
+      game.playlists.get = vi.fn((id) => ({ graphP: graphPl, combatP: combatPl })[id] || null);
+      sceneWith({ area: { playlist: 'graphP' }, combat: { playlist: 'combatP' } });
+
+      await resolve();
+      const areaEngine = controller._customEngine;
+      expect(areaEngine?.playlist).toBe(graphPl);
+
+      // Combat starts: excludeAreaWhenCombatApplies drops the area context, but it is still in
+      // the unfiltered pool, so the teardown is a suspend.
+      game.combats.active = { started: true, combatant: null, scene: game.scenes.active };
+      vi.spyOn(controller, 'playTrack').mockResolvedValue();
+      await resolve();
+      expect(areaEngine.suspend).toHaveBeenCalled();
+      expect(controller._suspendedRuns.has('graphP')).toBe(true);
+
+      // Combat ends: the area graph returns and picks its position back up.
+      game.combats.active = null;
+      await resolve();
+      expect(controller._customEngine).not.toBe(areaEngine);
+      expect(controller._customEngine.resume).toHaveBeenCalledWith(areaEngine.snapshot);
+    });
+
+    it("a combatant's theme is retired outright when the turn passes - it is not expected back", async () => {
+      // _resolveCombatantContext consults only the CURRENT combatant, so an outgoing theme is
+      // absent from the unfiltered pool entirely. That is what keeps this case a fresh start:
+      // resuming it would drop the listener mid-track on some later turn, which reads as a glitch.
+      const themePl = createMockPlaylist('themeP', 'Boss Theme', []);
+      game.playlists.get = vi.fn((id) => (id === 'themeP' ? themePl : null));
+      const token = new MockDocument({
+        name: 'Boss',
+        id: 'tok1',
+        getFlag: vi.fn((mod, key) => (key === 'music.combat' ? { playlist: 'themeP', exclusive: false } : null))
+      });
+      game.combats.active = { started: true, combatant: { token, actor: null, isDefeated: false }, scene: game.scenes.active };
+
+      await resolve();
+      const themeEngine = controller._layers.get('combatant')?.engine;
+      expect(themeEngine).toBeTruthy();
+
+      // The turn passes to a combatant with no theme of its own.
+      game.combats.active.combatant = { token: null, actor: null, isDefeated: false };
+      await resolve();
+
+      expect(themeEngine.suspend).not.toHaveBeenCalled();
+      expect(themeEngine.stop).toHaveBeenCalledWith({ stopAudio: false });
+      expect(controller._suspendedRuns.has('themeP')).toBe(false);
+    });
+
+    describe('_retainablePlaylistIds', () => {
+      it('counts a suppressed area overlay as retainable, and an absent playlist as not', () => {
+        sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+        setMockSetting('game-orchestra', 'suppressArea', true);
+
+        const ids = controller._retainablePlaylistIds(controller.getAllCurrentPlaylists());
+        // Both survive suppression: the pool and the layer pass are both unfiltered.
+        expect(ids.has('baseP')).toBe(true);
+        expect(ids.has('overlayP')).toBe(true);
+        expect(ids.has('somethingElse')).toBe(false);
+      });
+    });
+
+    describe('snapshot lifetime', () => {
+      it('drops a snapshot older than the retention window rather than resuming a stale position', async () => {
+        sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+        await resolve();
+        setMockSetting('game-orchestra', 'suppressArea', true);
+        await resolve();
+        expect(controller._suspendedRuns.has('overlayP')).toBe(true);
+
+        // 31 minutes later: past MAX_SUSPENDED_RUN_AGE_MS.
+        controller._suspendedRuns.get('overlayP').capturedAt = Date.now() - 31 * 60 * 1000;
+
+        setMockSetting('game-orchestra', 'suppressArea', false);
+        await resolve();
+        const revived = controller._layers.get('overlay:area').engine;
+        expect(revived.resume).not.toHaveBeenCalled();
+        expect(revived.start).toHaveBeenCalled();
+      });
+
+      it('caps how many suspended runs it keeps, evicting the oldest capture', async () => {
+        for (let i = 0; i < 10; i++) {
+          controller._suspendedRuns.set(`pl${i}`, { snapshot: { nodes: [{}] }, capturedAt: Date.now() - (10 - i) * 1000 });
+        }
+        sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+        await resolve();
+        setMockSetting('game-orchestra', 'suppressArea', true);
+        await resolve();
+
+        expect(controller._suspendedRuns.size).toBeLessThanOrEqual(8);
+        expect(controller._suspendedRuns.has('overlayP')).toBe(true);
+        expect(controller._suspendedRuns.has('pl0')).toBe(false); // the oldest went first
+      });
+
+      it('stores nothing when the engine had nothing resumable to capture', async () => {
+        sceneWith({ area: { playlist: 'baseP', overlays: { calm: { playlist: 'overlayP', layer: true } } } });
+        await resolve();
+        controller._layers.get('overlay:area').engine.snapshot = null;
+
+        setMockSetting('game-orchestra', 'suppressArea', true);
+        await resolve();
+
+        expect(controller._suspendedRuns.size).toBe(0);
+      });
+    });
+
+    describe('forgetSuspendedRun (H8: a live graph edit must still restart)', () => {
+      it('drops the edited playlist\'s own snapshot, and any parent whose tree references it', () => {
+        controller._suspendedRuns.set('edited', { snapshot: { playlistId: 'edited', nodes: [] }, capturedAt: Date.now() });
+        controller._suspendedRuns.set('parent', {
+          snapshot: {
+            playlistId: 'parent',
+            nodes: [{ kind: 'playlist', targetPlaylistId: 'edited', child: { playlistId: 'edited', nodes: [] } }]
+          },
+          capturedAt: Date.now()
+        });
+        controller._suspendedRuns.set('unrelated', { snapshot: { playlistId: 'unrelated', nodes: [] }, capturedAt: Date.now() });
+
+        controller.forgetSuspendedRun('edited');
+
+        expect(controller._suspendedRuns.has('edited')).toBe(false);
+        expect(controller._suspendedRuns.has('parent')).toBe(false);
+        expect(controller._suspendedRuns.has('unrelated')).toBe(true);
+      });
+
+      it('is called by onCustomGraphChanged, so an edit is never resumed into', async () => {
+        const graphPl = createMockPlaylist('graphP', 'Graph', []);
+        controller._suspendedRuns.set('graphP', { snapshot: { playlistId: 'graphP', nodes: [] }, capturedAt: Date.now() });
+
+        await controller.onCustomGraphChanged(graphPl);
+
+        expect(controller._suspendedRuns.has('graphP')).toBe(false);
+      });
     });
   });
 });

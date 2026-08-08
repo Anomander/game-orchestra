@@ -205,14 +205,14 @@ Read: [graph-engine.md](graph-engine.md) § *Safety nets*, H3/H4/H6/H9.
 - **Never use a bare `setTimeout` for engine waits.** Use `EngineClock` (H4) — a backgrounded head
   GM throttles main-thread timers to ~once per minute.
 - Don't watch `'end'` on a `repeat: true` track (H3). Use a scheduled stop.
-- Don't add resume-from-offset to graphs (H9). Graphs restart from Start; several code paths
-  depend on it.
+- Don't add resume-from-offset to `start()` (H9). A graph begins at Start; the only resume path is
+  a controller-supplied snapshot through `resume()`, and several code paths depend on the split.
 - The five constants are calibrated against specific failures. If you change one, say which
   failure mode you re-evaluated.
 
 ## Recipe: fix a "music restarts unexpectedly" bug
 
-Almost always one of these four:
+Almost always one of these five:
 
 1. `transitionToContext`'s **already-running-graph guard** was bypassed → an unrelated
    re-resolution restarted the graph from Start.
@@ -221,6 +221,16 @@ Almost always one of these four:
 3. A track that was already playing got **re-triggered** because it wasn't filtered out of
    `tracksToStart`.
 4. `playCurrentTrack`'s **`contextUnchanged`** check didn't match — note the known quirk below.
+5. The teardown was classed **`'replaced'` when it should have been `'suspended'`** — so the run
+   began at Start instead of resuming its snapshot. Check `_retainablePlaylistIds()`: the playlist
+   has to still be in the *unfiltered* candidate pool. This failure is invisible (it looks exactly
+   like today's behaviour did), so it needs a test, not an eyeball. See
+   [H9](invariants.md#h9--graphs-begin-at-start-they-resume-only-from-a-same-session-snapshot).
+
+**To make a new teardown resumable:** make sure its playlist appears in `_retainablePlaylistIds()`,
+and pass the resulting `retainable` set down to whatever calls `_retireEngine()`. Never suspend a
+teardown that genuinely retires a context — resuming a boss theme mid-track three turns later
+sounds like a bug, not a feature.
 
 ## Recipe: fix a "playback stops silently" bug
 
@@ -293,4 +303,5 @@ Don't add them as a side effect of another task:
 - Runtime npm dependencies. Drawflow is **vendored** (see `scripts/vendor/README.md`).
 - Sockets or custom hooks beyond `gameOrchestraGraphActivity`.
 - Cross-world / compendium playlist references.
-- Persisted position memory for custom graphs (H9).
+- *Persisted* position memory for custom graphs (H9). The same-session `suspend()`/`resume()`
+  snapshot is deliberately in-memory only.

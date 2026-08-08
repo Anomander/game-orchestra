@@ -180,8 +180,8 @@ api.graph.schema                         // resolveLoop, DURATIONAL_NODE_TYPES, 
   and never invents an `initialTrack`
   ([H2](invariants.md#h2--but-it-must-never-be-treated-as-a-soundboard)). Enforcement on one of two
   write paths is not enforcement.
-- **`set()` on a playing playlist restarts it from Start** (H8 + H9). There is no in-place patch,
-  deliberately.
+- **`set()` on a playing playlist restarts it from Start** (H8 + H9), and discards any suspended-run
+  snapshot for that playlist. There is no in-place patch, deliberately.
 - **`set()` supplies the environment context Script-node validation needs**, so "matching the
   editor" holds there too. Every Script rule in `graph-validation.mjs` is environment-dependent and
   **self-skips when its context is absent** — so an API that passed none silently held script nodes

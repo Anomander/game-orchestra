@@ -3834,4 +3834,444 @@ describe('CustomPlaybackEngine', () => {
       expect(timings()[0]).toMatchObject({ nodeId: 'ta', durationMs: 1000, iterations: 2 });
     });
   });
+
+
+  describe('suspend / resume (same-session snapshot, H9)', () => {
+    /** A looping track followed by a second one, the shape the reported overlay bug used. */
+    function buildTrackGraph(loop = { mode: 'count', count: 1 }, durationSec = 30) {
+      const sA = createMockSound('sa', 'Track A');
+      sA.sound.duration = durationSec;
+      sA.sound.loaded = true;
+      const sB = createMockSound('sb', 'Track B');
+      sB.sound.duration = 10;
+      sB.sound.loaded = true;
+      const playlist = createMockPlaylist('pl1', 'Graph', [sA, sB], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'ta', type: 'track', soundId: 'sa', loop },
+          { id: 'tb', type: 'track', soundId: 'sb', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'ta' }, { id: 'e2', from: 'ta', to: 'tb' }]
+      });
+      return { playlist, sA, sB };
+    }
+
+    /** A fresh engine over the same playlist - what the controller builds on the way back. */
+    const rebuild = (playlist) => new CustomPlaybackEngine({ playlist }, controller);
+
+    /**
+     * Suspend with the audio actually stopped. Production passes `stopAudio: false` so the
+     * controller's own crossfade can take the sounds (H11), but every assertion about a resumed
+     * POSITION needs the fade to have finished first - otherwise the sound is still playing, the
+     * resume adopts it, and no pausedTime is ever written. That is the realistic case for the
+     * reported bug too: the toggle comes back seconds after the crossfade ended. The reclaim path
+     * has its own test at the bottom of this block.
+     */
+    const suspendStopped = (engine) => engine.suspend({ stopAudio: true });
+
+    it('returns null when no durational node holds a token', async () => {
+      const { playlist } = buildTrackGraph();
+      // Never started: nothing is active, so there is no position worth keeping.
+      expect(await rebuild(playlist).suspend()).toBe(null);
+    });
+
+    it("captures a track node's cumulative position", async () => {
+      vi.useFakeTimers();
+      const { playlist } = buildTrackGraph({ mode: 'count', count: 1 }, 30);
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      expect((await suspendStopped(engine)).nodes).toEqual([
+        { nodeId: 'ta', kind: 'track', soundId: 'sa', elapsedMs: 12_000, durationMs: 30_000, loopBaseline: null }
+      ]);
+    });
+
+    it('re-enters only the snapshotted node - it never walks from Start', async () => {
+      // The distinguishing property of a snapshot resume: the token is already past Start and
+      // past the Delay, so neither is re-traversed. Walking forward from Start would put the
+      // token back into a 60s wait it had already served.
+      vi.useFakeTimers();
+      const sA = createMockSound('sa', 'Track A');
+      sA.sound.duration = 30;
+      sA.sound.loaded = true;
+      const playlist = createMockPlaylist('pl1', 'Graph', [sA], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'd1', type: 'delay', delay: { min: 60, max: 60 } },
+          { id: 'ta', type: 'track', soundId: 'sa', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'd1' }, { id: 'e2', from: 'd1', to: 'ta' }]
+      });
+
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(60_000); // the delay elapses and the track starts
+      await vi.advanceTimersByTimeAsync(12_000);
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes.map((n) => n.nodeId)).toEqual(['ta']);
+
+      controller.playTrack.mockClear();
+      const resumed = rebuild(playlist);
+      expect(await resumed.resume(snapshot)).toBe(true);
+
+      expect(sA.update).toHaveBeenCalledWith(expect.objectContaining({ pausedTime: 12 }));
+      expect(controller.playTrack).toHaveBeenCalledTimes(1);
+      // The Delay node never came back - proof the walk did not restart at Start.
+      expect(resumed._activeNodes.has('d1')).toBe(false);
+      expect(resumed._activeNodes.has('ta')).toBe(true);
+    });
+
+    it('resumes a multi-loop track at the right ITERATION, not just the right offset', async () => {
+      // The cumulative half of the cumulative-vs-modulo pair. A 10s track looping 3 times is 30s
+      // of playback; suspending at 25s leaves 5s. Scheduling from a within-iteration reading (5s)
+      // would give it 25s more and play the track roughly twice over.
+      vi.useFakeTimers();
+      const { playlist, sB } = buildTrackGraph({ mode: 'count', count: 3 }, 10);
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(25_000);
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0].elapsedMs).toBe(25_000);
+
+      controller.playTrack.mockClear();
+      const resumed = rebuild(playlist);
+      await resumed.resume(snapshot);
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(controller.playTrack).not.toHaveBeenCalledWith(sB);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(controller.playTrack).toHaveBeenCalledWith(sB);
+    });
+
+    it('seeks pausedTime to the WITHIN-iteration offset, not the cumulative one', async () => {
+      // The other half of the pair, and the half that fails silently for a count:1 track (where
+      // the two numbers are equal). 25s into a 10s track looping 3 times is 5s into iteration 3;
+      // a cumulative 25 would seek past the end of the buffer.
+      vi.useFakeTimers();
+      const { playlist, sA } = buildTrackGraph({ mode: 'count', count: 3 }, 10);
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(25_000);
+      const snapshot = await suspendStopped(engine);
+
+      sA.update.mockClear();
+      await rebuild(playlist).resume(snapshot);
+
+      expect(sA.update).toHaveBeenCalledWith(expect.objectContaining({ pausedTime: 5 }));
+      expect(sA.update).not.toHaveBeenCalledWith(expect.objectContaining({ pausedTime: 25 }));
+    });
+
+    it('resumes a delay for the REMAINDER of its interval, keeping the editor drain continuous', async () => {
+      vi.useFakeTimers();
+      const sA = createMockSound('sa', 'Track A');
+      const playlist = createMockPlaylist('pl1', 'Graph', [sA], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'd1', type: 'delay', delay: { min: 60, max: 60 } },
+          { id: 'ta', type: 'track', soundId: 'sa', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'd1' }, { id: 'e2', from: 'd1', to: 'ta' }]
+      });
+
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(20_000);
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0]).toMatchObject({ kind: 'delay', durationMs: 60_000, remainingMs: 40_000 });
+
+      const resumed = rebuild(playlist);
+      await resumed.resume(snapshot);
+      // durationMs stays the FULL interval so the drain overlay picks the sweep up mid-flight
+      // rather than restarting it at full width; startedAt is back-dated to match.
+      expect(resumed.activityState.activeTimings[0]).toMatchObject({ nodeId: 'd1', durationMs: 60_000 });
+
+      await vi.advanceTimersByTimeAsync(38_000);
+      expect(controller.playTrack).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(controller.playTrack).toHaveBeenCalledWith(sA);
+    });
+
+    it("restores an until-loop's own baseline, so a mood change during the suspend still escapes", async () => {
+      // The highest-value case in this block. The baseline lives only in a closure, so without
+      // capturing it a resume re-reads the CURRENT mood - which is the mood that caused the
+      // suspend. The escape condition would then never match and the loop would run forever, with
+      // nothing logged and nothing to see.
+      setMockSetting('game-orchestra', 'activeMood', 'calm');
+      vi.useFakeTimers();
+      const { playlist, sB } = buildTrackGraph(
+        { mode: 'until', condition: { kind: 'moodChanged' }, boundary: 'immediate', minLoops: 1, maxLoops: null },
+        1
+      );
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(controller.stopTrack).not.toHaveBeenCalled();
+
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0].loopBaseline).toEqual({ moodAtStart: 'calm', phaseAtStart: '' });
+
+      // The mood changes while suspended - exactly the change this loop is waiting for.
+      setMockSetting('game-orchestra', 'activeMood', 'boss');
+      controller.playTrack.mockClear();
+      const resumed = rebuild(playlist);
+      await resumed.resume(snapshot);
+
+      await vi.advanceTimersByTimeAsync(600); // first poll tick
+      await vi.advanceTimersByTimeAsync(400); // the hand-off lead the armed exit waits out
+      expect(controller.playTrack).toHaveBeenCalledWith(sB);
+    });
+
+    it("derives the first 'loopEnd' boundary from elapsed time instead of cascading past ones", async () => {
+      // Seeding at minLoops regardless of position made every already-past boundary schedule at
+      // 0ms and fire in one burst, so the exit could land on a boundary already in the past. Also
+      // corrects the pre-existing adoption path, not only resume.
+      vi.useFakeTimers();
+      const { playlist, sB } = buildTrackGraph(
+        { mode: 'until', condition: { kind: 'combatActive' }, boundary: 'loopEnd', minLoops: 1, maxLoops: null },
+        10
+      );
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(25_000);
+      const snapshot = await suspendStopped(engine);
+
+      controller.playTrack.mockClear();
+      const resumed = rebuild(playlist);
+      await resumed.resume(snapshot);
+
+      // The next boundary is 5s away (30s cumulative), not a burst of three checks at 0ms.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(controller.playTrack).not.toHaveBeenCalledWith(sB);
+    });
+
+    it("keeps a Playlist node's pass count across a suspend", async () => {
+      vi.useFakeTimers();
+      const inner = createMockSound('si', 'Inner');
+      const target = createMockPlaylist('pl2', 'Target', [inner], -1);
+      target.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [{ id: 'start', type: 'start' }, { id: 'ti', type: 'track', soundId: 'si', loop: { mode: 'count', count: 1 } }],
+        edges: [{ id: 'e1', from: 'start', to: 'ti' }]
+      });
+      const sB = createMockSound('sb', 'After');
+      const playlist = createMockPlaylist('pl1', 'Graph', [sB], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'p1', type: 'playlist', playlistRef: { source: 'direct', playlistId: 'pl2' }, loop: { mode: 'count', count: 3 } },
+          { id: 'tb', type: 'track', soundId: 'sb', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'p1' }, { id: 'e2', from: 'p1', to: 'tb' }]
+      });
+      game.playlists.get = vi.fn((id) => (id === 'pl2' ? target : null));
+
+      const engine = rebuild(playlist);
+      await engine.start();
+      await fireEnd(inner);
+      await vi.advanceTimersByTimeAsync(400); // past the per-node throttle, so pass 2 has begun
+
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0]).toMatchObject({ kind: 'playlist', targetPlaylistId: 'pl2', passIndex: 2 });
+    });
+
+    it("round-trips a nested child engine's position", async () => {
+      vi.useFakeTimers();
+      const inner = createMockSound('si', 'Inner');
+      inner.sound.duration = 30;
+      inner.sound.loaded = true;
+      const target = createMockPlaylist('pl2', 'Target', [inner], -1);
+      target.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [{ id: 'start', type: 'start' }, { id: 'ti', type: 'track', soundId: 'si', loop: { mode: 'count', count: 1 } }],
+        edges: [{ id: 'e1', from: 'start', to: 'ti' }]
+      });
+      const playlist = createMockPlaylist('pl1', 'Graph', [], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'p1', type: 'playlist', playlistRef: { source: 'direct', playlistId: 'pl2' }, loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'p1' }]
+      });
+      game.playlists.get = vi.fn((id) => (id === 'pl2' ? target : null));
+
+      const engine = rebuild(playlist);
+      await engine.start();
+      await vi.advanceTimersByTimeAsync(12_000);
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0].child.nodes[0]).toMatchObject({ kind: 'track', elapsedMs: 12_000 });
+
+      inner.update.mockClear();
+      const resumed = rebuild(playlist);
+      expect(await resumed.resume(snapshot)).toBe(true);
+      expect(inner.update).toHaveBeenCalledWith(expect.objectContaining({ pausedTime: 12 }));
+    });
+
+    it('refuses to snapshot at all while a Script node holds a token', async () => {
+      // Its side effects already ran and its exit was never taken, so neither re-running nor
+      // stepping over it is right. Refusing degrades to an ordinary start, i.e. today's behaviour.
+      setCanCompileScripts(true);
+      setMockSetting('game-orchestra', 'allowInlineScripts', true);
+      setMockSetting('game-orchestra', 'scriptTimeout', 60_000);
+      game.user.can = vi.fn(() => true);
+      resetScriptExecution();
+      const sA = createMockSound('sa', 'Track A');
+      const playlist = createMockPlaylist('pl1', 'Graph', [sA], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          // Never settles, so the node is still holding its token when the snapshot is attempted.
+          { id: 'sc', type: 'script', script: { mode: 'inline', source: 'await new Promise(() => {});' } },
+          { id: 'ta', type: 'track', soundId: 'sa', loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'sc' }, { id: 'e2', from: 'sc', to: 'ta' }]
+      });
+
+      const engine = rebuild(playlist);
+      engine.start();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(engine._activeNodes.has('sc')).toBe(true);
+
+      expect(engine._captureSnapshot()).toBe(null);
+      await engine.stop();
+      resetScriptExecution();
+    });
+
+    it('still resumes the right NODE when the duration was never probed', async () => {
+      // _recordTrackTiming populates asynchronously, so a node entered moments before the suspend
+      // has no timing yet. Losing under 100ms of offset is inaudible; losing the token's place in
+      // the graph is not, so the node still comes back - just at 0.
+      vi.useFakeTimers();
+      const { playlist, sA } = buildTrackGraph();
+      sA.sound.duration = 0;
+      sA.sound.loaded = false;
+      const engine = rebuild(playlist);
+      await engine.start();
+
+      const snapshot = await suspendStopped(engine);
+      expect(snapshot.nodes[0]).toMatchObject({ nodeId: 'ta', elapsedMs: null, durationMs: null });
+
+      const resumed = rebuild(playlist);
+      expect(await resumed.resume(snapshot)).toBe(true);
+      expect(resumed._activeNodes.has('ta')).toBe(true);
+    });
+
+    describe('refusing an unusable snapshot (each falls back to start())', () => {
+      it('refuses a version it does not recognise', async () => {
+        const { playlist } = buildTrackGraph();
+        const engine = rebuild(playlist);
+        await engine.start();
+        const snapshot = await suspendStopped(engine);
+
+        expect(await rebuild(playlist).resume({ ...snapshot, version: 99 })).toBe(false);
+      });
+
+      it('refuses a snapshot whose graph changed while it was suspended (H8)', async () => {
+        const { playlist } = buildTrackGraph();
+        const engine = rebuild(playlist);
+        await engine.start();
+        const snapshot = await suspendStopped(engine);
+
+        playlist.setFlag('game-orchestra', 'customPlayback', {
+          version: 1,
+          nodes: [{ id: 'start', type: 'start' }, { id: 'ta', type: 'track', soundId: 'sa', loop: { mode: 'count', count: 2 } }],
+          edges: [{ id: 'e1', from: 'start', to: 'ta' }]
+        });
+
+        const resumed = rebuild(playlist);
+        expect(await resumed.resume(snapshot)).toBe(false);
+        expect(resumed._activeNodes.size).toBe(0);
+      });
+
+      it('refuses the WHOLE snapshot when one referenced sound is gone', async () => {
+        // Dropping just that node would silently delete a Fork branch and leave the graph one
+        // voice short for the rest of the run.
+        const { playlist } = buildTrackGraph();
+        const engine = rebuild(playlist);
+        await engine.start();
+        const snapshot = await suspendStopped(engine);
+
+        playlist.sounds.delete('sa');
+        expect(await rebuild(playlist).resume(snapshot)).toBe(false);
+      });
+
+      it('refuses an empty snapshot rather than resuming into permanent silence', async () => {
+        const { playlist } = buildTrackGraph();
+        const engine = rebuild(playlist);
+        await engine.start();
+        const snapshot = await suspendStopped(engine);
+
+        expect(await rebuild(playlist).resume({ ...snapshot, nodes: [] })).toBe(false);
+      });
+    });
+
+    it('releases its registry slots, so the resumed engine can re-claim the same target', async () => {
+      // suspend() always goes through the real stop(). Capturing without stopping would strand the
+      // slot and make that playlist unreferenceable by any Playlist node for the rest of the
+      // session - silent, and unrecoverable short of a reload.
+      vi.useFakeTimers();
+      const inner = createMockSound('si', 'Inner');
+      inner.sound.duration = 30;
+      inner.sound.loaded = true;
+      const target = createMockPlaylist('pl2', 'Target', [inner], -1);
+      target.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [{ id: 'start', type: 'start' }, { id: 'ti', type: 'track', soundId: 'si', loop: { mode: 'count', count: 1 } }],
+        edges: [{ id: 'e1', from: 'start', to: 'ti' }]
+      });
+      const playlist = createMockPlaylist('pl1', 'Graph', [], -1);
+      playlist.setFlag('game-orchestra', 'customPlayback', {
+        version: 1,
+        nodes: [
+          { id: 'start', type: 'start' },
+          { id: 'p1', type: 'playlist', playlistRef: { source: 'direct', playlistId: 'pl2' }, loop: { mode: 'count', count: 1 } }
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'p1' }]
+      });
+      game.playlists.get = vi.fn((id) => (id === 'pl2' ? target : null));
+
+      const engine = rebuild(playlist);
+      await engine.start();
+      expect(engine.isPlayingPlaylist('pl2')).toBe(true);
+
+      const snapshot = await suspendStopped(engine);
+      expect(engine.isPlayingPlaylist('pl2')).toBe(false);
+
+      const resumed = rebuild(playlist);
+      expect(await resumed.resume(snapshot)).toBe(true);
+      expect(resumed.isPlayingPlaylist('pl2')).toBe(true);
+    });
+
+    it('reclaims a still-playing sound by adopting it, rather than seeking it back', async () => {
+      // Production suspends with stopAudio:false so the controller can crossfade (H11). A toggle
+      // that comes back inside that window finds the audio still running: the resume then takes
+      // the ordinary adoption path, which reads the LIVE currentTime instead of the frozen
+      // snapshot figure. Better information, and no seek at all - so no pausedTime update.
+      const { playlist, sA } = buildTrackGraph({ mode: 'count', count: 1 }, 30);
+      const engine = rebuild(playlist);
+      await engine.start();
+      const snapshot = await engine.suspend(); // stopAudio:false, the production default
+      expect(sA.sound.playing).toBe(true);
+
+      sA.sound.currentTime = 18;
+      sA.update.mockClear();
+      controller.playTrack.mockClear();
+
+      const resumed = rebuild(playlist);
+      expect(await resumed.resume(snapshot)).toBe(true);
+      expect(controller.playTrack).not.toHaveBeenCalled();
+      expect(sA.update).not.toHaveBeenCalled();
+      expect(resumed.activeSounds).toEqual([sA]);
+    });
+  });
 });

@@ -714,6 +714,103 @@ refusal.
 
 ---
 
+## Suspend and resume
+
+A graph normally begins at its Start node every time ([H9](invariants.md#h9--graphs-begin-at-start-they-resume-only-from-a-same-session-snapshot)).
+The exception is a teardown the controller expects to be **undone** — suppression toggled on, a
+base context displaced by a combat that will end. Those call `suspend()` instead of `stop()`, and
+the next engine over the same playlist gets `resume(snapshot)` instead of `start()`.
+
+**Same session only.** The snapshot lives in `MusicController#_suspendedRuns`, in memory, on the
+head GM. It is never written to a flag, so a refresh still begins at Start.
+
+### The snapshot
+
+```
+EngineSnapshot { version, playlistId, graphJson, capturedAt,
+                 moodAtStart, phaseAtStart, recentPicks, nodes[] }
+NodeSnapshot   track    { nodeId, kind, soundId, elapsedMs, durationMs, loopBaseline }
+               delay    { nodeId, kind, durationMs, remainingMs }
+               playlist { nodeId, kind, targetPlaylistId, passIndex, child }
+```
+
+Everything in it is a plain value — no live documents, no `Sound`s, no closures, no timer handles.
+`_captureSnapshot()` is **synchronous by construction and must stay that way**: `_activeNodes` is
+mutated from `EngineClock` callbacks and `'end'` dispatches, so an `await` inside the capture would
+let the map move underneath the read and produce a snapshot of a state that never existed.
+
+`suspend()` always goes through the real `stop()`. Capturing without stopping would strand this
+tree's `_registry` slots, and a stranded slot makes that playlist unreferenceable by any Playlist
+node for the rest of the session.
+
+### `elapsedMs` is cumulative; `pausedTime` is not
+
+The one genuinely error-prone part. `_scheduleLoopStop` computes
+
+```js
+const totalMs = loopCount * duration * 1000 - elapsedMs;
+```
+
+so `elapsedMs` counts the **whole run of the loop**, not the position within the current
+iteration — and `_recordTrackTiming` and `_scheduleConditionalExit` both derive their absolute
+boundaries the same way, from `startedAt = now - elapsedMs`. That is what makes resume need no
+iteration counter at all: hand the schedulers the cumulative figure and their existing arithmetic
+lands on the right deadline.
+
+`pausedTime` is the other number. `PlaylistSound#sync` feeds it straight to `Sound#play({offset})`,
+which seeks inside one buffer, so it must be `elapsedMs % durationMs`. `_resumeNode()` computes
+both, in one place, and is the only place that should.
+
+For a single-pass track the two are equal — which is exactly why swapping them is invisible until
+someone loops a track.
+
+### Resume never walks from Start
+
+`resume()` re-enters only the durational nodes the snapshot names, concurrently (the Fork
+equivalent). Start, Fork, Random and Condition are **not** re-traversed: the token is already past
+them, and re-walking would re-decide a choice that was made and acted on. `_recentPicks` is
+restored so the *next* Random draw still respects its cooldowns.
+
+This is also why the design has no ambiguity to resolve. A "walk forward to where we were" resume
+would have to answer whether a Random re-draws, whether a Condition re-evaluates, and what a Fork
+means — a snapshot simply records the N nodes that held tokens and puts them back.
+
+It goes through the ordinary `_enterTrack`/`_enterDelay`/`_enterPlaylist`, so the singleton rule,
+the `_activeSoundOwners` ownership check, `MIN_CLEAN_START_INTERVAL_MS` and the circuit breaker all
+still apply. A resume supplies arguments; it bypasses nothing.
+
+### Two fields had to leave their closures
+
+`loopBaseline` (an until-loop's own `{moodAtStart, phaseAtStart}`) and `passIndex` (a Playlist
+node's current pass) previously existed only as closure state. Both are now mirrored onto the
+`_activeNodes` entry. The baseline matters most: re-reading it live on resume would re-baseline to
+the state that *caused* the suspend, so a `moodChanged` escape would never fire — silently, with
+the loop running forever.
+
+### What falls back to `start()`
+
+| State | Behaviour |
+|---|---|
+| **Script node holding a token** | the whole snapshot is refused — its side effects already ran and its exit was never taken, so neither re-running nor skipping is right (H17) |
+| **Track whose duration was never probed** | resumes at offset 0, but still *at that node* — under 100 ms of position lost, the token's place in the graph kept |
+| **Playlist child unusable, or target re-resolved elsewhere** | resumes at `passIndex` with a fresh child pass; a pass boundary is already a legitimate restart point |
+| **Playlist target refuses** (registry, depth) | `_skipPlaylistNode` zero-length pass, unchanged |
+| **Graph changed, playlist or sound gone, capture too old, no nodes** | refused whole — never partially, since dropping one node would silently delete a Fork branch |
+| **Armed hand-off in flight** | cancelled by `stop()`, never captured; the resumed engine re-plans within one track |
+
+An **empty** snapshot is the trap worth naming: resuming one registers nothing, goes idle, and
+plays silence forever with no error. It is guarded twice — never stored, never used.
+
+### The adopt interaction
+
+`suspend()` passes `stopAudio: false` so the controller's own crossfade takes the sounds (H11). A
+toggle that comes back inside that window therefore finds the audio still playing, and the resume
+takes the ordinary **adoption** path — which reads the live `currentTime` and overwrites the
+snapshot's frozen figure. That is better information, and no seek at all. Deliberate: the snapshot
+seeds `elapsedMs`, adoption is allowed to win.
+
+---
+
 ## The stop-before-start race
 
 **`stop()` is async and must be awaited by any caller that starts a replacement engine.** This is

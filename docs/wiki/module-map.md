@@ -21,14 +21,14 @@ Line counts are approximate and will drift; they're here to signal weight, not a
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/music-controller.mjs` | 1021 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, and the additive layers (`_layers`, one independent root engine per layer beside `_customEngine`). |
+| `scripts/music-controller.mjs` | 1574 | **The singleton decision-maker.** Context resolution, priority, transitions, crossfade, position memory, restored-playback reconciliation, the additive layers (`_layers`, one independent root engine per layer beside `_customEngine`), and suspended-run snapshots (`_suspendedRuns`, `_retainablePlaylistIds` — H9). |
 | `scripts/helpers.mjs` | 640 | `PlaylistContext` (`isOverlay`, `overlayAxis`), `FadingTrack`, `isHeadGM`, `isCustomPlaylist`, `getCustomGraph`, `resolveInitialTrack`, `resolvePlaylistRef`, `readMusicSection`, `getActiveOverlayId(axis)`, `sectionBaselinePriority()` (the scope hierarchy, applied at resolution time — never written to a flag), `writeCustomGraph`/`removeCustomGraph` (the **shared** graph writer — H1/H2 enforcement both the editor and the API route through), `describePlaylistContext`, `emitHook` (the non-fatal hook wrapper — the only place `Hooks.callAll` may be called), `log`. The Foundry-touching side of several pure modules. |
 
 ## Graph engine
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/custom-playback-engine.mjs` | 2424 | **The token-walk engine.** Per-node behavior (`loop.mode` switch: `count`/`forever`/`until`), singleton rule, sound ownership, hand-off latency (pending stops, preload lookahead, per-playlist/world crossfade), drain timings, idle detection, child engines, every safety net. |
+| `scripts/custom-playback-engine.mjs` | 2949 | **The token-walk engine.** Per-node behavior (`loop.mode` switch: `count`/`forever`/`until`), singleton rule, sound ownership, hand-off latency (pending stops, preload lookahead, per-playlist/world crossfade), drain timings, idle detection, child engines, `suspend()`/`resume()` snapshots, every safety net. |
 | `scripts/custom-playback-schema.mjs` | 236 | Graph/node/edge typedefs, `LoopSpec` union + `resolveLoop()`, durational vs instantaneous sets, `findUpcomingTrackNodes()` (preload lookahead), `resolveGraphCrossfadeMs()` (per-playlist crossfade override), `createEmptyGraph()`. **Pure.** |
 | `scripts/engine-clock.mjs` | 174 | Worker-backed scheduler with absolute due-times (H4), 100ms tick + `precise` mode for audible boundaries. |
 | `scripts/audio-end-watcher.mjs` | 79 | `'end'`-only listener management on `Sound` instances (H3). |
