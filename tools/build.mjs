@@ -167,8 +167,15 @@ function buildLang() {
  * @returns {void}
  */
 function buildTemplates() {
-  for (const file of fs.readdirSync(src('templates'))) {
-    if (!file.endsWith('.hbs')) continue;
+  // RECURSIVE. templates/parts/ holds the partials both binding windows include by full path, and
+  // a flat readdir silently left them out of dist/ - a release that renders fine in development
+  // and throws "The partial ... could not be found" the first time a GM opens the hub.
+  const walk = (dir = '') => fs.readdirSync(src('templates', dir), { withFileTypes: true })
+    .flatMap((entry) => (entry.isDirectory()
+      ? walk(path.join(dir, entry.name))
+      : (entry.name.endsWith('.hbs') ? [path.join(dir, entry.name)] : [])));
+
+  for (const file of walk()) {
     const minified = fs
       .readFileSync(src('templates', file), 'utf8')
       .replace(/\{\{!--[\s\S]*?--\}\}/g, '')

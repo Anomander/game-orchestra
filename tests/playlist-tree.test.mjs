@@ -118,6 +118,303 @@ describe('PlaylistTreeApp', () => {
     });
   });
 
+  describe('the Actors group', () => {
+    /**
+     * An Actor carrying a combat binding, of the shape readMusicSection reads through getFlag.
+     * @param {string} id
+     * @param {string} name
+     * @param {object|null} combat - The `music.combat` section, or null for an unbound actor
+     * @returns {object}
+     */
+    const makeActor = (id, name, combat) => new MockDocument({
+      documentName: 'Actor',
+      id,
+      name,
+      getFlag: vi.fn((_mod, key) => (key === 'music.combat' ? combat : null)),
+      setFlag: vi.fn().mockResolvedValue(),
+      unsetFlag: vi.fn().mockResolvedValue()
+    });
+
+    const withActors = (...actors) => {
+      game.actors = actors;
+      game.actors.get = vi.fn((id) => actors.find((a) => a.id === id) || null);
+      return actors;
+    };
+
+    beforeEach(() => {
+      setMockSetting('game-orchestra', 'configuredPhases', [{ id: 'enrage', label: 'Enrage', icon: 'fas fa-fire', color: '#f44336' }]);
+    });
+
+    it('lists only actors that already carry a binding - a world has hundreds and almost none have music', () => {
+      withActors(
+        makeActor('a1', 'Lich King', { playlist: 'pl-boss' }),
+        makeActor('a2', 'Peasant', null)
+      );
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.actors.map((a) => a.actorId)).toEqual(['a1']);
+    });
+
+    it('counts an overlay-only binding, not just a section default', () => {
+      withActors(makeActor('a1', 'Lich King', { overlays: { enrage: { playlist: 'pl-boss' } } }));
+
+      expect(app._prepareContext({}).actors).toHaveLength(1);
+    });
+
+    it('does not count a section left holding only exclusive/duck after a clear', () => {
+      // Clearing a SECTION deliberately leaves those standing (binding-store.mjs), so the object
+      // survives with nothing bound in it. Listing that actor would resurrect music the GM removed.
+      withActors(makeActor('a1', 'Lich King', { exclusive: true, duck: 0.4 }));
+
+      expect(app._prepareContext({}).actors).toHaveLength(0);
+    });
+
+    it('sorts by name, so the list does not reshuffle as bindings change', () => {
+      withActors(
+        makeActor('a1', 'Zombie', { playlist: 'pl-a' }),
+        makeActor('a2', 'Archmage', { playlist: 'pl-b' })
+      );
+
+      expect(app._prepareContext({}).actors.map((a) => a.name)).toEqual(['Archmage', 'Zombie']);
+    });
+
+    it('shows a pinned actor that has nothing bound yet, and marks it removable', () => {
+      withActors(makeActor('a1', 'Peasant', null));
+      app.pinnedActorIds.add('a1');
+
+      const [row] = app._prepareContext({}).actors;
+
+      expect(row.actorId).toBe('a1');
+      expect(row.hasOverride).toBe(false);
+      expect(row.isPinnedOnly).toBe(true);
+    });
+
+    it('does not list a pinned actor twice once it is bound', () => {
+      withActors(makeActor('a1', 'Lich King', { playlist: 'pl-boss' }));
+      app.pinnedActorIds.add('a1');
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.actors).toHaveLength(1);
+      expect(ctx.actors[0].isPinnedOnly).toBe(false);
+    });
+
+    it('namespaces every collapse key per actor, so two rows do not open and shut together', () => {
+      withActors(
+        makeActor('a1', 'Archmage', { playlist: 'pl-a' }),
+        makeActor('a2', 'Zombie', { playlist: 'pl-b' })
+      );
+
+      const [first, second] = app._prepareContext({}).actors;
+
+      expect(first.rowKey).not.toBe(second.rowKey);
+      expect(first.phaseCards[0].cardKey).not.toBe(second.phaseCards[0].cardKey);
+      expect(first.phaseCards[0].cardKey).toContain('a1');
+    });
+
+    it('marks the row resolving when that actor is the winning context, and opens its group', () => {
+      const [lich] = withActors(makeActor('a1', 'Lich King', { playlist: 'pl-boss' }));
+      game.gameOrchestra.musicController.currentContext = { contextEntity: lich, isOverlay: false, context: 'combat' };
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.actors[0].isResolving).toBe(true);
+      expect(ctx.actorsGroupResolving).toBe(true);
+      expect(ctx.collapsed.groupActors).toBe(false);
+    });
+
+    it('carries the actor action names, so the shared partial dispatches to real handlers', () => {
+      withActors(makeActor('a1', 'Lich King', { playlist: 'pl-boss' }));
+
+      const [row] = app._prepareContext({}).actors;
+
+      expect(row.dropScope).toBe('actor');
+      for (const action of Object.values(row.actions)) {
+        const registered = action in PlaylistTreeApp._ENTRY_SPECS;
+        expect(registered, `'${action}' is not in _ENTRY_SPECS`).toBe(true);
+      }
+    });
+  });
+
+  describe('actor writes resolve their target from the ELEMENT, not from instance state', () => {
+    let lich;
+    let goblin;
+
+    beforeEach(() => {
+      setMockSetting('game-orchestra', 'configuredPhases', [{ id: 'enrage', label: 'Enrage', icon: 'fas fa-fire', color: '#f44336' }]);
+      const make = (id, name) => new MockDocument({
+        documentName: 'Actor',
+        id,
+        name,
+        getFlag: vi.fn(() => null),
+        setFlag: vi.fn().mockResolvedValue(),
+        unsetFlag: vi.fn().mockResolvedValue()
+      });
+      lich = make('a1', 'Lich King');
+      goblin = make('a2', 'Goblin');
+      game.actors = [lich, goblin];
+      game.actors.get = vi.fn((id) => (id === 'a1' ? lich : id === 'a2' ? goblin : null));
+      game.gameOrchestra.playlistTree = app;
+    });
+
+    /** A control inside the row for `actorId`, as the rendered markup nests it. */
+    const controlIn = (actorId, dataset, extra = {}) => ({
+      ...extra,
+      dataset: { contextType: 'combat', ...dataset },
+      closest: (sel) => (sel.includes('data-actor-id') ? { dataset: { actorId } } : null)
+    });
+
+    it('writes to the actor whose row the control is in - several are visible at once', () => {
+      const target = controlIn('a2', { phaseId: 'enrage' }, { value: 'pl-boss' });
+
+      return PlaylistTreeApp.handleUpdateActorOverlay.call(app, new Event('change'), target).then(() => {
+        expect(goblin.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.overlays.enrage.playlist', 'pl-boss');
+        expect(lich.setFlag).not.toHaveBeenCalled();
+      });
+    });
+
+    it('writes the combat default at section level', async () => {
+      const target = controlIn('a1', {}, { value: 'pl-theme' });
+
+      await PlaylistTreeApp.handleUpdateActorDefault.call(app, new Event('change'), target);
+
+      expect(lich.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.playlist', 'pl-theme');
+    });
+
+    it('writes exclusive at SECTION level, never under a phase overlay', async () => {
+      const target = controlIn('a1', {}, { checked: true });
+
+      await PlaylistTreeApp.handleUpdateActorExclusive.call(app, new Event('change'), target);
+
+      expect(lich.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.exclusive', true);
+    });
+
+    it('unsets exclusive rather than storing false - layering is the absent-value default', async () => {
+      const target = controlIn('a1', {}, { checked: false });
+
+      await PlaylistTreeApp.handleUpdateActorExclusive.call(app, new Event('change'), target);
+
+      expect(lich.unsetFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.exclusive');
+    });
+
+    it('writes duck at section level too, through the existing op', async () => {
+      const target = controlIn('a1', {}, { value: '0.4' });
+
+      await PlaylistTreeApp.handleUpdateActorDuck.call(app, new Event('change'), target);
+
+      expect(lich.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.duck', 0.4);
+    });
+
+    it('removes the whole overlay entry on clear, so layer/duck cannot linger', async () => {
+      const target = controlIn('a1', { phaseId: 'enrage' });
+
+      await PlaylistTreeApp.handleClearActorOverlay.call(app, { preventDefault: vi.fn() }, target);
+
+      expect(lich.unsetFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.overlays.enrage');
+    });
+
+    it('writes nothing at all when the row carries no resolvable actor', async () => {
+      const target = controlIn('nope', {}, { value: 'pl-theme' });
+
+      await PlaylistTreeApp.handleUpdateActorDefault.call(app, new Event('change'), target);
+
+      expect(lich.setFlag).not.toHaveBeenCalled();
+      expect(goblin.setFlag).not.toHaveBeenCalled();
+    });
+
+    it('prefers a scoped popout\'s pinned document over any dataset lookup', async () => {
+      // A TokenConfig scopes to its TokenDocument, which is not an Actor and has no row id.
+      const token = new MockDocument({
+        documentName: 'Token', id: 'tok1', getFlag: vi.fn(() => null), setFlag: vi.fn().mockResolvedValue()
+      });
+      app.scopedDocument = token;
+      const target = controlIn('a1', {}, { value: 'pl-theme' });
+
+      await PlaylistTreeApp.handleUpdateActorDefault.call(app, new Event('change'), target);
+
+      expect(token.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.playlist', 'pl-theme');
+      expect(lich.setFlag).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('top-level groups open on what is audible, not on what is configured', () => {
+    // The scene fixture is bound (music.area.playlist -> pl-area) and so is the world default
+    // below, so "has a binding" alone cannot distinguish the groups - which is exactly the wall
+    // the grouping exists to remove.
+    const bindWorldDefault = () => setMockSetting('game-orchestra', 'defaultMusic', {
+      documentName: 'DefaultMusic',
+      data: { 'game-orchestra': { music: { area: { playlist: 'g-area' } } } }
+    });
+
+    it('opens only the group that is currently resolving, and shuts the other', () => {
+      bindWorldDefault();
+      game.gameOrchestra.musicController.currentContext = { contextEntity: scene1, isOverlay: false, context: 'area' };
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.scenesGroupResolving).toBe(true);
+      expect(ctx.collapsed.groupScenes).toBe(false);
+      expect(ctx.worldGroupResolving).toBe(false);
+      expect(ctx.collapsed.groupWorld).toBe(true);
+    });
+
+    it('opens the world group instead when the world default is what won', () => {
+      bindWorldDefault();
+      game.gameOrchestra.musicController.currentContext = {
+        contextEntity: { documentName: 'DefaultMusic' }, isOverlay: false, context: 'area'
+      };
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.collapsed.groupWorld).toBe(false);
+      expect(ctx.collapsed.groupScenes).toBe(true);
+    });
+
+    it('falls back to "holds a binding" when nothing is playing anywhere - a prep session must not open to three shut headers', () => {
+      bindWorldDefault();
+      game.gameOrchestra.musicController.currentContext = null;
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.collapsed.groupScenes).toBe(false);
+      expect(ctx.collapsed.groupWorld).toBe(false);
+    });
+
+    it('leaves an unbound group shut even in the nothing-playing fallback', () => {
+      game.gameOrchestra.musicController.currentContext = null;
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.collapsed.groupScenes).toBe(false); // scene fixture is bound
+      expect(ctx.collapsed.groupWorld).toBe(true);   // world default is not
+    });
+
+    it('lets an explicit toggle beat both rules', () => {
+      game.gameOrchestra.musicController.currentContext = { contextEntity: scene1, isOverlay: false, context: 'area' };
+      app.collapsedSections.add('groupScenes');
+
+      expect(app._prepareContext({}).collapsed.groupScenes).toBe(true);
+
+      app.collapsedSections.delete('groupScenes');
+      app.expandedSections.add('groupWorld');
+
+      expect(app._prepareContext({}).collapsed.groupWorld).toBe(false);
+    });
+
+    it('counts a live layer as resolving, so a layering overlay opens its group', () => {
+      game.gameOrchestra.musicController.currentContext = null;
+      game.gameOrchestra.musicController.currentLayerContexts = [
+        { isLayer: true, context: 'area', overlayId: 'boss', contextEntity: scene1 }
+      ];
+
+      const ctx = app._prepareContext({});
+
+      expect(ctx.scenesGroupResolving).toBe(true);
+      expect(ctx.collapsed.groupScenes).toBe(false);
+    });
+  });
+
   describe('handleSelectScene', () => {
     it('updates selectedSceneId and re-renders app', () => {
       const renderSpy = vi.spyOn(app, 'render').mockImplementation(() => {});
@@ -771,19 +1068,18 @@ describe('PlaylistTreeApp', () => {
     });
   });
 
-  describe('handleOpenMoodConfig', () => {
-    it('instantiates and renders MoodConfigApp when clicked', () => {
+  describe('handleOpenOverlayConfig (the ONE footer door - docs/wiki/ux.md D4/UX-5)', () => {
+    it('instantiates and renders the overlay dictionary when clicked', () => {
       const event = { preventDefault: vi.fn() };
-      PlaylistTreeApp.handleOpenMoodConfig(event, null);
+      PlaylistTreeApp.handleOpenOverlayConfig(event);
       expect(event.preventDefault).toHaveBeenCalled();
     });
-  });
 
-  describe('handleOpenPhaseConfig', () => {
-    it('instantiates and renders PhaseConfigApp when clicked', () => {
-      const event = { preventDefault: vi.fn() };
-      PlaylistTreeApp.handleOpenPhaseConfig(event, null);
-      expect(event.preventDefault).toHaveBeenCalled();
+    it('registers exactly one overlay-dictionary action, not a mood door and a phase door', () => {
+      const actions = Object.keys(PlaylistTreeApp.DEFAULT_OPTIONS.actions);
+      expect(actions).toContain('openOverlayConfig');
+      expect(actions).not.toContain('openMoodConfig');
+      expect(actions).not.toContain('openPhaseConfig');
     });
   });
 
@@ -827,7 +1123,7 @@ describe('PlaylistTreeApp', () => {
     it('toggles section key in expanded/collapsed sets and re-renders app', () => {
       game.gameOrchestra.playlistTree = app;
       const event = { preventDefault: vi.fn() };
-      const target = { dataset: { section: 'sceneMoods', defaultCollapsed: 'false' }, closest: () => null };
+      const target = { dataset: { collapseKey: 'sceneMoods', defaultCollapsed: 'false' }, closest: () => null };
 
       PlaylistTreeApp.handleToggleSection(event, target);
 
@@ -836,6 +1132,17 @@ describe('PlaylistTreeApp', () => {
       PlaylistTreeApp.handleToggleSection(event, target);
 
       expect(app.expandedSections.has('sceneMoods')).toBe(true);
+    });
+
+    it('ignores data-section outright - a collapse key is not a music section', () => {
+      game.gameOrchestra.playlistTree = app;
+      const event = { preventDefault: vi.fn() };
+      const target = { dataset: { section: 'combat', defaultCollapsed: 'false' }, closest: () => null };
+
+      PlaylistTreeApp.handleToggleSection(event, target);
+
+      expect(app.collapsedSections.has('combat')).toBe(false);
+      expect(app.expandedSections.has('combat')).toBe(false);
     });
 
     it('defaults to collapsed when an item has no overrides, and expanded when it has overrides', () => {
@@ -1021,12 +1328,64 @@ describe('PlaylistTreeApp', () => {
 
     it('ignores drops with unsupported document types', async () => {
       globalThis.fromUuid = vi.fn();
-      const event = makeDropEvent({ type: 'Actor', uuid: 'Actor.abc' }, {});
+      const event = makeDropEvent({ type: 'JournalEntry', uuid: 'JournalEntry.abc' }, {});
 
       const result = await app._onDropExternal(event);
 
       expect(result).toBe(false);
       expect(globalThis.fromUuid).not.toHaveBeenCalled();
+    });
+
+    describe('dropping an Actor onto the Actors zone', () => {
+      const zoneEvent = (payload) => makeDropEvent(payload, { dropZone: 'actors' });
+
+      it('pins the actor so its row renders before anything is bound', async () => {
+        const actor = { id: 'a1', name: 'Lich King' };
+        globalThis.fromUuid = vi.fn().mockResolvedValue(actor);
+
+        const result = await app._onDropExternal(zoneEvent({ type: 'Actor', uuid: 'Actor.a1' }));
+
+        expect(result).toBe(true);
+        expect(app.pinnedActorIds.has('a1')).toBe(true);
+      });
+
+      it('does not re-trigger playback - pinning binds nothing', async () => {
+        globalThis.fromUuid = vi.fn().mockResolvedValue({ id: 'a1', name: 'Lich King' });
+
+        await app._onDropExternal(zoneEvent({ type: 'Actor', uuid: 'Actor.a1' }));
+
+        expect(game.gameOrchestra.musicController.playCurrentTrack).not.toHaveBeenCalled();
+      });
+
+      it('refuses an Actor dropped on a binding box - a playlist cannot be an actor', async () => {
+        globalThis.fromUuid = vi.fn();
+        const event = makeDropEvent({ type: 'Actor', uuid: 'Actor.a1' }, { dropScope: 'scene', contextType: 'area' });
+
+        const result = await app._onDropExternal(event);
+
+        expect(result).toBe(false);
+        expect(app.pinnedActorIds.size).toBe(0);
+      });
+
+      it('refuses a Playlist dropped on the Actors zone', async () => {
+        const droppedPlaylist = new MockPlaylistDoc({ id: 'pl-area', name: 'Area Playlist', mode: 0 });
+        globalThis.fromUuid = vi.fn().mockResolvedValue(droppedPlaylist);
+        game.playlists.get = vi.fn(() => droppedPlaylist);
+
+        // The zone carries no drop scope or context type, so there is no binding to write.
+        const result = await app._onDropExternal(zoneEvent({ type: 'Playlist', uuid: 'Playlist.pl-area' }));
+
+        expect(result).toBe(false);
+      });
+
+      it('pins nothing when the payload resolves to no Actor', async () => {
+        globalThis.fromUuid = vi.fn().mockResolvedValue(null);
+
+        const result = await app._onDropExternal(zoneEvent({ type: 'Actor', uuid: 'Actor.gone' }));
+
+        expect(result).toBe(false);
+        expect(app.pinnedActorIds.size).toBe(0);
+      });
     });
 
     it('awaits playCurrentTrack() before re-rendering, rather than racing it', async () => {

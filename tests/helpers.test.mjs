@@ -19,7 +19,9 @@ import {
   getAvailablePlaylists,
   buildPlaylistEntry,
   emitHook,
-  describePlaylistContext
+  describePlaylistContext,
+  sectionHasBinding,
+  listBoundActors
 } from '../scripts/helpers.mjs';
 
 describe('helpers.mjs', () => {
@@ -849,6 +851,53 @@ describe('helpers.mjs', () => {
 
     it('returns null for no context', () => {
       expect(describePlaylistContext(null)).toBeNull();
+    });
+  });
+
+  describe('sectionHasBinding', () => {
+    it('is true for a section playlist', () => {
+      expect(sectionHasBinding({ playlist: 'pl-1' })).toBe(true);
+    });
+
+    it('is true for an overlay-only binding', () => {
+      expect(sectionHasBinding({ overlays: { enrage: { playlist: 'pl-1' } } })).toBe(true);
+    });
+
+    it('is FALSE for a section left holding only exclusive/duck after a clear', () => {
+      // Clearing a section deliberately leaves those standing (binding-store.mjs), so the object
+      // survives with nothing bound in it. "The section exists" is not "something is bound".
+      expect(sectionHasBinding({ exclusive: true, duck: 0.4 })).toBe(false);
+    });
+
+    it('is false for an overlay entry whose playlist was removed', () => {
+      expect(sectionHasBinding({ overlays: { enrage: { layer: true } } })).toBe(false);
+    });
+
+    it('is false for null and undefined', () => {
+      expect(sectionHasBinding(null)).toBe(false);
+      expect(sectionHasBinding(undefined)).toBe(false);
+    });
+  });
+
+  describe('listBoundActors', () => {
+    const actor = (id, name, combat) => new MockDocument({
+      documentName: 'Actor', id, name,
+      getFlag: vi.fn((_mod, key) => (key === 'music.combat' ? combat : null))
+    });
+
+    it('returns only actors carrying a combat binding, sorted by name', () => {
+      game.actors = [
+        actor('a1', 'Zombie', { playlist: 'pl-z' }),
+        actor('a2', 'Peasant', null),
+        actor('a3', 'Archmage', { overlays: { enrage: { playlist: 'pl-a' } } })
+      ];
+
+      expect(listBoundActors().map((a) => a.name)).toEqual(['Archmage', 'Zombie']);
+    });
+
+    it('returns an empty list rather than throwing when there are no actors at all', () => {
+      game.actors = undefined;
+      expect(listBoundActors()).toEqual([]);
     });
   });
 });

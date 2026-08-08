@@ -1,7 +1,6 @@
 import { CONST } from './config.mjs';
 import { log, isCustomPlaylist, getPlaylistById } from './helpers.mjs';
 import { MoodWidget } from './mood-widget.mjs';
-import { GameOrchestraConfig } from './app.mjs';
 import { CustomPlaylistEditor } from './custom-playlist-editor.mjs';
 import { PlaylistMixerApp, refreshMixerViews } from './playlist-mixer.mjs';
 import { handleUpdatePlaylistMix, handleUpdatePlaylistSoundMix } from './playlist-mix-apply.mjs';
@@ -34,13 +33,18 @@ export function getSceneControlButtons(controls) {
           onChange: (_event, active) => setSuppression(control.setting, active)
         };
       }
+      // `toggle`, not `button`. Both of these call toggle() - they are switches, and a plain
+      // button never shows whether its window is already open, so the bar sat there reporting
+      // nothing about the two surfaces it controls. `active` reads the live instance each time
+      // this hook runs, which is also how setSuppression re-initialises the bar.
       controls.sounds.tools['mood-widget'] = {
         name: 'mood-widget',
         order: 12,
         title: 'GameOrchestra.MoodWidget.Title',
         icon: 'fas fa-sliders-h',
-        button: true,
+        toggle: true,
         visible: true,
+        active: !!game.gameOrchestra?.moodWidget?.rendered,
         onChange: () => {
           MoodWidget.toggle();
         }
@@ -57,8 +61,9 @@ export function getSceneControlButtons(controls) {
         order: 13,
         title: 'GameOrchestra.PlaylistTree.Label',
         icon: 'fas fa-music',
-        button: true,
+        toggle: true,
         visible: true,
+        active: !!game.gameOrchestra?.playlistTree?.rendered,
         onChange: () => {
           PlaylistTreeApp.toggle();
         }
@@ -474,7 +479,14 @@ export function handleTokenConfigRender(app, html, _context, _options) {
     button.innerHTML = `<i class="fas fa-music"></i> ${_loc('GameOrchestra.ConfigTitle')}`;
     button.addEventListener('click', (event) => {
       event.preventDefault();
-      new GameOrchestraConfig(token).render(true);
+      // Opens the hub narrowed to this document rather than a second window with a second layout
+      // (docs/wiki/ux.md UX-3/D1, step 6b) - the same move the Scene sheet's button made in 6a.
+      // Same cards, same immediate writes, same drop targets a GM already knows.
+      //
+      // Behaviour change worth knowing: binding here is no longer cancellable. The hub writes
+      // through data-change-action on every change, where GameOrchestraConfig had an explicit
+      // Save. That matches core v13+ sheets, and it is in the release notes.
+      PlaylistTreeApp.openScopedDocument(token);
     });
     formFields.appendChild(button);
     formGroup.appendChild(label);

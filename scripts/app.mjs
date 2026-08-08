@@ -1,10 +1,17 @@
 import { CONST } from './config.mjs';
-import { getDocumentCategory, getProperty, log, getAvailablePlaylists, buildPlaylistEntry, resolveInitialTrack } from './helpers.mjs';
+import { getDocumentCategory, getProperty, log, getAvailablePlaylists, resolveInitialTrack } from './helpers.mjs';
 import { GameOrchestraAppMixin } from './app-mixins.mjs';
+import { buildCombatPhaseGrid } from './binding-cards.mjs';
 import { coerceDuckFactor } from './playlist-mix.mjs';
-import { updateObjectStore, bindingPath, applyBindingPlaylist, applyBindingTrack, clearBindingOverlay } from './binding-store.mjs';
-
-const _loc = (key) => game.i18n.localize(key);
+import {
+  updateObjectStore,
+  bindingPath,
+  applyBindingPlaylist,
+  applyBindingTrack,
+  applyBindingDuck,
+  applyBindingExclusive,
+  clearBindingOverlay
+} from './binding-store.mjs';
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const { DragDrop } = foundry.applications.ux;
@@ -22,28 +29,26 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     // window supports via dragDrop below and a modal would block outright. The hub
     // has always been non-modal; this window disagreeing was the tell.
     classes: ['game-orchestra-config'],
-    form: {
-      handler: GameOrchestraConfig.formHandler,
-      closeOnSubmit: false,
-      submitOnChange: false
-    },
+    // No form handler and no Save button. Every control writes immediately through
+    // `data-change-action`, as the hub does and as core v13+ sheets do. The old handler only ever
+    // harvested the deleted scene form's `initialTrack` selects, so it had nothing left to
+    // collect - keeping an inert Save would have promised a commit step that no longer exists.
+    form: { closeOnSubmit: false, submitOnChange: false },
     position: { width: 'auto', height: 'auto' },
     actions: {
-      reset: GameOrchestraConfig.handleReset,
-      openPlaylist: GameOrchestraConfig.openPlaylist,
-      deletePlaylist: GameOrchestraConfig.deletePlaylist,
-      selectOverlay: GameOrchestraConfig.selectOverlay,
       clearPhaseEntry: GameOrchestraConfig.handleClearPhaseEntry,
       clearDefaultEntry: GameOrchestraConfig.handleClearDefaultEntry,
       toggleSection: GameOrchestraConfig.handleToggleSection
     },
-    dragDrop: [{ dragSelector: null, dropSelector: '.playlist-section[data-section]', permissions: { dragstart: false, drop: true }, callbacks: {} }]
+    // `.context-box[data-drop-scope]` - the same selector the hub uses, now that both render the
+    // same partial. It used to be `.playlist-section[data-section]`, which matched TWO unrelated
+    // elements (the grid's boxes and the deleted scene form's wrapper) and was the stated blocker
+    // on sharing this markup at all (docs/wiki/ux.md § Why the markup merge stopped there).
+    dragDrop: [{ dragSelector: null, dropSelector: '.context-box[data-drop-scope]', permissions: { dragstart: false, drop: true }, callbacks: {} }]
   };
 
   /** @override */
   static PARTS = { form: { template: 'modules/game-orchestra/templates/music-config.hbs' } };
-
-  config = [];
 
   /**
    * Create a new configuration instance
@@ -53,11 +58,6 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
   constructor(object, options = {}) {
     super(options);
     this.document = object;
-    // Two independent tab selections, one per overlay axis (config.mjs#sectionAxis) -
-    // an area section's tabs are moods, a combat section's are phases, and the
-    // Scene layout shows both at once (see _prepareContext/initializeConfig).
-    this.selectedMood = options.selectedMood || game.settings.get(CONST.moduleId, CONST.settings.activeMood) || '';
-    this.selectedPhase = options.selectedPhase || game.settings.get(CONST.moduleId, CONST.settings.activePhase) || '';
     this.expandedSections = new Set(options.expandedSections || []);
     this.collapsedSections = new Set(options.collapsedSections || []);
     if (game.gameOrchestra) game.gameOrchestra.configApp = this;
@@ -69,19 +69,6 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     if (game.gameOrchestra?.configApp === this) {
       game.gameOrchestra.configApp = null;
     }
-  }
-
-  /**
-   * Handle selecting a mood or phase tab. Which instance field it writes is
-   * decided by the tab's own `data-axis` ('mood' or 'phase'), not by which
-   * section it happens to render under - see config.mjs#sectionAxis.
-   */
-  static selectOverlay(event, target) {
-    event.preventDefault();
-    const axis = target.dataset.axis === 'phase' ? 'phase' : 'mood';
-    if (axis === 'phase') this.selectedPhase = target.dataset.overlay || '';
-    else this.selectedMood = target.dataset.overlay || '';
-    this.render(false);
   }
 
   /**
@@ -99,6 +86,22 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
   };
 
   /**
+   * This window's handler names, for the shared `combat-grid.hbs` partial. The hub's counterpart
+   * is `PlaylistTreeApp._ACTOR_ACTIONS` - same markup, different handlers, so the names travel in
+   * the view model rather than being hard-coded in a template that two windows share.
+   */
+  static _GRID_ACTIONS = Object.freeze({
+    overlay: 'updatePhaseEntry',
+    overlayTrack: 'updatePhaseTrack',
+    clearOverlay: 'clearPhaseEntry',
+    default: 'updateDefaultEntry',
+    defaultTrack: 'updateDefaultTrack',
+    clearDefault: 'clearDefaultEntry',
+    exclusive: 'toggleExclusive',
+    duck: 'updateDuck'
+  });
+
+  /**
    * Handle the layer's duck slider - how far everything that isn't this layer is attenuated
    * while it plays. Stored as the resulting MULTIPLIER in [0, 1] (100% = untouched), matching
    * the mixer's own gain field, and at section level like `exclusive`. 1 removes the key rather
@@ -108,8 +111,10 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     const slider = target.closest('input[type="range"]') || target;
     const factor = coerceDuckFactor(slider.value);
     try {
-      if (factor < 1) await this.updateObject({ 'music.combat.duck': factor });
-      else await this.updateObject({ 'music.combat.-=duck': null });
+      // Through the binding ops, not a hand-built deletion key. These two handlers were the last
+      // binding writes in the module bypassing binding-store.mjs, which is precisely the shape
+      // that let three copies of this logic drift apart before it existed (D1).
+      await applyBindingDuck(this.bindingStore, bindingPath('combat', null), factor);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token layer duck:', error);
@@ -126,8 +131,7 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
   static async handleToggleExclusive(event, target) {
     const checkbox = target.closest('input[type="checkbox"]') || target;
     try {
-      if (checkbox.checked) await this.updateObject({ 'music.combat.exclusive': true });
-      else await this.updateObject({ 'music.combat.-=exclusive': null });
+      await applyBindingExclusive(this.bindingStore, bindingPath('combat', null), !!checkbox.checked);
       game.gameOrchestra?.musicController?.playCurrentTrack();
     } catch (error) {
       log(1, 'Failed to update token exclusive-playback flag:', error);
@@ -319,103 +323,18 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     return this.documentTypeName === 'Token';
   }
 
-  /**
-   * Initialize the playlist configuration from document or defaults. Each
-   * section reads its own axis's tab selection (area -> selectedMood, combat ->
-   * selectedPhase - config.mjs#sectionAxis), so a Scene document's Area and
-   * Combat fieldsets can show different overrides at once.
-   */
-  initializeConfig() {
-    try {
-      const docType = this.documentTypeName;
-      const sections = CONST.playlistSections[docType];
-      if (!sections) {
-        log(1, 'No sections found for document type:', docType);
-        this.config = [];
-        return;
-      }
-      const data = getProperty(this.document, this.updateDataPrefix) || {};
-      this.config = Object.entries(sections).map(([key, sectionConfig]) => {
-        const axis = CONST.sectionAxis[key];
-        const overlayId = (axis === 'phase' ? this.selectedPhase : this.selectedMood) || '';
-        const rawSection = getProperty(data, `music.${key}`) || {};
-        const effectiveData = overlayId ? (rawSection.overlays?.[overlayId] || {}) : rawSection;
-        const playlistId = effectiveData.playlist;
-        const playlist = playlistId ? game.playlists.get(playlistId) : null;
-        const tracks =
-          playlist?.playbackOrder?.reduce((obj, id) => {
-            const track = playlist.sounds.get(id);
-            if (track) obj[id] = track.name;
-            return obj;
-          }, {}) || {};
-        return {
-          id: key,
-          axis,
-          label: sectionConfig.label,
-          order: effectiveData.order || sectionConfig.priority || 0,
-          enabled: !!playlist,
-          playlist,
-          tracks,
-          data: effectiveData
-        };
-      });
-      this.config.sort((a, b) => a.order - b.order);
-    } catch (error) {
-      log(1, 'Error initializing configuration:', error);
-      this.config = [];
-    }
-  }
-
   /** @override */
   _prepareContext(_options) {
-    this.initializeConfig();
-    const playlistConfig = this.config.map((section, index) => ({
-      ...section,
-      index,
-      labelLocalized: _loc(section.label),
-      selectedOverlay: (section.axis === 'phase' ? this.selectedPhase : this.selectedMood) || ''
-    }));
-    const buttons = [
-      { type: 'submit', icon: 'fas fa-save', label: 'GameOrchestra.UI.Save' },
-      { type: 'button', action: 'reset', icon: 'fas fa-undo', label: 'GameOrchestra.UI.Reset' }
-    ];
-    const activeWorldMood = game.settings.get(CONST.moduleId, CONST.settings.activeMood) || '';
     const activeWorldPhase = game.settings.get(CONST.moduleId, CONST.settings.activePhase) || '';
-    const configuredMoods = game.settings.get(CONST.moduleId, CONST.settings.configuredMoods) || CONST.defaultMoods;
     const configuredPhases = game.settings.get(CONST.moduleId, CONST.settings.configuredPhases) || CONST.defaultPhases;
     const docData = getProperty(this.document, this.updateDataPrefix) || {};
 
-    // hasOverride only scans sections whose OWN axis matches - an area section's
-    // overlays never make a phase "have an override" and vice versa.
-    const sectionKeysForAxis = (axis) => Object.entries(CONST.sectionAxis).filter(([, a]) => a === axis).map(([key]) => key);
-    const hasAnyOverride = (id, axis) =>
-      sectionKeysForAxis(axis).some((secKey) => !!docData.music?.[secKey]?.overlays?.[id]?.playlist);
-
-    const availableMoods = configuredMoods.map((m) => ({
-      ...m,
-      isActive: m.id === (this.selectedMood || ''),
-      isWorldActive: m.id === activeWorldMood,
-      hasOverride: hasAnyOverride(m.id, 'mood')
-    }));
-    const availablePhases = configuredPhases.map((p) => ({
-      ...p,
-      isActive: p.id === (this.selectedPhase || ''),
-      isWorldActive: p.id === activeWorldPhase,
-      hasOverride: hasAnyOverride(p.id, 'phase')
-    }));
     const context = {
-      playlistConfig,
-      buttons,
       documentType: this.documentTypeName,
-      availableMoods,
-      selectedMood: this.selectedMood || '',
-      activeWorldMood,
-      availablePhases,
-      selectedPhase: this.selectedPhase || '',
-      activeWorldPhase,
       isTokenPhaseGrid: this.isTokenPhaseGrid
     };
     if (this.isTokenPhaseGrid) Object.assign(context, this._preparePhaseGridContext(docData, configuredPhases, activeWorldPhase));
+    else log(1, `GameOrchestraConfig: no music sections for document type '${this.documentTypeName}'`);
     return context;
   }
 
@@ -431,67 +350,35 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
    */
   _preparePhaseGridContext(docData, configuredPhases, activeWorldPhase) {
     const availablePlaylists = getAvailablePlaylists();
-    const combatSection = docData.music?.combat || {};
 
     const currentControllerContext = game.gameOrchestra?.musicController?.currentContext || null;
-    const winningEntity = currentControllerContext?.contextEntity;
-    const winningIsPhaseOverlay = currentControllerContext?.isOverlay && currentControllerContext?.overlayAxis === 'phase';
+    const isWinner = currentControllerContext?.contextEntity === this.document;
+    const winnerIsPhaseOverlay = !!(currentControllerContext?.isOverlay && currentControllerContext?.overlayAxis === 'phase');
 
-    const phaseCards = configuredPhases.map((p) => {
-      const playlistId = combatSection.overlays?.[p.id]?.playlist || null;
-      const trackId = combatSection.overlays?.[p.id]?.initialTrack || null;
-      const hasOverride = !!playlistId;
-      const isResolving = winningEntity === this.document && winningIsPhaseOverlay && activeWorldPhase === p.id;
-      const cardKey = `tokenPhase:${p.id}`;
-      const isCardCollapsed = this.isSectionCollapsed(cardKey, hasOverride);
-
-      return {
-        phaseId: p.id,
-        label: p.label,
-        icon: p.icon,
-        color: p.color,
-        combat: buildPlaylistEntry(availablePlaylists, playlistId, trackId),
-        isActive: activeWorldPhase === p.id,
-        isResolving,
-        hasOverride,
-        isCardCollapsed,
-        cardKey
-      };
+    // One builder, shared with the hub's Actors group (binding-cards.mjs). Building this shape
+    // twice is exactly how the two binding surfaces drifted apart in the first place (D1).
+    const grid = buildCombatPhaseGrid({
+      combatSection: docData.music?.combat,
+      configuredPhases,
+      availablePlaylists,
+      activePhase: activeWorldPhase,
+      keyPrefix: 'tokenPhase',
+      isCollapsed: (key, hasOverride) => this.isSectionCollapsed(key, hasOverride),
+      isWinner,
+      winnerIsPhaseOverlay,
+      dropScope: 'token',
+      actions: GameOrchestraConfig._GRID_ACTIONS
     });
 
-    const defaultEntry = { combat: buildPlaylistEntry(availablePlaylists, combatSection.playlist || null, combatSection.initialTrack || null) };
-
-    const phasesResolving = winningEntity === this.document && winningIsPhaseOverlay;
-    const defaultResolving = winningEntity === this.document && !winningIsPhaseOverlay;
-
-    const hasPhasesOverride = phaseCards.some((p) => p.hasOverride);
-    const hasDefaultOverride = !!defaultEntry.combat.playlistId;
-
-    const collapsed = {
-      phases: this.isSectionCollapsed('tokenPhases', hasPhasesOverride),
-      default: this.isSectionCollapsed('tokenDefault', hasDefaultOverride)
-    };
-
-    // Section level, deliberately read off combatSection rather than the selected phase overlay:
-    // one flag governs whichever playlist this section resolves to for any phase. Only offered
-    // once something is actually configured - the choice is meaningless with no playlist set.
-    const combatExclusive = combatSection.exclusive === true;
-    const hasAnyCombatPlaylist = !!defaultEntry.combat.playlistId || phaseCards.some((p) => p.hasOverride);
-    // Stored as the multiplier the rest of the music is taken to, so 1 is "no ducking" and the
-    // slider reads the same way round as the mixer's gain.
-    const combatDuck = coerceDuckFactor(combatSection.duck);
-
+    // `availablePlaylists` comes back out of the grid rather than being re-added here. This
+    // window used to add its own copy, so it rendered correctly while the hub's actor rows - which
+    // only spread the grid - showed two empty pickers. One source, no second chance to forget.
     return {
-      availablePlaylists,
-      phaseCards,
-      defaultEntry,
-      phasesResolving,
-      defaultResolving,
-      collapsed,
-      combatExclusive,
-      hasAnyCombatPlaylist,
-      combatDuck,
-      combatDuckPercent: Math.round(combatDuck * 100)
+      ...grid,
+      phasesKey: 'tokenPhases',
+      defaultKey: 'tokenDefault',
+      phasesCollapsed: this.isSectionCollapsed('tokenPhases', grid.hasPhasesOverride),
+      defaultCollapsed: this.isSectionCollapsed('tokenDefault', grid.hasDefaultOverride)
     };
   }
 
@@ -668,89 +555,4 @@ export class GameOrchestraConfig extends GameOrchestraAppMixin(HandlebarsApplica
     log(1, 'GameOrchestraConfig.updateObject: unsupported document type; nothing was saved:', this.document?.constructor?.name);
   }
 
-  /**
-   * Handle reset action
-   * @param {Event} event - The click event
-   * @param {HTMLFormElement} _form - The form element
-   */
-  static handleReset(event, _form) {
-    event.preventDefault();
-    this.initializeConfig();
-    this.render(false);
-  }
-
-  /**
-   * Open playlist sheet action
-   * @param {Event} _event - The click event
-   * @param {HTMLElement} target - The target element
-   */
-  static async openPlaylist(_event, target) {
-    const playlistId = target.closest('.playlist-section').dataset.itemId;
-    const playlist = game.playlists.get(playlistId);
-    if (playlist) playlist.sheet.render(true);
-  }
-
-  /**
-   * Delete playlist action
-   * @param {Event} _event - The click event
-   * @param {HTMLElement} target - The target element
-   */
-  static async deletePlaylist(_event, target) {
-    const section = target.closest('.playlist-section').dataset.section;
-    const axis = CONST.sectionAxis[section];
-    const overlayId = (axis === 'phase' ? this.selectedPhase : this.selectedMood) || '';
-    try {
-      if (overlayId) {
-        await this.updateObject({ [`music.${section}.overlays.-=${overlayId}`]: null });
-        log(3, `Successfully deleted playlist override for ${axis} '${overlayId}', section '${section}'`);
-      } else {
-        await this.updateObject({ [`music.-=${section}`]: null });
-        log(3, `Successfully deleted default playlist configuration override for section '${section}'`);
-      }
-    } catch (error) {
-      log(1, `Failed to delete playlist configuration override for section '${section}':`, error);
-    }
-  }
-
-  /**
-   * Handle form submission
-   * @param {Event} _event - The submit event
-   * @param {HTMLFormElement} _form - The form element
-   * @param {object} formData - The form data
-   * @returns {Promise<boolean>} Whether submission succeeded
-   * @override
-   */
-  static async formHandler(_event, _form, formData) {
-    const updateData = Object.fromEntries(Object.entries(formData.object).filter(([key]) => key.startsWith('music.')));
-    if (Object.keys(updateData).length > 0) {
-      // Validate Soundboard playlists: auto-assign the first track when none was
-      // picked. resolveInitialTrack() already excludes custom playlists (H2) -
-      // a stray trackId would otherwise bypass their graph entirely.
-      for (const key of Object.keys(updateData)) {
-        if (key.endsWith('.playlist')) {
-          const playlistId = updateData[key];
-          const trackKey = key.replace(/\.playlist$/, '.initialTrack');
-          if (playlistId) {
-            const initialTrackId = resolveInitialTrack(playlistId, updateData[trackKey]);
-            if (initialTrackId) updateData[trackKey] = initialTrackId;
-          }
-        }
-      }
-      try {
-        log(3, 'Saving Game Orchestra configuration updates:', updateData);
-        await this.updateObject(updateData);
-        game.gameOrchestra?.musicController?.playCurrentTrack();
-        log(3, 'Successfully saved Game Orchestra configuration updates.');
-        this.close();
-      } catch (error) {
-        log(1, 'Error updating data:', error);
-        ui.notifications.error(_loc('GameOrchestra.SaveFailed'));
-        return false;
-      }
-    } else {
-      log(3, 'Form submitted with no updates.');
-      this.close();
-    }
-    return true;
-  }
 }

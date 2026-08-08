@@ -23,7 +23,7 @@ import {
 } from '../scripts/hooks.mjs';
 import { CONST } from '../scripts/config.mjs';
 import { MoodWidget } from '../scripts/mood-widget.mjs';
-import { GameOrchestraConfig } from '../scripts/app.mjs';
+import { PlaylistTreeApp } from '../scripts/playlist-tree.mjs';
 
 describe('hooks.mjs', () => {
   let mockController;
@@ -515,8 +515,22 @@ describe('hooks.mjs', () => {
 
       const hub = controls.sounds.tools['game-orchestra-hub'];
       expect(hub).toBeDefined();
-      expect(hub.button).toBe(true);
       expect(typeof hub.onChange).toBe('function');
+    });
+
+    it('renders the two window launchers as toggles that report whether their window is open', () => {
+      // Both call toggle(), so they ARE switches - as plain buttons the bar sat there saying
+      // nothing about the state of the two surfaces it controls.
+      game.gameOrchestra.playlistTree = { rendered: true };
+      game.gameOrchestra.moodWidget = null;
+      const controls = { sounds: { tools: {} } };
+
+      getSceneControlButtons(controls);
+
+      expect(controls.sounds.tools['game-orchestra-hub'].toggle).toBe(true);
+      expect(controls.sounds.tools['game-orchestra-hub'].active).toBe(true);
+      expect(controls.sounds.tools['mood-widget'].toggle).toBe(true);
+      expect(controls.sounds.tools['mood-widget'].active).toBe(false);
     });
 
     it('gracefully handles missing sounds tools object', () => {
@@ -580,30 +594,37 @@ describe('hooks.mjs', () => {
     };
 
     /**
-     * Click the injected config button and report which document the window got.
+     * Click the injected config button and report which document the hub was scoped to.
      * @param {object} app - Mock token sheet.
-     * @returns {object|undefined} The document handed to GameOrchestraConfig.
+     * @returns {object|undefined} The document handed to PlaylistTreeApp.openScopedDocument.
      */
     const openConfigFrom = (app) => {
       const { html, inserted } = mockSheetHtml();
       let captured;
-      const renderSpy = vi.spyOn(GameOrchestraConfig.prototype, 'render').mockImplementation(function () {
-        captured = this.document;
-        return this;
-      });
+      const spy = vi.spyOn(PlaylistTreeApp, 'openScopedDocument').mockImplementation((doc) => { captured = doc; });
       handleTokenConfigRender(app, html);
       const find = (el) => (el.className === 'game-orchestra-token-config' ? el : el.children?.reduce((hit, c) => hit || find(c), null));
       const button = inserted.reduce((hit, el) => hit || find(el), null);
       button.listeners.click({ preventDefault: () => {} });
-      renderSpy.mockRestore();
+      spy.mockRestore();
       return captured;
     };
 
-    it('regression: opens the config on the real TokenDocument, never the sheet preview clone', () => {
+    it('opens the hub scoped to this document, not a second window with a second layout', () => {
+      // docs/wiki/ux.md step 6b: the token half of the merge the Scene sheet already made in 6a.
+      game.user = { isGM: true };
+      const realToken = { documentName: 'Token', id: 'tok1', actorLink: false, getFlag: vi.fn() };
+
+      const captured = openConfigFrom({ isPrototype: false, document: realToken, token: realToken });
+
+      expect(captured).toBe(realToken);
+    });
+
+    it('regression: scopes to the real TokenDocument, never the sheet preview clone', () => {
       game.user = { isGM: true };
       const realToken = { documentName: 'Token', id: 'tok1', actorLink: false, getFlag: vi.fn() };
       // TokenConfig#token is `this._preview ?? this.document` - a detached clone
-      // that swallows every flag write (hooks.mjs#handleTokenConfigRender).
+      // that swallows every flag write (hooks.mjs#handleTokenConfigRender, HR-I).
       const previewClone = { documentName: 'Token', id: 'tok1', actorLink: false, getFlag: vi.fn() };
 
       const captured = openConfigFrom({ isPrototype: false, document: realToken, token: previewClone });
@@ -612,7 +633,7 @@ describe('hooks.mjs', () => {
       expect(captured).not.toBe(previewClone);
     });
 
-    it('regression: opens the config on the actor\'s real PrototypeToken, never the sheet preview clone', () => {
+    it('regression: scopes to the actor\'s real PrototypeToken, never the sheet preview clone', () => {
       game.user = { isGM: true };
       const realPrototype = { id: 'proto1', actorLink: true, getFlag: vi.fn() };
       const previewClone = { id: 'proto1', actorLink: true, getFlag: vi.fn() };

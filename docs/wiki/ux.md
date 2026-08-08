@@ -19,9 +19,9 @@ Seven window classes, reached through roughly two dozen entry points.
 
 | Surface | File | Opened from | Modal |
 |---|---|---|---|
-| `GameOrchestraConfig` | `app.mjs` | Token Config (Identity), Prototype Token Config | no |
-| `PlaylistTreeApp` | `playlist-tree.mjs` | Settings menu, keybinding, **scene control (sounds)**, Mood Widget header, **Scene Config button (scoped)** | no |
-| `OverlayConfigApp` | `mood-config.mjs` | Tree footer (two doors: Moods tab, Phases tab) | no |
+| `GameOrchestraConfig` | `app.mjs` | **nothing in the module** — legacy API only (`game.gameOrchestra.GameOrchestraConfig`) | no |
+| `PlaylistTreeApp` | `playlist-tree.mjs` | Settings menu, keybinding, **scene control (sounds)**, Mood Widget header, **Scene Config button (scoped)**, **Token/Prototype Token button (scoped)** | no |
+| `OverlayConfigApp` | `mood-config.mjs` | Tree footer (**one** door) | no |
 | `MoodWidget` | `mood-widget.mjs` | Scene control (sounds), keybinding, restored on `ready` | no |
 | `CustomPlaylistEditor` | `custom-playlist-editor.mjs` | Playlist Config button, **directory context menu**, tree card button | no |
 | `PlaylistMixerApp` | `playlist-mixer.mjs` | Playlist Config button, directory context menu, editor Tracks pane | no |
@@ -60,17 +60,18 @@ J1 has three axes of its own, and they are the source of most of the sprawl:
 
 | Surface | J1 Bind | J2 Vocab | J3 Behavior | J4 Levels | J5 Perform |
 |---|---|---|---|---|---|
-| `GameOrchestraConfig` | **token only** (+ `exclusive`/`duck`) | | | | |
-| `PlaylistTreeApp` | **scene + world**, full or scoped (+ overlay `layer`/`duck`) | links out | links out | | status pills |
+| `PlaylistTreeApp` | **actor + scene + world**, full or scoped (+ `layer`/`duck`, `exclusive`/`duck`) | links out | links out | **links out** | status pills |
+| `GameOrchestraConfig` | legacy alias for the actor half — same view model, same partial | | | | |
 | `OverlayConfigApp` | | **yes** | | | |
-| `MoodWidget` | | | | | **mood/phase + refresh** |
-| Scene controls | | | | | **suppression only** |
+| `MoodWidget` | | | | | **mood/phase + refresh + suppression + winning context** |
+| Scene controls | | | | | **suppression + two window toggles** |
 | `CustomPlaylistEditor` | | | **yes** | embedded pane | activity highlight |
 | `PlaylistMixerApp` | | | | **yes** | |
 
-Read down the J1 column. That was originally **one job, two windows, and neither one complete**;
-the two now split cleanly by scope and share their write path, with the token markup merge still
-outstanding (step 6b).
+Read down the J1 column. That was originally **one job, two windows, and neither one complete**.
+It is now one job in one window across all three scopes; `GameOrchestraConfig` still exists for
+macros but renders the hub's own view model through the hub's own partial, so there is nothing left
+for the two to disagree about.
 
 ---
 
@@ -440,7 +441,8 @@ Ordered by ratio of coherence gained to risk taken. Each step ships on its own.
 | 4 | **Fold suppression + winning-context pill into the widget** (`transport.mjs`) | new module, `mood-widget.mjs`, `hooks.mjs`, `settings.mjs`, CSS | Medium — needs the shared-component extraction | **shipped** |
 | 6a | **Scene scope: the Scene sheet opens the scoped hub; un-modal the config window** | `hooks.mjs`, `playlist-tree.mjs`, `playlist-tree.hbs`, `app.mjs` | Medium | **shipped** |
 | 8 | **Demote priority; show "beaten by" instead; apply baselines at resolution time** | `helpers.mjs`, `app.mjs`, `transport.mjs`, `playlist-tree.*`, both lang files, CSS | Medium — changes resolved priorities in existing worlds, see below | **shipped** |
-| 6b | **Token scope: share the hub's view models + markup with the token grid** | `app.mjs`, `music-config.hbs`, new view module | **High** — do it behind `tests/binding-template.test.mjs` | pending |
+| 6b | **Token scope: share the hub's view models + markup with the token grid** | `app.mjs`, `music-config.hbs`, new view module | **High** — do it behind `tests/binding-template.test.mjs` | **shipped** |
+| 9 | **Actors in the hub; three collapsible groups; one dictionary door** | `playlist-tree.*`, `binding-cards.mjs`, `templates/parts/*`, `helpers.mjs`, `hooks.mjs`, both lang files, CSS | Medium | **shipped** |
 
 Step 7 ran early because it is the same file and the same edit as step 1's menu removal; splitting
 them would have left two menu entries pointing at a window that no longer existed under those names.
@@ -460,6 +462,41 @@ class name all say `MoodWidget`; renaming the user-facing string alone would sat
 making the code harder to search. It is folded into step 4, where the widget is being reworked
 anyway.
 
+### Step 9 — the hub becomes a tree
+
+Three things landed together, because each was the reason the next one was worth doing.
+
+**Actors are in the hub.** `helpers.mjs#listBoundActors()` is the module's only enumeration of
+`game.actors`, and it lists **bound actors only** — a world has hundreds and almost none of them
+have music, so mirroring the directory would bury the handful that matter. An unbound actor gets in
+by being dragged onto the group's zone, which pins it in `pinnedActorIds` (in memory, per instance,
+like `expandedSections`) until something is bound to it. Rows write to the **Actor** document:
+`_getCombatantMusicSources()` consults the Actor in both the linked and the unlinked chain, so one
+row per actor always applies. Combat only — `CONST.playlistSections.Token` has no `area` entry.
+
+**Three collapsible groups — Actors / Scenes / World — with a new default rule.** The six sections
+have always opened on `hasOverride`, which is right for a section and wrong a level up: a
+configured world then renders every group open, which is the wall the grouping exists to remove.
+A group opens on **what is audible**, with `hasOverride` as the fallback when nothing is playing
+at all (prep, no active scene) so a cold open is never three shut headers. Manual toggles still
+beat both, through the same `expandedSections`/`collapsedSections` pair.
+
+**One footer door.** *Mood Configuration* and *Phase Configuration* both opened
+`OverlayConfigApp` — same `id`, same markup, differing only in the opening tab — and the window
+they opened was titled *"Moods & Phases"*, a third name. Now one button, named after its
+destination. That is D4 finished and the last live D7/UX-5 instance closed.
+
+Two things fell out of the work rather than being aimed at, and both are the interesting kind:
+
+- **A playlist dropped on the Actors zone rewrote the world default.** The drop handler treated
+  any unrecognised `dropScope` as `global`, and `contextType` defaults to `'area'`, so a drop a few
+  pixels off silently reassigned world default area music. It now refuses a drop on an element with
+  no binding scope. Caught by a test written for the new zone, not in the wild.
+- **`tools/build.mjs#buildTemplates` was a flat `readdir`.** The shared partials live in
+  `templates/parts/`, so the *release* would have shipped without them and thrown "The partial …
+  could not be found" the first time a GM opened the hub — with the whole dev loop green, since
+  development loads templates from the tree. `tests/dist-bundle.test.mjs` now pins it.
+
 ### Step 6 — the decision, and what shipped
 
 The choice was between the hub **listing** every token/actor that carries an override (a true
@@ -475,11 +512,25 @@ also no longer `modal` (D3), so dragging from the Playlists sidebar works wherev
 An already-open *unscoped* hub is deliberately not hijacked into scoped mode; it is re-pointed at
 that scene and brought forward. The GM asked to see one scene, not to have their map replaced.
 
-**Not shipped: the Token half.** The Token/Prototype-Token button still opens `GameOrchestraConfig`.
-Its phase grid is already card-shaped and already writes immediately — the same *idiom* as the hub,
-not yet the same *code* — and it remains the only surface for `exclusive` and `duck`. What is left
-is view-model and markup sharing, **not behaviour**: the write path is already common
-(`binding-store.mjs`), which is what let the copies drift in the first place.
+**Then the Token half shipped too, in step 9.** `hooks.mjs#handleTokenConfigRender` now calls
+`PlaylistTreeApp.openScopedDocument()`, scoped to **the document the sheet is about** — `app.document`
+for a `TokenConfig`, `app.actor.prototypeToken` for a `PrototypeTokenConfig`, never `app.token`
+(HR-I). Scoping to the *document* rather than to its Actor is deliberate: the unscoped Actors group
+is actor-centric, but an unlinked token's own override is a real thing a GM edits from that token's
+sheet, and routing it to the Actor would silently write to a different document than the one they
+opened. `binding-store.mjs#storeForTarget` — relocated there from `api.mjs`, since three callers now
+need it — picks the backend.
+
+Both halves of the sharing are done. `binding-cards.mjs#buildCombatPhaseGrid` is the view model
+(pure, no `game`/`ui`/DOM) and `templates/parts/combat-grid.hbs` is the markup; the two hosts differ
+only in a `dropScope` string and an action-name table carried in the view model. The vestigial scene
+form is deleted, which is what unblocked the markup share — see below. `GameOrchestraConfig` keeps
+working for a macro that constructs it, and is still the deprecated legacy key it already was.
+
+> **Release note, not a silent change:** binding from a token sheet is no longer cancellable. The
+> hub writes on every change through `data-change-action`; `GameOrchestraConfig` had an explicit
+> Save that, by the end, only harvested the deleted form's `initialTrack` selects. That matches
+> core v13+ sheets and is the better UX — but it is a behavior change.
 
 Two prerequisites for that merge are now done, and they were the valuable part:
 
@@ -495,26 +546,29 @@ Two prerequisites for that merge are now done, and they were the valuable part:
    into a binding box and return `'combat'` as a collapse key. Collapse keys are now
    `data-collapse-key`, with a test that the handler ignores `data-section` outright.
 
-### Why the markup merge stopped there
+### Why the markup merge had stalled, and what unblocked it
 
-`.playlist-section[data-section]` is `GameOrchestraConfig`'s `dropSelector`, and it matches **two
+`.playlist-section[data-section]` was `GameOrchestraConfig`'s `dropSelector`, and it matched **two
 different elements**: the token grid's context boxes *and* the vestigial scene form's
-`.standard-form.playlist-section` (which `openPlaylist`/`deletePlaylist` still read `data-section`
-off). Sharing a partial with the hub therefore needs one of:
+`.standard-form.playlist-section`. Sharing a partial with the hub therefore needed one of:
 
 - a redundant `data-context-type` alongside `data-section` on every box — one attribute duplicated
   purely to satisfy two conventions, or
 - **deleting the vestigial scene layout first** — the tabbed form, `selectOverlay`, and the whole
-  `.playlist-section` scene contract. Scenes no longer route here, so it is dead weight; but
-  `game.gameOrchestra.GameOrchestraConfig` is public API a user macro can still call with a Scene,
-  so removing it is its own change with its own migration note. (Its `allowPriority` fields are
-  already gone — D8.)
+  `.playlist-section` scene contract.
 
-The second is correct and should come first. It is a deletion, which is exactly the kind of change
-that wants a live Foundry to confirm nothing else reaches the removed path — none of this work has
-been run against one.
+**The second was taken.** Gone with it: `formHandler`, `handleReset`, `openPlaylist`,
+`deletePlaylist`, `initializeConfig`, `selectedMood`/`selectedPhase`, and the Save/Reset footer.
+The window's `dropSelector` is now `.context-box[data-drop-scope]` — the hub's, because both render
+the same partial. Four lang keys went orphaned with the form and were removed from both locales.
 
-### Constraints on the remaining token merge
+One thing the deletion nearly took with it: `formHandler` carried the **H1/H2 guard** (auto-assign
+a Soundboard's first track, never a custom playlist's), and its two tests were the only coverage of
+that rule. The guard itself survives — it lives in `applyBindingPlaylist` — but the *tests* were
+attached to the deleted function. They are re-homed on `binding-store.mjs`, where the behaviour now
+is. Deleting a caller quietly deletes coverage of everything it happened to exercise.
+
+### Constraints that governed the token merge
 
 - **Commit semantics change.** `GameOrchestraConfig` is `tag: 'form'` with a form handler and an
   explicit save; the tree writes immediately. Unifying on the tree's model means scene/token

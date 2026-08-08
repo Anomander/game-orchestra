@@ -29,13 +29,15 @@
   {{#if activeResolution}}
   <div class="mood-widget-resolution" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">
     <span class="active-dot">●</span>
-    <span class="active-text">{{activeResolution.label}}</span>
+    {{! title, not just the tooltip: compact mode clips this to one line, and the full sentence
+        has to stay reachable there - that mode is the one used at the table. }}
+    <span class="active-text" title="{{activeResolution.label}}">{{activeResolution.label}}</span>
   </div>
   {{/if}}
   {{#each layerResolutions}}
   <div class="mood-widget-resolution layer" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.LayerTooltip'}}">
     <span class="active-dot"><i class="fas fa-layer-group"></i></span>
-    <span class="active-text">{{this.label}}</span>
+    <span class="active-text" title="{{this.label}}">{{this.label}}</span>
   </div>
   {{/each}}
 

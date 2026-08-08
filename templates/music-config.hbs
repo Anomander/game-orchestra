@@ -1,231 +1,29 @@
+{{! GameOrchestraConfig - the legacy per-document binding window.
+
+    The module itself no longer opens this: a Scene sheet routes to PlaylistTreeApp.openScoped()
+    and a Token/Prototype-Token sheet to openScopedDocument() (docs/wiki/ux.md step 6). It stays
+    reachable through `game.gameOrchestra.GameOrchestraConfig`, which is already deprecated, so a
+    macro written against it keeps working.
+
+    What it renders is exactly what the hub's Actors group renders, from the same partial and the
+    same view model (binding-cards.mjs) - one markup, not two copies drifting apart, which is what
+    D1 was about. The tabbed scene form that used to live in the else-branch here is gone: scenes
+    stopped routing to this window in step 6a, and its old drop-target contract was the stated
+    blocker on sharing this markup at all.
+
+    Note the wording above avoids writing Handlebars block syntax inside a comment - Handlebars
+    parses comments too, and a stray block expression in one took the graph editor down once
+    (HR-L, tests/template-compile.test.mjs). }}
 <div class="flexcol standard-form game-orchestra-config">
   <input type="hidden" name="documentType" value="{{documentType}}">
 
-{{#if isTokenPhaseGrid}}
+  {{#if isTokenPhaseGrid}}
   <div class="game-orchestra-mood-grid flexcol">
-    <div class="tree-node token-moods-node {{#if phasesResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="tokenPhases" data-default-collapsed="{{collapsed.phases}}">
-        <div class="node-title">
-          <i class="fas {{#if collapsed.phases}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
-          <i class="fas fa-skull"></i>
-          <span>{{localize "GameOrchestra.TokenConfig.PhaseOverrides"}}</span>
-        </div>
-        {{#if phasesResolving}}
-        <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
-        {{/if}}
-      </div>
-      {{#unless collapsed.phases}}
-      <div class="tree-node-body mood-grid">
-        {{#each phaseCards}}
-        <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
-            <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
-            <i class="{{this.icon}}"></i>
-            <span class="mood-label">{{localize this.label}}</span>
-            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
-          </div>
-          {{#unless this.isCardCollapsed}}
-          <div class="context-box playlist-section" data-section="combat" data-phase-id="{{this.phaseId}}">
-            <div class="context-box-header flexrow">
-              <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
-              {{#if combat.playlistId}}
-              <button type="button" class="clear-btn" data-action="clearPhaseEntry" data-phase-id="{{this.phaseId}}" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
-                <i class="fas fa-trash"></i>
-              </button>
-              {{/if}}
-            </div>
-            <div class="context-box-body flexcol">
-              <select class="playlist-select" data-change-action="updatePhaseEntry" data-phase-id="{{this.phaseId}}">
-                <option value="">-- {{localize "GameOrchestra.None"}} --</option>
-                {{#each ../availablePlaylists}}
-                <option value="{{this.id}}" {{#if (eq this.id ../combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
-                {{/each}}
-              </select>
-              {{#if combat.playlistId}}
-              {{#unless combat.isCustom}}
-              <div class="track-row flexrow">
-                {{#if combat.isSoundboard}}
-                <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
-                {{/if}}
-                <select class="track-select" data-change-action="updatePhaseTrack" data-phase-id="{{this.phaseId}}">
-                  {{#unless combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.InitialTrack"}} --</option>{{/unless}}
-                  {{#each combat.tracks}}
-                  <option value="{{this.id}}" {{#if (eq this.id ../combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
-                  {{/each}}
-                </select>
-              </div>
-              {{/unless}}
-              {{/if}}
-            </div>
-          </div>
-          {{/unless}}
-        </div>
-        {{/each}}
-      </div>
-      {{/unless}}
-    </div>
-
-    <div class="tree-node token-default-node {{#if defaultResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="tokenDefault" data-default-collapsed="{{collapsed.default}}">
-        <div class="node-title">
-          <i class="fas {{#if collapsed.default}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
-          <i class="fas fa-image"></i>
-          <span>{{localize "GameOrchestra.TokenConfig.DefaultCombat"}}</span>
-        </div>
-        {{#if defaultResolving}}
-        <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
-        {{/if}}
-      </div>
-      {{#unless collapsed.default}}
-      <div class="tree-node-body default-fields">
-        <div class="context-box playlist-section" data-section="combat" data-phase-id="">
-          <div class="context-box-header flexrow">
-            <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
-            {{#if defaultEntry.combat.playlistId}}
-            <button type="button" class="clear-btn" data-action="clearDefaultEntry" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
-              <i class="fas fa-trash"></i>
-            </button>
-            {{/if}}
-          </div>
-          <div class="context-box-body flexcol">
-            <select class="playlist-select" data-change-action="updateDefaultEntry">
-              <option value="">-- {{localize "GameOrchestra.None"}} --</option>
-              {{#each availablePlaylists}}
-              <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
-              {{/each}}
-            </select>
-            {{#if defaultEntry.combat.playlistId}}
-            {{#unless defaultEntry.combat.isCustom}}
-            <div class="track-row flexrow">
-              {{#if defaultEntry.combat.isSoundboard}}
-              <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
-              {{/if}}
-              <select class="track-select" data-change-action="updateDefaultTrack">
-                {{#unless defaultEntry.combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.InitialTrack"}} --</option>{{/unless}}
-                {{#each defaultEntry.combat.tracks}}
-                <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
-                {{/each}}
-              </select>
-            </div>
-            {{/unless}}
-            {{/if}}
-          </div>
-        </div>
-      </div>
-      {{/unless}}
-    </div>
-
-    {{#if hasAnyCombatPlaylist}}
-    {{! Section-level, not per phase: governs whichever playlist the Combat section resolves to. }}
-    <div class="tree-node token-exclusive-node">
-      <label class="exclusive-toggle flexrow">
-        <input type="checkbox" data-change-action="toggleExclusive" {{checked combatExclusive}}>
-        <span>{{localize "GameOrchestra.TokenConfig.Exclusive"}}</span>
-      </label>
-      <p class="hint">{{localize "GameOrchestra.TokenConfig.ExclusiveHint"}}</p>
-
-      {{! Ducking only means anything while something else is still playing underneath, which is
-          exactly what "exclusive" turns off. }}
-      {{#unless combatExclusive}}
-      <div class="duck-row flexrow">
-        <label for="game-orchestra-layer-duck">{{localize "GameOrchestra.Layer.Duck"}}</label>
-        <input type="range" id="game-orchestra-layer-duck" min="0" max="1" step="0.05"
-               value="{{combatDuck}}" data-change-action="updateDuck"
-               aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combatDuckPercent}}">
-        <output class="duck-readout">{{combatDuckPercent}}%</output>
-      </div>
-      <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
-      {{/unless}}
-    </div>
-    {{/if}}
+    {{> "modules/game-orchestra/templates/parts/combat-grid.hbs" this}}
   </div>
-{{else}}
-  {{#each playlistConfig as |section|}}
-    <fieldset>
-      <legend>
-        {{section.labelLocalized}}
-        {{#if section.selectedOverlay}}
-          <span class="mood-subtitle">({{localize "GameOrchestra.MoodOverride"}})</span>
-        {{/if}}
-      </legend>
-
-      {{! Each section renders its OWN overlay-tab strip, driven by its own axis
-          (area -> moods, combat -> phases - config.mjs#sectionAxis) - a Scene
-          document's Area and Combat fieldsets can be on different tabs at once. }}
-      <nav class="sheet-tabs tabs mood-tabs" data-axis="{{section.axis}}">
-        <a class="item {{#unless section.selectedOverlay}}active{{/unless}}" data-action="selectOverlay" data-axis="{{section.axis}}" data-overlay="">
-          <i class="fas fa-music"></i> {{localize "GameOrchestra.Default"}}
-        </a>
-        {{#if (eq section.axis "phase")}}
-          {{#each ../availablePhases}}
-          <a class="item {{#if this.isActive}}active{{/if}}" data-action="selectOverlay" data-axis="phase" data-overlay="{{this.id}}" style="--mood-color: {{this.color}};">
-            <i class="{{this.icon}}"></i> {{localize this.label}}
-            {{#if this.isWorldActive}}<span class="world-active-indicator" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">★</span>{{/if}}
-            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
-          </a>
-          {{/each}}
-        {{else}}
-          {{#each ../availableMoods}}
-          <a class="item {{#if this.isActive}}active{{/if}}" data-action="selectOverlay" data-axis="mood" data-overlay="{{this.id}}" style="--mood-color: {{this.color}};">
-            <i class="{{this.icon}}"></i> {{localize this.label}}
-            {{#if this.isWorldActive}}<span class="world-active-indicator" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">★</span>{{/if}}
-            {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
-          </a>
-          {{/each}}
-        {{/if}}
-      </nav>
-
-      <div class="standard-form playlist-section" data-section="{{section.id}}" data-item-id="{{section.playlist.id}}">
-        {{#if section.playlist}}
-          <div class="form-group">
-            <label>{{section.labelLocalized}}</label>
-            <div class="form-fields playlist-info">
-              <i class="fas fa-music"></i>
-              <span class="playlist-name">{{section.playlist.name}}</span>
-              <button type="button" data-action="openPlaylist" data-tooltip="{{localize 'PLAYLIST.ViewSheet'}}">
-                <i class="fas fa-edit"></i>
-              </button>
-              <button type="button" data-action="deletePlaylist" data-tooltip="{{localize 'Delete'}}">
-                <i class="fas fa-trash"></i>
-              </button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>{{localize "GameOrchestra.InitialTrack"}}</label>
-            <div class="form-fields">
-              {{#if section.selectedOverlay}}
-              <select name="music.{{section.id}}.overlays.{{section.selectedOverlay}}.initialTrack">
-                {{{selectOptions section.tracks selected=section.data.initialTrack blank=""}}}
-              </select>
-              {{else}}
-              <select name="music.{{section.id}}.initialTrack">
-                {{{selectOptions section.tracks selected=section.data.initialTrack blank=""}}}
-              </select>
-              {{/if}}
-            </div>
-          </div>
-          {{! No priority field. The number is resolution-internal (docs/wiki/ux.md D8): the
-              hierarchy this window already displays IS the priority, and an absolute value nobody
-              can set correctly without knowing every other value in the world was a second,
-              disagreeing encoding of it. Stored priorities are still honoured - nothing here
-              writes one. }}
-        {{else}}
-          <div class="form-group">
-            <div class="form-fields">
-              <p class="hint">{{localize "GameOrchestra.ConfigHelp"}}</p>
-            </div>
-          </div>
-        {{/if}}
-      </div>
-    </fieldset>
-  {{/each}}
-  <footer class="flexrow">
-    {{#each buttons as |button|}}
-      <button type="{{button.type}}" {{#if button.action}}data-action="{{button.action}}" {{/if}}>
-        <i class="{{button.icon}}"></i>
-        {{localize button.label}}
-      </button>
-    {{/each}}
-  </footer>
-{{/if}}
+  {{else}}
+  {{! Anything that is not a Token/PrototypeToken - most likely a Scene, from an old macro. Says
+      where that binding lives now rather than rendering an empty window (UX-9). }}
+  <p class="hint">{{localize "GameOrchestra.ConfigUnsupportedDocument"}}</p>
+  {{/if}}
 </div>

@@ -1,0 +1,32 @@
+{{! The two workbenches, on every bound row. Takes one `entry` (a buildPlaylistEntry result).
+
+    **Both buttons, always** - this is deliberate and each half corrects a live gap:
+
+    - The mixer was reachable from the playlist sheet, the directory context menu and the graph
+      editor, but NOT from the hub - the one surface that shows which playlist is bound where.
+      Answering "why is this too loud?" meant closing the hub to go find the playlist (UX-4).
+
+    - The graph button used to render only for a playlist that already had a graph. But
+      CustomPlaylistEditor is never mode-gated - handleSave force-writes UNSEQUENCED itself (H1) -
+      so hiding it hid something that would have worked. UX-9's corrected reference is explicit:
+      before disabling or hiding a control, check that pressing it would actually fail. It would
+      not; it would create the graph. So the label says what will happen instead. }}
+<div class="binding-tools flexrow">
+  <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{entry.playlistId}}"
+          data-tooltip="{{#if entry.isCustom}}{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}{{else}}{{localize 'GameOrchestra.CustomEditor.WillSwitchModeHint'}}{{/if}}">
+    <i class="fas fa-project-diagram"></i>
+    {{#if entry.isCustom}}{{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}{{else}}{{localize "GameOrchestra.PlaylistTree.CreateGraphLabel"}}{{/if}}
+  </button>
+  <button type="button" class="mixer-btn" data-action="openMixer" data-playlist-id="{{entry.playlistId}}"
+          data-tooltip="{{localize 'GameOrchestra.Mixer.OpenButton'}}">
+    <i class="fas fa-sliders"></i> {{localize "GameOrchestra.Mixer.Title"}}
+  </button>
+</div>
+{{! What this row is actually doing right now, whichever way it lost or won (UX-7). A layer never
+    enters the contest, so it is never "beaten" - it says so itself instead. }}
+{{#if entry.isLayerActive}}
+<p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
+{{/if}}
+{{#if entry.beatenBy}}
+<p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{entry.beatenBy}}</p>
+{{/if}}

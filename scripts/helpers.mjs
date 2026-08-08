@@ -291,6 +291,46 @@ export function readMusicSection(document, type) {
 }
 
 /**
+ * Whether a music section object carries an actual binding - its own playlist, or one on any of
+ * its overlay entries.
+ *
+ * "Has a binding" is emphatically not "the section object exists": clearing a *section* leaves
+ * `exclusive`/`duck` standing by design (binding-store.mjs), so a section that has only ever been
+ * cleared is a live object with nothing bound in it. Treating that as bound would list an actor
+ * whose music the GM already removed.
+ * @param {object|null|undefined} section - From {@link readMusicSection}
+ * @returns {boolean}
+ */
+export function sectionHasBinding(section) {
+  if (!section) return false;
+  if (section.playlist) return true;
+  return Object.values(section.overlays || {}).some((entry) => !!entry?.playlist);
+}
+
+/**
+ * Every Actor carrying a combat music binding, sorted by name.
+ *
+ * This is the module's **only** enumeration of `game.actors`, and it exists so the hub can show
+ * actor bindings alongside scene and world ones rather than making the GM find each actor's sheet
+ * (docs/wiki/ux.md J1/UX-3). Deliberately *bound actors only*: a world has hundreds of actors and
+ * almost none of them have music, so listing the directory would bury the handful that matter.
+ * The hub's drop zone is how an unbound actor gets in.
+ *
+ * Combat-only because that is the only section an actor has - `CONST.playlistSections.Token` has
+ * no `area` entry, and `sectionBaselinePriority` maps Actor onto the Token baseline.
+ *
+ * Foundry-touching on purpose, and therefore here rather than in a pure module: the caller reads
+ * live state through this and passes the result into the pure view-model builders.
+ * @returns {Array<object>} Actor documents
+ */
+export function listBoundActors() {
+  const actors = game.actors?.contents || Array.from(game.actors || []);
+  return actors
+    .filter((actor) => sectionHasBinding(readMusicSection(actor, 'combat')))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+/**
  * Resolve a Playlist graph node's reference (custom-playback-schema.mjs's
  * PlaylistRef) against live game state - the active scene, the world default
  * music setting, and the active mood/phase (per the referenced section's own

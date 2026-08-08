@@ -73,15 +73,16 @@ second copy of it (docs/wiki/ux.md UX-2). `playlist-mixer-controller.mjs` above 
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/binding-store.mjs` | 210 | **The write half of J1 (Bind).** `BindingStore` = `{get, apply(plan)}` over one backend — `documentFlagStore` (Scene/Token flags), `updateObjectStore` (the Token/PrototypeToken `updateObject` path), `globalSettingStore` (`defaultMusic`). Operations on top: `applyBindingPlaylist` / `applyBindingTrack` / `applyBindingPriority` / `clearBindingOverlay`. **Writes are whole plans, never per-path** — see the typedef. Ops are pure given a store. |
+| `scripts/binding-store.mjs` | 340 | **The write half of J1 (Bind).** `BindingStore` = `{get, apply(plan)}` over one backend — `documentFlagStore` (Scene/Actor/Token flags), `updateObjectStore` (the PrototypeToken `updateObject` path), `globalSettingStore` (`defaultMusic`). `storeForTarget()` picks between them and is the **only** copy of the prototype-token dot-path write (HR-J) — three callers share it. Operations on top: `applyBindingPlaylist` / `applyBindingTrack` / `applyBindingLayer` / `applyBindingDuck` / `applyBindingExclusive` / `applyBindingPriority` / `clearBindingOverlay`. **Writes are whole plans, never per-path** — see the typedef. Ops are pure given a store. |
+| `scripts/binding-cards.mjs` | 105 | **The read half of J1.** `buildCombatPhaseGrid()` — one document's phase card grid, section default and `exclusive`/`duck`, for the hub's Actors group and `GameOrchestraConfig` alike. **Pure**: the caller reads live state and passes it in, including the collapse predicate and its own action names. |
 | `scripts/transport.mjs` | 155 | **J5 (Perform).** `SUPPRESSION_CONTROLS` + `suppressionState()` + `setSuppression()` (shared by the Mood Widget, the scene-control bar and the keybindings), `describeResolution()` and `isBindingEligible()` — both **pure**, emitting i18n keys — plus `resolutionPills()` for the two status pills the hub and the widget both show. |
 
 ## Other UI
 
 | File | ~LoC | Purpose |
 |---|---|---|
-| `scripts/app.mjs` | 660 | `GameOrchestraConfig` — **token/prototype-token** music config, and the only home for a combatant's `exclusive`/`duck` (a mood/phase overlay's `layer`/`duck` live in the tree). Renders a phase card grid (`isTokenPhaseGrid`); writes through `binding-store.mjs`. Non-modal. Scenes now open the scoped hub instead (`hooks.mjs`); the Scene tabbed layout in `music-config.hbs` is vestigial. |
-| `scripts/playlist-tree.mjs` | 820 | `PlaylistTreeApp` — the hub: every scene's assignments in one tree, mood and phase rows both, plus per-entry **priority**. `_ENTRY_SPECS` × `_handleEntryAction` generate all sixteen update/clear handlers from three axes (scope, field, overlay-scoped). |
+| `scripts/app.mjs` | 430 | `GameOrchestraConfig` — **legacy** per-document binding window. Nothing in the module opens it any more (token sheets route to the scoped hub, scenes did in step 6a); it survives for macros holding the deprecated `game.gameOrchestra.GameOrchestraConfig`. Renders the *shared* view model and partial, so it cannot drift from the hub. Non-modal, no Save — every control writes immediately. |
+| `scripts/playlist-tree.mjs` | 1100 | `PlaylistTreeApp` — the hub. Three collapsible groups (**Actors / Scenes / World**), each opening on what is *audible* rather than on what is merely configured. `_ENTRY_SPECS` × `_handleEntryAction` generate every update/clear handler from three axes (scope, field, overlay-scoped); `_targetFor()` resolves scene and world from instance state but an **actor from the element**, since many rows render at once. Actors are added by dropping one on `.actor-add-zone`. |
 | `scripts/mood-widget.mjs` | 351 | `MoodWidget` — dockable switcher: moods when idle, phases during combat, showing only the active axis. |
 | `scripts/mood-config.mjs` | 330 | `OverlayConfigApp` — the world's overlay dictionary as **one window with a Moods tab and a Phases tab**. `MoodConfigApp`/`PhaseConfigApp` remain as doors sharing its `id`, choosing only the opening tab. Holds both lists in `itemsByAxis`; one Save commits both. Refuses to delete the axis's currently active entry. |
 | `scripts/app-mixins.mjs` | 113 | Shared ApplicationV2 plumbing + `dispatchChangeAction()`. |
@@ -90,7 +91,8 @@ second copy of it (docs/wiki/ux.md UX-2). `playlist-mixer-controller.mjs` above 
 
 | Path | Notes |
 |---|---|
-| `templates/*.hbs` | 5 templates (`mood-config.hbs` was replaced by `overlay-config.hbs`). `playlist-tree.hbs` (516) and `music-config.hbs` (214) are the large ones. |
+| `templates/*.hbs` | 5 templates (`mood-config.hbs` was replaced by `overlay-config.hbs`). `playlist-tree.hbs` (~790) is the large one; `music-config.hbs` is now ~25 lines, since it renders the shared partial. |
+| `templates/parts/*.hbs` | **Partials**, included by full path and registered in `game-orchestra.mjs`'s `loadTemplates`. `combat-grid.hbs` — one document's phase grid + default + `exclusive`/`duck`, shared by the hub's Actors group and `GameOrchestraConfig`. `binding-tools.hbs` — the graph and mixer buttons plus the UX-7 "layering now" / "beaten by" lines, on every bound row in both. `tools/build.mjs` must walk this directory **recursively** or the release ships without them. |
 | `styles/game-orchestra.css` | ~2390 lines. **Specificity-critical** — see HR-C. |
 | `lang/en.json`, `lang/pt-BR.json` | 354 keys each. **Must stay key-identical** (HR-E). |
 | `scripts/vendor/drawflow.min.*` | Vendored UMD build + CSS. Read `scripts/vendor/README.md` before touching. |

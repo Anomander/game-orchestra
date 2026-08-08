@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { setupFoundryMocks, setMockSetting } from './mocks/foundry.mjs';
+import { setupFoundryMocks, setMockSetting, createMockPlaylist } from './mocks/foundry.mjs';
 
 setupFoundryMocks();
 
@@ -11,6 +11,8 @@ import {
   updateObjectStore,
   globalSettingStore,
   applyBindingPlaylist,
+  applyBindingExclusive,
+  storeForTarget,
   applyBindingTrack,
   applyBindingPriority,
   applyBindingLayer,
@@ -108,6 +110,35 @@ describe('binding operations', () => {
       expect(store.get('music.area.initialTrack')).toBe('tr-dropped');
     });
 
+    // The H1/H2 pair. This op is now the ONLY place the guard runs - GameOrchestraConfig's
+    // formHandler used to repeat it and was deleted with the scene form, so if these two go
+    // untested nothing anywhere asserts it.
+    it('auto-assigns the first track of a plain Soundboard playlist (H1)', async () => {
+      const soundboard = createMockPlaylist('pl-sfx', 'SFX Soundboard', [{ id: 'tr-1', name: 'Alarm' }], -1);
+      game.playlists = [soundboard];
+      game.playlists.get = vi.fn((id) => (id === 'pl-sfx' ? soundboard : null));
+      const store = fakeStore();
+
+      await applyBindingPlaylist(store, 'music.combat', 'pl-sfx');
+
+      expect(store.get('music.combat.initialTrack')).toBe('tr-1');
+    });
+
+    it('never auto-assigns a track for a custom (graph) playlist, whatever its mode says (H2)', async () => {
+      // A custom playlist is STORED as UNSEQUENCED (H1) but is never a Soundboard (H2). A stray
+      // initialTrack on one short-circuits straight to a single track and bypasses the graph.
+      const custom = createMockPlaylist('pl-custom', 'Custom Playlist', [{ id: 'tr-1', name: 'Track 1' }], -1);
+      custom.setFlag('game-orchestra', 'customPlayback', { version: 1, nodes: [], edges: [] });
+      game.playlists = [custom];
+      game.playlists.get = vi.fn((id) => (id === 'pl-custom' ? custom : null));
+      const store = fakeStore();
+
+      await applyBindingPlaylist(store, 'music.combat', 'pl-custom');
+
+      expect(store.get('music.combat.playlist')).toBe('pl-custom');
+      expect(store.get('music.combat.initialTrack')).toBeFalsy();
+    });
+
     it('clears playlist, track AND priority together when the playlist is removed', async () => {
       const store = fakeStore({ music: { area: { playlist: 'pl-1', initialTrack: 'tr-1', priority: 5 } } });
       await applyBindingPlaylist(store, 'music.area', null);
@@ -195,6 +226,75 @@ describe('binding operations', () => {
 
       expect('duck' in store.data.music.area.overlays.calm).toBe(false);
       expect(store.data.music.area.overlays.calm.playlist).toBe('pl-1');
+    });
+  });
+
+  describe('applyBindingExclusive', () => {
+    it('stores the flag at SECTION level when a combatant opts out of layering', async () => {
+      const store = fakeStore({ music: { combat: { playlist: 'pl-1' } } });
+      await applyBindingExclusive(store, 'music.combat', true);
+
+      expect(store.data.music.combat.exclusive).toBe(true);
+    });
+
+    it('unsets rather than storing false - layering is the absent-value default', async () => {
+      // The mirror image of applyBindingLayer, and the opposite opt-in direction: a combatant
+      // LAYERS unless it opts out here, while an overlay REPLACES unless it opts in via `layer`.
+      const store = fakeStore({ music: { combat: { playlist: 'pl-1', exclusive: true } } });
+      await applyBindingExclusive(store, 'music.combat', false);
+
+      expect('exclusive' in store.data.music.combat).toBe(false);
+      expect(store.data.music.combat.playlist).toBe('pl-1');
+    });
+
+    it('leaves the duck alone - unlike layer/duck, these two are independently meaningful', async () => {
+      const store = fakeStore({ music: { combat: { exclusive: true, duck: 0.3 } } });
+      await applyBindingExclusive(store, 'music.combat', false);
+
+      expect(store.data.music.combat.duck).toBe(0.3);
+    });
+  });
+
+  describe('storeForTarget', () => {
+    it("routes 'default' to the world setting store", () => {
+      expect(storeForTarget('default')).toBeDefined();
+    });
+
+    it('routes a plain Document to its own flags', async () => {
+      const doc = {
+        documentName: 'Actor',
+        flags: {},
+        getFlag: vi.fn(() => null),
+        setFlag: vi.fn().mockResolvedValue(),
+        unsetFlag: vi.fn().mockResolvedValue()
+      };
+      await storeForTarget(doc).apply({ set: { 'music.combat.playlist': 'pl-1' } });
+
+      expect(doc.setFlag).toHaveBeenCalledWith(CONST.moduleId, 'music.combat.playlist', 'pl-1');
+    });
+
+    it('writes a PrototypeToken through its parent Actor as a plain DOT PATH (HR-J)', async () => {
+      // Bracket syntax produces a literal key named `flags['game-orchestra']` that the Actor
+      // schema silently drops while cleaning: the update resolves successfully and writes
+      // NOTHING. Confirmed live. This is the single reason this dispatch is not inlined.
+      const actor = { update: vi.fn().mockResolvedValue() };
+      globalThis.foundry.data = { PrototypeToken: function PrototypeToken() {} };
+      const proto = Object.setPrototypeOf(
+        { flags: { [CONST.moduleId]: {} }, parent: actor, constructor: { name: 'PrototypeToken' } },
+        globalThis.foundry.data.PrototypeToken.prototype
+      );
+
+      await storeForTarget(proto).apply({ set: { 'music.combat.playlist': 'pl-1' } });
+
+      const written = Object.keys(actor.update.mock.calls[0][0])[0];
+      expect(written).toBe(`prototypeToken.flags.${CONST.moduleId}.music.combat.playlist`);
+      expect(written).not.toContain('[');
+    });
+
+    it('throws the caller-supplied error rather than a fixed type', () => {
+      class Custom extends Error {}
+      expect(() => storeForTarget(null, (m) => new Custom(m))).toThrow(Custom);
+      expect(() => storeForTarget({}, (m) => new Custom(m))).toThrow(Custom);
     });
   });
 

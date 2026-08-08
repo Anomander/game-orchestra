@@ -1,18 +1,22 @@
 import { CONST } from './config.mjs';
-import { log, getAvailablePlaylists, buildPlaylistEntry } from './helpers.mjs';
+import { log, getAvailablePlaylists, buildPlaylistEntry, listBoundActors, readMusicSection } from './helpers.mjs';
+import { buildCombatPhaseGrid } from './binding-cards.mjs';
 import {
   documentFlagStore,
   globalSettingStore,
+  storeForTarget,
   bindingPath,
   applyBindingPlaylist,
   applyBindingTrack,
   applyBindingLayer,
   applyBindingDuck,
+  applyBindingExclusive,
   clearBindingOverlay
 } from './binding-store.mjs';
 import { coerceDuckFactor } from './playlist-mix.mjs';
-import { MoodConfigApp, PhaseConfigApp } from './mood-config.mjs';
+import { MoodConfigApp } from './mood-config.mjs';
 import { CustomPlaylistEditor } from './custom-playlist-editor.mjs';
+import { PlaylistMixerApp } from './playlist-mixer.mjs';
 import { GameOrchestraAppMixin } from './app-mixins.mjs';
 import { resolutionPills, describeResolution, localizeResolutionSource, isBindingEligible } from './transport.mjs';
 
@@ -29,7 +33,15 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     window: { title: 'GameOrchestra.PlaylistTree.Title', icon: 'fas fa-sitemap', resizable: true, minimizable: true },
     classes: ['game-orchestra-playlist-tree-window'],
     position: { width: 820, height: 'auto' },
-    dragDrop: [{ dragSelector: null, dropSelector: '.context-box[data-drop-scope]', permissions: { dragstart: false, drop: true }, callbacks: {} }],
+    // Two kinds of drop target in one selector: a binding box takes a Playlist/PlaylistSound, and
+    // the Actors zone takes an Actor. _onDropExternal branches on the payload type, so a wrong
+    // pairing (an Actor onto a binding box) is refused rather than half-applied.
+    dragDrop: [{
+      dragSelector: null,
+      dropSelector: '.context-box[data-drop-scope], .actor-add-zone',
+      permissions: { dragstart: false, drop: true },
+      callbacks: {}
+    }],
     actions: {
       selectScene: PlaylistTreeApp.handleSelectScene,
       updateSceneOverlay: PlaylistTreeApp.handleUpdateSceneOverlay,
@@ -44,15 +56,38 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       updateGlobalDefault: PlaylistTreeApp.handleUpdateGlobalDefault,
       updateGlobalDefaultTrack: PlaylistTreeApp.handleUpdateGlobalDefaultTrack,
       clearGlobalDefault: PlaylistTreeApp.handleClearGlobalDefault,
-      openMoodConfig: PlaylistTreeApp.handleOpenMoodConfig,
-      openPhaseConfig: PlaylistTreeApp.handleOpenPhaseConfig,
+      clearActorOverlay: PlaylistTreeApp.handleClearActorOverlay,
+      clearActorDefault: PlaylistTreeApp.handleClearActorDefault,
+      unpinActor: PlaylistTreeApp.handleUnpinActor,
+      openOverlayConfig: PlaylistTreeApp.handleOpenOverlayConfig,
       openCustomGraph: PlaylistTreeApp.handleOpenCustomGraph,
+      openMixer: PlaylistTreeApp.handleOpenMixer,
       toggleSection: PlaylistTreeApp.handleToggleSection
     }
   };
 
   /** @override */
   static PARTS = { main: { template: 'modules/game-orchestra/templates/playlist-tree.hbs' } };
+
+  /**
+   * Handler names the shared `combat-grid.hbs` partial writes into its own markup.
+   *
+   * Carried in the view model rather than passed as partial hash params: the markup is identical
+   * between this window and `GameOrchestraConfig` and only the handler names differ, so one
+   * object built here beats eight `{{> partial a=… b=…}}` arguments at the include site.
+   * Every name must exist in `_ENTRY_SPECS` (actions) or `_CHANGE_ACTIONS` (change events), or
+   * the control renders perfectly and does nothing.
+   */
+  static _ACTOR_ACTIONS = Object.freeze({
+    overlay: 'updateActorOverlay',
+    overlayTrack: 'updateActorOverlayTrack',
+    clearOverlay: 'clearActorOverlay',
+    default: 'updateActorDefault',
+    defaultTrack: 'updateActorDefaultTrack',
+    clearDefault: 'clearActorDefault',
+    exclusive: 'updateActorExclusive',
+    duck: 'updateActorDuck'
+  });
 
   constructor(options = {}) {
     super(options);
@@ -62,9 +97,23 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     // scene with the picker and the global sections hidden - it is not a second
     // window with a second layout, which is exactly what D1 was about.
     this.scopedSceneId = options.scopedSceneId || null;
+    // The other half of scoped mode: a Token/PrototypeToken/Actor sheet pins its own document
+    // here. Held as the document rather than an id because it may be a PrototypeToken, which
+    // lives on its parent Actor and is not in any collection to look up by id later.
+    this.scopedDocument = options.scopedDocument || null;
     this.selectedSceneId = this.scopedSceneId || options.selectedSceneId || activeSceneId || 'global';
     this.expandedSections = new Set(options.expandedSections || []);
     this.collapsedSections = new Set(options.collapsedSections || []);
+    /**
+     * Actors shown despite having nothing bound yet - the ones just dragged in.
+     *
+     * In memory and per-instance, exactly like `expandedSections`: an actor pinned but never
+     * bound is a half-finished gesture, not a preference, and it should not outlive the window.
+     * Once something IS bound, `listBoundActors()` finds the actor on its own and the pin stops
+     * mattering.
+     * @type {Set<string>}
+     */
+    this.pinnedActorIds = new Set(options.pinnedActorIds || []);
     // Registered here (not just in open()) so an instance created any other
     // way - notably Foundry instantiating this class directly for the
     // 'playlistTreeMenu' settings menu registration (settings.mjs) - is still
@@ -270,6 +319,65 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const globalPhasesResolving = winningEntity?.documentName === 'DefaultMusic' && winningIsOverlay && winningOverlayAxis === 'phase';
     const globalDefaultsResolving = winningEntity?.documentName === 'DefaultMusic' && !winningIsOverlay;
 
+    // ------------------------------------------------------------------ actors
+    // Bound actors, plus any pinned this session, plus - in a scoped popout - the one document
+    // that popout is about (which may be a TokenDocument or a PrototypeToken, not an Actor).
+    //
+    // Combat only: CONST.playlistSections.Token has no `area` entry, so an actor has one section
+    // and one axis. Rendering a mood grid here would be four inert cards.
+    const actorDocuments = this.scopedDocument
+      ? [this.scopedDocument]
+      : (() => {
+        const bound = listBoundActors();
+        const seen = new Set(bound.map((a) => a.id));
+        const pinned = [...this.pinnedActorIds]
+          .filter((id) => !seen.has(id))
+          .map((id) => game.actors?.get(id))
+          .filter(Boolean);
+        return [...bound, ...pinned];
+      })();
+
+    const actors = actorDocuments.map((actor) => {
+      const combatSection = readMusicSection(actor, 'combat') || {};
+      const isWinner = winningEntity === actor;
+      const grid = buildCombatPhaseGrid({
+        combatSection,
+        configuredPhases,
+        availablePlaylists,
+        activePhase,
+        // Namespaced per actor: several rows render at once, and a shared prefix would make all
+        // of them collapse and expand together.
+        keyPrefix: `actorPhase:${actor.id}`,
+        isCollapsed: (key, hasOverride) => this.isSectionCollapsed(key, hasOverride),
+        isWinner,
+        winnerIsPhaseOverlay: winningIsOverlay && winningOverlayAxis === 'phase',
+        dropScope: 'actor',
+        actions: PlaylistTreeApp._ACTOR_ACTIONS
+      });
+      const hasOverride = grid.hasAnyCombatPlaylist;
+      const rowKey = `actor:${actor.id}`;
+
+      return {
+        actorId: actor.id,
+        name: actor.name,
+        img: actor.img || actor.prototypeToken?.texture?.src || null,
+        ...grid,
+        hasOverride,
+        // Nothing bound and nothing to clear - so this row can only be removed by unpinning it.
+        isPinnedOnly: !hasOverride,
+        isResolving: isWinner,
+        rowKey,
+        isRowCollapsed: this.isSectionCollapsed(rowKey, isWinner || hasOverride),
+        phasesKey: `${rowKey}:phases`,
+        defaultKey: `${rowKey}:default`,
+        phasesCollapsed: this.isSectionCollapsed(`${rowKey}:phases`, grid.hasPhasesOverride),
+        defaultCollapsed: this.isSectionCollapsed(`${rowKey}:default`, grid.hasDefaultOverride)
+      };
+    });
+
+    const actorsGroupResolving = actors.some((a) => a.isResolving);
+    const hasActorsOverride = actors.length > 0;
+
     // Both status pills come from the shared transport builder, so this window and
     // the Mood Widget state the winning context in the same sentence rather than two
     // similar ones (docs/wiki/ux.md UX-2/UX-7, transport.mjs).
@@ -347,7 +455,42 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const hasGlobalPhasesOverride = globalPhases.some((p) => p.hasOverride);
     const hasGlobalDefaultsOverride = !!(globalDefaults.area.playlistId || globalDefaults.combat.playlistId);
 
+    // The three top-level groups. A group is "resolving" when the winning context - or a live
+    // layer - came from any scope inside it, so the badge and the open-by-default rule below
+    // agree with each other by construction.
+    const scenesGroupResolving = sceneMoodsResolving || scenePhasesResolving || sceneDefaultsResolving
+      || liveLayers.some(fromScene);
+    const worldGroupResolving = globalMoodsResolving || globalPhasesResolving || globalDefaultsResolving
+      || liveLayers.some(fromGlobal);
+
+    const hasScenesOverride = hasSceneMoodsOverride || hasScenePhasesOverride || hasSceneDefaultsOverride;
+    const hasWorldOverride = hasGlobalMoodsOverride || hasGlobalPhasesOverride || hasGlobalDefaultsOverride;
+
+    const anyGroupResolving = actorsGroupResolving || scenesGroupResolving || worldGroupResolving;
+    /**
+     * What a group opens on by default: **what is audible**, not what is merely configured.
+     *
+     * The six sections have always defaulted to open on `hasOverride`, and that is right for a
+     * section - but applying it a level up means a configured world renders every group open,
+     * which is the wall this grouping exists to remove. So the audible group opens and the rest
+     * stay shut.
+     *
+     * The fallback matters as much as the rule: during prep there is often nothing playing at
+     * all, and three closed headers would be a worse hub than the flat list was. With no group
+     * resolving anywhere, every group holding a binding opens - i.e. exactly the old behaviour,
+     * which is the correct answer when "what is playing" has no answer.
+     *
+     * Manual toggles still win over both, via isSectionCollapsed's expanded/collapsed Sets.
+     * @param {boolean} isResolvingHere - Something inside this group is currently audible
+     * @param {boolean} hasOverride - This group holds at least one binding
+     * @returns {boolean} True when the group should render open
+     */
+    const groupOpen = (isResolvingHere, hasOverride) => isResolvingHere || (!anyGroupResolving && hasOverride);
+
     const collapsed = {
+      groupActors: this.isSectionCollapsed('groupActors', groupOpen(actorsGroupResolving, hasActorsOverride)),
+      groupScenes: this.isSectionCollapsed('groupScenes', groupOpen(scenesGroupResolving, hasScenesOverride)),
+      groupWorld: this.isSectionCollapsed('groupWorld', groupOpen(worldGroupResolving, hasWorldOverride)),
       sceneMoods: this.isSectionCollapsed('sceneMoods', hasSceneMoodsOverride),
       scenePhases: this.isSectionCollapsed('scenePhases', hasScenePhasesOverride),
       sceneDefaults: this.isSectionCollapsed('sceneDefaults', hasSceneDefaultsOverride),
@@ -363,8 +506,15 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       // Scoped to one scene: the picker and the global sections are hidden, since
       // neither is this document's business. Everything else renders identically -
       // same cards, same handlers, same immediate writes (UX-3).
-      isScoped: !!this.scopedSceneId,
+      isScoped: !!this.scopedSceneId || !!this.scopedDocument,
+      // Which half a scoped popout is showing. A Scene sheet pins a scene and wants the scene
+      // sections; a Token/Actor sheet pins a document and wants the actor row. Neither wants the
+      // other's, and neither wants the world defaults.
+      isSceneScoped: !!this.scopedSceneId,
+      isDocumentScoped: !!this.scopedDocument,
       availablePlaylists,
+      actors,
+      actorsGroupResolving,
       configuredMoods,
       configuredPhases,
       sceneMoods,
@@ -379,6 +529,8 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       globalMoodsResolving,
       globalPhasesResolving,
       globalDefaultsResolving,
+      scenesGroupResolving,
+      worldGroupResolving,
       activeResolutionInfo,
       layerResolutionInfos,
       collapsed
@@ -422,7 +574,7 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
    * @private
    */
   _onDragLeaveExternal(event) {
-    const box = event.target.closest?.('.context-box[data-drop-scope]');
+    const box = event.target.closest?.('.context-box[data-drop-scope], .actor-add-zone');
     if (!box) return;
     if (event.relatedTarget && box.contains(event.relatedTarget)) return;
     box.classList.remove('drop-hover');
@@ -439,7 +591,8 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
   }
 
   /**
-   * Handle dropping a Playlist or PlaylistSound from the sidebar onto an Area/Combat context box
+   * Handle dropping a Playlist or PlaylistSound from the sidebar onto an Area/Combat context box,
+   * or an Actor onto the Actors group's zone.
    * @param {DragEvent} event
    * @private
    */
@@ -457,6 +610,7 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
         log(1, 'Failed to parse drag data:', e);
         return false;
       }
+      if (data.type === 'Actor') return this._onDropActor(data, target);
       if (!['Playlist', 'PlaylistSound'].includes(data.type) || !data.uuid) return false;
 
       const document = await fromUuid(data.uuid);
@@ -477,16 +631,22 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       }
 
       const { dropScope, contextType, moodId, phaseId } = target.dataset;
+      // A binding drop needs a real scope on the element it landed on. Without this guard an
+      // element that is a drop target for something else - the Actors zone - falls through to
+      // `global` with contextType defaulting to 'area', so a playlist dropped a few pixels off
+      // silently rewrites the WORLD DEFAULT area music. Caught by test, not in the wild.
+      if (!['scene', 'actor', 'global'].includes(dropScope)) {
+        log(2, `Ignoring playlist drop on an element with no binding scope ('${dropScope}')`);
+        return false;
+      }
       const axis = CONST.sectionAxis[contextType];
       const overlayId = (axis === 'phase' ? phaseId : moodId) || null;
       const path = bindingPath(contextType, overlayId);
 
-      let scene = null;
-      if (dropScope === 'scene') {
-        scene = game.scenes?.get(this.selectedSceneId);
-        if (!scene) return false;
-      }
-      await applyBindingPlaylist(PlaylistTreeApp._storeFor(dropScope === 'scene' ? 'scene' : 'global', scene), path, playlist.id, sound?.id);
+      const bindTarget = PlaylistTreeApp._targetFor(dropScope, this, target);
+      if (dropScope !== 'global' && !bindTarget) return false;
+      const scope = dropScope;
+      await applyBindingPlaylist(PlaylistTreeApp._storeFor(scope, bindTarget), path, playlist.id, sound?.id);
 
       // Awaited, not fire-and-forget: playCurrentTrack() can itself trigger a re-render of this
       // same window (transitionToContext() -> _refreshUI(), when the drop changes the resolved
@@ -506,6 +666,35 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       log(1, 'Error handling playlist tree drop:', error);
       return false;
     }
+  }
+
+  /**
+   * Handle an Actor dropped onto the Actors group's zone - how an actor with no binding yet gets
+   * a row to bind in.
+   *
+   * Refused anywhere but that zone: dropping an Actor onto a *binding* box is asking for a
+   * playlist to be an actor, which has no sensible reading, so it is rejected rather than
+   * quietly interpreted as something else.
+   * @param {{uuid?: string, id?: string}} data - The parsed drag payload
+   * @param {HTMLElement} target - The element the drop landed on
+   * @returns {Promise<boolean>}
+   * @private
+   */
+  async _onDropActor(data, target) {
+    // Identified by its dataset rather than its class, matching how every other branch of this
+    // handler reads its target - and unambiguous, since only the zone carries it.
+    if (target?.dataset?.dropZone !== 'actors') return false;
+    const actor = data.uuid ? await fromUuid(data.uuid) : game.actors?.get(data.id);
+    if (!actor?.id) {
+      log(2, `Failed to handle actor drop: no Actor for '${data.uuid || data.id}'`);
+      return false;
+    }
+    this.pinnedActorIds.add(actor.id);
+    // No playCurrentTrack() here, unlike every other drop: pinning binds nothing, so there is
+    // nothing for resolution to reconsider.
+    this.render(false);
+    log(3, `Pinned actor '${actor.name}' into the hub's Actors group`);
+    return true;
   }
 
   /** @override */
@@ -534,7 +723,13 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     updateGlobalOverlayLayer: 'handleUpdateGlobalOverlayLayer',
     updateGlobalOverlayDuck: 'handleUpdateGlobalOverlayDuck',
     updateGlobalDefault: 'handleUpdateGlobalDefault',
-    updateGlobalDefaultTrack: 'handleUpdateGlobalDefaultTrack'
+    updateGlobalDefaultTrack: 'handleUpdateGlobalDefaultTrack',
+    updateActorOverlay: 'handleUpdateActorOverlay',
+    updateActorOverlayTrack: 'handleUpdateActorOverlayTrack',
+    updateActorDefault: 'handleUpdateActorDefault',
+    updateActorDefaultTrack: 'handleUpdateActorDefaultTrack',
+    updateActorExclusive: 'handleUpdateActorExclusive',
+    updateActorDuck: 'handleUpdateActorDuck'
   };
 
   /**
@@ -563,30 +758,66 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
   }
 
   /**
-   * The BindingStore for one scope - a Scene's flags, or the global defaultMusic
-   * setting. Everything a write then does with it lives in binding-store.mjs and is
-   * shared with GameOrchestraConfig (docs/wiki/ux.md UX-2); this window only decides
-   * *which* backend a given row belongs to.
-   * @param {'scene'|'global'} scope
-   * @param {Scene|null} scene
+   * The BindingStore for one scope - a Scene's flags, an Actor's flags, or the global
+   * defaultMusic setting. Everything a write then does with it lives in binding-store.mjs and is
+   * shared with GameOrchestraConfig (docs/wiki/ux.md UX-2); this window only decides *which*
+   * backend a given row belongs to.
+   *
+   * The actor branch goes through `storeForTarget` rather than calling `documentFlagStore`
+   * directly, because a scoped popout hands this the document its host sheet is about - which may
+   * be a TokenDocument or a PrototypeToken, and the prototype-token write path is the one that
+   * fails silently when it is written out a second time (HR-J).
+   * @param {'scene'|'actor'|'global'} scope
+   * @param {Scene|Actor|TokenDocument|PrototypeToken|null} document
    * @returns {import('./binding-store.mjs').BindingStore}
    * @private
    */
-  static _storeFor(scope, scene) {
-    return scope === 'scene' ? documentFlagStore(scene) : globalSettingStore();
+  static _storeFor(scope, document) {
+    if (scope === 'scene') return documentFlagStore(document);
+    if (scope === 'actor') return storeForTarget(document);
+    return globalSettingStore();
+  }
+
+  /**
+   * Resolve the document a row's write should land on.
+   *
+   * Scene and global rows read their target from **instance state** - one scene is selected at a
+   * time, and the world default is a singleton. An actor row cannot: the Actors group shows
+   * several at once, so the target has to come off the **element** that fired. Getting this wrong
+   * writes every actor's binding onto whichever actor happened to be first.
+   * @param {'scene'|'actor'|'global'} scope
+   * @param {PlaylistTreeApp|null} instance
+   * @param {HTMLElement} element - The control that dispatched, or the drop target
+   * @returns {object|null} The document, or null when the scope needs one and it cannot be found
+   * @private
+   */
+  static _targetFor(scope, instance, element) {
+    if (scope === 'scene') return game.scenes?.get(instance?.selectedSceneId) || null;
+    if (scope !== 'actor') return null;
+    // A scoped popout pins one document and renders no actor id - it may not even be an Actor
+    // (a TokenConfig scopes to its TokenDocument). Prefer that pin over any dataset lookup.
+    if (instance?.scopedDocument) return instance.scopedDocument;
+    const actorId = element?.closest?.('[data-actor-id]')?.dataset?.actorId;
+    return (actorId && game.actors?.get(actorId)) || null;
   }
 
   /**
    * Descriptor table for the update/clear handlers below - each one differs only along three
-   * axes: scope (scene vs global), field (playlist, track, layer or duck), and whether the entry
-   * is overlay-scoped (a mood or phase id, whichever the card's own section implies -
-   * config.mjs#sectionAxis) or the section's plain default, plus whether the action clears rather
-   * than updates. Every handler stays a real named static method (rather than existing only as a
-   * table entry) since DEFAULT_OPTIONS.actions and _CHANGE_ACTIONS both reference them by
-   * name/identity.
+   * axes: scope (scene, actor or global), field (playlist, track, layer, duck or exclusive), and
+   * whether the entry is overlay-scoped (a mood or phase id, whichever the card's own section
+   * implies - config.mjs#sectionAxis) or the section's plain default, plus whether the action
+   * clears rather than updates. Every handler stays a real named static method (rather than
+   * existing only as a table entry) since DEFAULT_OPTIONS.actions and _CHANGE_ACTIONS both
+   * reference them by name/identity.
    *
-   * `layer` and `duck` exist only in the overlay rows: a section default is what a layer plays
-   * *over*, so the pair would be inert there (architecture.md § Layers).
+   * Three fields are scope-shaped rather than universal, and the asymmetry is the model's, not an
+   * oversight (architecture.md § Layers):
+   *
+   * - `layer`/`duck` on an OVERLAY row only. A section default is what a layer plays *over*, so
+   *   the pair would be inert there.
+   * - `exclusive`/`duck` on an ACTOR row only, and at SECTION level. One flag governs whichever
+   *   playlist the section resolves to for any phase, and it means nothing on a scene or the
+   *   world default - neither of those is ever a combatant.
    */
   static _ENTRY_SPECS = {
     updateSceneOverlay: { scope: 'scene', field: 'playlist', overlay: true, clear: false },
@@ -604,7 +835,15 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     clearGlobalOverlay: { scope: 'global', field: 'playlist', overlay: true, clear: true },
     updateGlobalDefault: { scope: 'global', field: 'playlist', overlay: false, clear: false },
     updateGlobalDefaultTrack: { scope: 'global', field: 'track', overlay: false, clear: false },
-    clearGlobalDefault: { scope: 'global', field: 'playlist', overlay: false, clear: true }
+    clearGlobalDefault: { scope: 'global', field: 'playlist', overlay: false, clear: true },
+    updateActorOverlay: { scope: 'actor', field: 'playlist', overlay: true, clear: false },
+    updateActorOverlayTrack: { scope: 'actor', field: 'track', overlay: true, clear: false },
+    clearActorOverlay: { scope: 'actor', field: 'playlist', overlay: true, clear: true },
+    updateActorDefault: { scope: 'actor', field: 'playlist', overlay: false, clear: false },
+    updateActorDefaultTrack: { scope: 'actor', field: 'track', overlay: false, clear: false },
+    clearActorDefault: { scope: 'actor', field: 'playlist', overlay: false, clear: true },
+    updateActorExclusive: { scope: 'actor', field: 'exclusive', overlay: false, clear: false },
+    updateActorDuck: { scope: 'actor', field: 'duck', overlay: false, clear: false }
   };
 
   /**
@@ -616,7 +855,7 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
    * (which overlay-id dataset key applies is decided by the context type's
    * own axis - config.mjs#sectionAxis), applies it via the matching
    * binding-store operation, then re-triggers playback and a re-render.
-   * @param {{scope: 'scene'|'global', field: 'playlist'|'track'|'layer'|'duck', overlay: boolean, clear: boolean}} spec
+   * @param {{scope: 'scene'|'actor'|'global', field: 'playlist'|'track'|'layer'|'duck'|'exclusive', overlay: boolean, clear: boolean}} spec
    * @param {string} actionName - Key into _ENTRY_SPECS, for the error log only.
    * @param {Event} event
    * @param {HTMLElement} target
@@ -632,15 +871,16 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     const path = bindingPath(contextType, overlayId);
 
     const instance = PlaylistTreeApp._resolveInstance(this);
-    let scene = null;
-    if (spec.scope === 'scene') {
-      scene = game.scenes?.get(instance?.selectedSceneId);
-      if (!scene) return;
-    }
-    const store = PlaylistTreeApp._storeFor(spec.scope, scene);
+    // `target`, not `el`: the actor id lives on the row wrapper, and `el` may be a <select> that
+    // sits inside it either way - but resolving from the element the event actually reached is
+    // the version that stays right if the markup nests differently later.
+    const document = PlaylistTreeApp._targetFor(spec.scope, instance, target);
+    if (spec.scope !== 'global' && !document) return;
+    const store = PlaylistTreeApp._storeFor(spec.scope, document);
 
     try {
       if (spec.field === 'layer') await applyBindingLayer(store, path, !!el.checked);
+      else if (spec.field === 'exclusive') await applyBindingExclusive(store, path, !!el.checked);
       // A blank value is 1 (no ducking), NOT coerceDuckFactor's answer for it: `Number(null)` and
       // `Number('')` are both 0, so handing a missing slider value straight through would silence
       // everything but the layer.
@@ -739,39 +979,124 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
     return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.clearGlobalDefault, 'clearGlobalDefault', event, target);
   }
 
+  /** Handle updating an actor's phase-overlay playlist (combat only - an actor has no area section) */
+  static async handleUpdateActorOverlay(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorOverlay, 'updateActorOverlay', event, target);
+  }
+
+  /** Handle updating an actor's phase-overlay track */
+  static async handleUpdateActorOverlayTrack(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorOverlayTrack, 'updateActorOverlayTrack', event, target);
+  }
+
+  /** Handle clearing an actor's phase-overlay override */
+  static async handleClearActorOverlay(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.clearActorOverlay, 'clearActorOverlay', event, target);
+  }
+
+  /** Handle updating an actor's combat default playlist */
+  static async handleUpdateActorDefault(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorDefault, 'updateActorDefault', event, target);
+  }
+
+  /** Handle updating an actor's combat default track */
+  static async handleUpdateActorDefaultTrack(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorDefaultTrack, 'updateActorDefaultTrack', event, target);
+  }
+
+  /** Handle clearing an actor's combat default override */
+  static async handleClearActorDefault(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.clearActorDefault, 'clearActorDefault', event, target);
+  }
+
   /**
-   * Handle opening the Mood Configurator dialog
+   * Handle toggling "play exclusively" for an actor's combat music - written at SECTION level,
+   * never under a phase overlay. Unticked (the default) means the theme plays as an additive
+   * layer over the winning context for that combatant's turn, rather than replacing it.
    */
-  static handleOpenMoodConfig(event, target) {
+  static async handleUpdateActorExclusive(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorExclusive, 'updateActorExclusive', event, target);
+  }
+
+  /** Handle an actor layer's duck - how far everything else is attenuated while its theme plays */
+  static async handleUpdateActorDuck(event, target) {
+    return PlaylistTreeApp._handleEntryAction.call(this, PlaylistTreeApp._ENTRY_SPECS.updateActorDuck, 'updateActorDuck', event, target);
+  }
+
+  /**
+   * Handle removing an actor row that has nothing bound on it.
+   *
+   * Only unpins - it never touches the document. A row with a binding disappears by having that
+   * binding cleared, which is the same act in every other scope; offering a second "remove" that
+   * silently deleted flags would be a different operation wearing the same button.
+   */
+  static handleUnpinActor(event, target) {
+    event?.preventDefault?.();
+    const actorId = target?.closest?.('[data-actor-id]')?.dataset?.actorId;
+    const instance = PlaylistTreeApp._resolveInstance(this);
+    if (!actorId || !instance) return;
+    instance.pinnedActorIds.delete(actorId);
+    instance.render(false);
+  }
+
+  /**
+   * Handle opening the overlay dictionary - one window holding both axes.
+   *
+   * `MoodConfigApp` is used purely as the door that lands on the Moods tab; it shares
+   * `OverlayConfigApp`'s id, so the window's own tab strip reaches phases from here. The footer
+   * deliberately offers ONE button: two buttons onto one window (D4) read as two windows, and
+   * the destination is named "Moods & Phases" in its own title bar (UX-5).
+   */
+  static handleOpenOverlayConfig(event) {
     event?.preventDefault?.();
     new MoodConfigApp().render(true);
   }
 
   /**
-   * Handle opening the Phase Configurator dialog
+   * Resolve the playlist a row-level tool button acts on.
+   *
+   * `closest()` because the click may land on the button's inner `<i>`, as elsewhere in this file.
+   * @param {HTMLElement} target
+   * @param {string} what - What the caller was going to do, for the warning only
+   * @returns {object|null} Playlist document
+   * @private
    */
-  static handleOpenPhaseConfig(event, target) {
-    event?.preventDefault?.();
-    new PhaseConfigApp().render(true);
+  static _playlistFromButton(target, what) {
+    const button = target?.closest?.('[data-playlist-id]') || target;
+    const playlistId = button?.dataset?.playlistId;
+    const playlist = game.playlists?.get(playlistId);
+    if (!playlist) log(2, `PlaylistTreeApp: playlist '${playlistId}' not found; cannot ${what}.`);
+    return playlist || null;
   }
 
   /**
-   * Handle opening the graph editor for a custom playlist assigned to one of
-   * the tree's entries, so it can be edited without hunting the playlist down
-   * in the sidebar and opening its config sheet first. Only rendered for
-   * entries whose playlist actually has a graph (entry.isCustom).
+   * Handle opening the graph editor for a playlist bound to one of the tree's rows, so it can be
+   * edited without hunting the playlist down in the sidebar and opening its config sheet first.
+   *
+   * Rendered on **every** bound row, not only `entry.isCustom` ones. The editor is never
+   * mode-gated - `handleSave` force-writes UNSEQUENCED itself (H1) - so hiding the button on a
+   * native playlist hid a control that would have worked. UX-9's corrected reference is exactly
+   * this case: check that pressing it would actually fail before taking it away. It would not; it
+   * would create the graph, and the label says so.
    */
   static handleOpenCustomGraph(event, target) {
     event?.preventDefault?.();
-    // closest(): the click may land on the button's inner <i>, as elsewhere in this file.
-    const button = target.closest?.('[data-playlist-id]') || target;
-    const playlistId = button?.dataset?.playlistId;
-    const playlist = game.playlists?.get(playlistId);
-    if (!playlist) {
-      log(2, `PlaylistTreeApp: playlist '${playlistId}' not found; cannot open its playback graph.`);
-      return;
-    }
-    new CustomPlaylistEditor(playlist).render(true);
+    const playlist = PlaylistTreeApp._playlistFromButton(target, 'open its playback graph');
+    if (playlist) new CustomPlaylistEditor(playlist).render(true);
+  }
+
+  /**
+   * Handle opening the mixer for a playlist bound to one of the tree's rows.
+   *
+   * The mixer was reachable from the playlist sheet, the sidebar context menu and the graph
+   * editor - but not from the hub, which is the one surface showing which playlist is bound
+   * where. "Why is this too loud?" (J4) began by closing the window that had just answered
+   * "what is playing?" (UX-4).
+   */
+  static handleOpenMixer(event, target) {
+    event?.preventDefault?.();
+    const playlist = PlaylistTreeApp._playlistFromButton(target, 'open its mixer');
+    if (playlist) PlaylistMixerApp.open(playlist);
   }
 
   /**
@@ -779,8 +1104,13 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
    */
   static handleToggleSection(event, target) {
     event?.preventDefault?.();
-    const element = target.closest('[data-section]') || target;
-    const sectionKey = element?.dataset?.section;
+    // `data-collapse-key`, never `data-section`. A collapse key and a music section are two
+    // different things, and while the tree's boxes happen to use `data-context-type` today,
+    // a shared partial puts `data-section`-shaped attributes back within reach of this
+    // `closest()` - at which point a header click would return 'combat' as a collapse key.
+    // music-config.hbs was renamed for exactly that reason (docs/wiki/ux.md step 6).
+    const element = target.closest('[data-collapse-key]') || target;
+    const sectionKey = element?.dataset?.collapseKey;
     if (!sectionKey) return;
     const instance = PlaylistTreeApp._resolveInstance(this);
     if (!instance) return;
@@ -847,5 +1177,30 @@ export class PlaylistTreeApp extends GameOrchestraAppMixin(HandlebarsApplication
       return;
     }
     PlaylistTreeApp.open({ scopedSceneId: scene.id });
+  }
+
+  /**
+   * Open this window narrowed to one Token, PrototypeToken or Actor - what a token sheet's music
+   * button does (hooks.mjs#handleTokenConfigRender). The other half of `openScoped`.
+   *
+   * Scoped to **the document the sheet is about**, not to its Actor. The unscoped Actors group is
+   * actor-centric on purpose (one row per actor, and the Actor is in both resolution chains), but
+   * an unlinked token's own override is a real thing a GM configures from that token's sheet, and
+   * routing it to the Actor would silently edit a different document than the one they opened.
+   *
+   * An already-open hub is re-pointed rather than re-scoped, for the same reason `openScoped`
+   * does it: the GM asked to see this document, not to have their whole map replaced.
+   * @param {object} document - A TokenDocument, PrototypeToken, or Actor. NEVER `app.token`,
+   *   which is a detached preview clone whose `_id` may be dropped entirely (HR-I).
+   */
+  static openScopedDocument(document) {
+    if (!game.gameOrchestra || !document) return;
+    const existing = game.gameOrchestra.playlistTree;
+    if (existing?.rendered) {
+      existing.scopedDocument = document;
+      existing.render(true);
+      return;
+    }
+    PlaylistTreeApp.open({ scopedDocument: document });
   }
 }

@@ -46,7 +46,6 @@ import {
   describePlaylistContext,
   getActiveOverlayId,
   getCustomGraph,
-  getDocumentCategory,
   getPlaylistById,
   isHeadGM as isHeadGMHelper,
   macroValidationList,
@@ -59,9 +58,7 @@ import {
   applyBindingTrack,
   bindingPath,
   clearBindingOverlay,
-  documentFlagStore,
-  globalSettingStore,
-  updateObjectStore
+  storeForTarget as storeForBindingTarget
 } from './binding-store.mjs';
 import { describeResolution, localizeResolution, setSuppression, suppressionState } from './transport.mjs';
 import {
@@ -320,43 +317,16 @@ const transport = {
 /**
  * Pick the {@link import('./binding-store.mjs').BindingStore} backing one binding target.
  *
- * Three of the four targets need no code of their own; the prototype token is the exception and
- * is the reason this function exists rather than being inlined.
+ * The dispatch itself lives in `binding-store.mjs` - the hub's actor scope and its scoped popout
+ * need the identical rules, and the prototype-token branch is the one that fails *silently* when
+ * copied slightly wrong (HR-J). This wrapper exists only to keep the API's own error type.
  * @param {'default'|object} target - `'default'`, or a Scene / TokenDocument / Actor /
  *   PrototypeToken document.
  * @returns {import('./binding-store.mjs').BindingStore}
  * @throws {GameOrchestraApiError} INVALID_ARGUMENT
  */
 function storeForTarget(target) {
-  if (target === 'default') return globalSettingStore();
-  if (!target || typeof target !== 'object') {
-    throw new GameOrchestraApiError('INVALID_ARGUMENT', "Expected 'default' or a Scene / TokenDocument / Actor / PrototypeToken document.");
-  }
-  if (getDocumentCategory(target) === 'PrototypeToken') {
-    const actor = target.parent;
-    if (!actor) {
-      throw new GameOrchestraApiError('INVALID_ARGUMENT', 'That PrototypeToken has no parent Actor, so there is nothing to write to.');
-    }
-    // Mirrors GameOrchestraConfig#updateObject's PrototypeToken branch, and must keep mirroring
-    // it. Plain DOT NOTATION, never `flags['game-orchestra']`: Foundry expands update keys with
-    // expandObject -> setProperty, which splits on "." and has no bracket syntax (HR-J). The
-    // bracketed form produced a literal key the Actor schema dropped while cleaning - the update
-    // resolved successfully and wrote NOTHING, confirmed live.
-    //
-    // Headless on purpose (HR-I): there is no sheet here, so there is no `app.token` preview
-    // clone to be caught by. That immunity is an argument for this host over reusing the window's.
-    return updateObjectStore({
-      readData: () => target.flags?.[CONST.moduleId] ?? {},
-      updateObject: (data) => actor.update(Object.entries(data).reduce((acc, [key, value]) => {
-        acc[`prototypeToken.flags.${CONST.moduleId}.${key}`] = value;
-        return acc;
-      }, {}))
-    });
-  }
-  if (typeof target.setFlag !== 'function') {
-    throw new GameOrchestraApiError('INVALID_ARGUMENT', `Cannot bind against a ${target.constructor?.name ?? 'value'} - it is not a Document.`);
-  }
-  return documentFlagStore(target);
+  return storeForBindingTarget(target, (message) => new GameOrchestraApiError('INVALID_ARGUMENT', message));
 }
 
 /**

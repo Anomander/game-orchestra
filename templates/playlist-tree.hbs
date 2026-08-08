@@ -1,19 +1,7 @@
 <div class="game-orchestra-playlist-tree standard-form flexcol">
-  <!-- Top Bar: Scene Selector & Active Resolution Status -->
+  {{! Top Bar: what is playing right now. The scene picker used to live here too; it moved into
+      the Scenes group header, where the rows it governs actually are. }}
   <div class="tree-header-bar flexrow">
-    {{#unless isScoped}}
-    <div class="form-group flexrow">
-      <label><i class="fas fa-map-marker-alt"></i> {{localize "GameOrchestra.PlaylistTree.Scene"}}:</label>
-      <select class="scene-picker-select" data-change-action="selectScene">
-        <option value="global" {{#if (eq selectedSceneId "global")}}selected{{/if}}>🌐 {{localize "GameOrchestra.PlaylistTree.GlobalOnly"}}</option>
-        {{#each scenes}}
-        <option value="{{this.id}}" {{#if this.isSelected}}selected{{/if}}>
-          {{#if this.isActive}}★ {{/if}}{{this.name}}{{#if this.isActive}} ({{localize "GameOrchestra.PlaylistTree.Active"}}){{/if}}
-        </option>
-        {{/each}}
-      </select>
-    </div>
-    {{/unless}}
     {{#if activeResolutionInfo}}
     <div class="active-resolution-pill" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.ActivePlaying'}}">
       <span class="active-dot">●</span>
@@ -32,13 +20,112 @@
 
   <div class="tree-nodes-container flexcol">
 
+    {{! ============================ ACTORS ============================
+        Bound actors only, plus whatever was dragged in this session. A world has hundreds of
+        actors and almost none of them have music, so listing the directory would bury the
+        handful that matter (helpers.mjs#listBoundActors).
+
+        Combat only: CONST.playlistSections.Token has no `area` entry, so an actor has one
+        section and one axis. A mood grid here would be four inert cards.
+
+        Hidden when scoped to a Scene - an actor is not that scene's business. }}
+    {{#unless isSceneScoped}}
+    <div class="tree-group actors-group {{#if actorsGroupResolving}}is-resolving{{/if}}">
+      <div class="tree-group-header flexrow">
+        <div class="group-title clickable" data-action="toggleSection" data-collapse-key="groupActors" data-default-collapsed="{{collapsed.groupActors}}">
+          <i class="fas {{#if collapsed.groupActors}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+          <i class="fas fa-users"></i>
+          <span>{{localize "GameOrchestra.PlaylistTree.GroupActors"}}</span>
+          {{#if actors.length}}<span class="group-count">({{actors.length}})</span>{{/if}}
+          {{#if actorsGroupResolving}}
+          <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+          {{/if}}
+        </div>
+      </div>
+      {{#unless collapsed.groupActors}}
+      <div class="tree-group-body flexcol">
+        {{#each actors}}
+        <div class="tree-node actor-node {{#if this.isResolving}}is-resolving{{/if}}" data-actor-id="{{this.actorId}}">
+          <div class="tree-node-header flexrow">
+            <div class="node-title clickable" data-action="toggleSection" data-collapse-key="{{this.rowKey}}" data-default-collapsed="{{this.isRowCollapsed}}">
+              <i class="fas {{#if this.isRowCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+              {{#if this.img}}<img class="actor-thumb" src="{{this.img}}" alt="">{{else}}<i class="fas fa-user"></i>{{/if}}
+              <span>{{this.name}}</span>
+              {{#if this.hasOverride}}<span class="override-indicator">●</span>{{/if}}
+            </div>
+            {{#if this.isResolving}}
+            <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+            {{/if}}
+            {{! Only a row with nothing bound gets a remove button. A bound row disappears by
+                having its binding cleared - the same act as in every other scope. A second
+                "remove" that silently deleted flags would be a different operation wearing the
+                same button. }}
+            {{#if this.isPinnedOnly}}
+            <button type="button" class="clear-btn" data-action="unpinActor" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.UnpinActor'}}">
+              <i class="fas fa-xmark"></i>
+            </button>
+            {{/if}}
+          </div>
+          {{#unless this.isRowCollapsed}}
+          <div class="tree-node-body flexcol">
+            {{> "modules/game-orchestra/templates/parts/combat-grid.hbs" this}}
+          </div>
+          {{/unless}}
+        </div>
+        {{/each}}
+
+        {{! The way in for an actor that has nothing bound yet. Foundry's Actor drag payload is
+            {type:'Actor', uuid}, the same shape the Playlist drop already parses. }}
+        {{#unless isDocumentScoped}}
+        <div class="actor-add-zone flexrow" data-drop-zone="actors">
+          <i class="fas fa-arrow-down-to-line"></i>
+          <span>{{localize "GameOrchestra.PlaylistTree.DropActorHint"}}</span>
+        </div>
+        {{/unless}}
+      </div>
+      {{/unless}}
+    </div>
+    {{/unless}}
+    {{! ========================== END ACTORS ========================== }}
+
+    {{! ============================ SCENES ============================
+        The group header carries the picker, and `data-action` sits on the TITLE rather than the
+        whole row - a click anywhere in the row would otherwise collapse the group out from under
+        the <select> the GM was aiming at.
+
+        Hidden when scoped to a Token/Actor: no scene is that document's business. }}
+    {{#unless isDocumentScoped}}
+    <div class="tree-group scenes-group {{#if scenesGroupResolving}}is-resolving{{/if}}">
+      <div class="tree-group-header flexrow">
+        <div class="group-title clickable" data-action="toggleSection" data-collapse-key="groupScenes" data-default-collapsed="{{collapsed.groupScenes}}">
+          <i class="fas {{#if collapsed.groupScenes}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+          <i class="fas fa-map"></i>
+          <span>{{localize "GameOrchestra.PlaylistTree.GroupScenes"}}</span>
+          {{#if scenesGroupResolving}}
+          <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+          {{/if}}
+        </div>
+        {{#unless isScoped}}
+        <select class="scene-picker-select" data-change-action="selectScene" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.Scene'}}">
+          <option value="global" {{#if (eq selectedSceneId "global")}}selected{{/if}}>🌐 {{localize "GameOrchestra.PlaylistTree.GlobalOnly"}}</option>
+          {{#each scenes}}
+          <option value="{{this.id}}" {{#if this.isSelected}}selected{{/if}}>
+            {{#if this.isActive}}★ {{/if}}{{this.name}}{{#if this.isActive}} ({{localize "GameOrchestra.PlaylistTree.Active"}}){{/if}}
+          </option>
+          {{/each}}
+        </select>
+        {{/unless}}
+      </div>
+      {{#unless collapsed.groupScenes}}
+      <div class="tree-group-body flexcol">
+
     {{#if selectedScene}}
     <!-- 1 & 2. Scene Overrides - Area (moods) / Combat (phases), side by side -->
     <div class="tree-columns flexrow">
     <div class="tree-column area-column">
     <!-- 1. Scene Mood Overrides (area) -->
     <div class="tree-node scene-moods-node {{#if sceneMoodsResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="sceneMoods" data-default-collapsed="{{collapsed.sceneMoods}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="sceneMoods" data-default-collapsed="{{collapsed.sceneMoods}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.sceneMoods}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-theater-masks"></i>
@@ -52,7 +139,7 @@
       <div class="tree-node-body mood-grid">
         {{#each sceneMoods}}
         <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
             <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
             <i class="{{this.icon}}"></i>
             <span class="mood-label">{{localize this.label}}</span>
@@ -90,20 +177,7 @@
                   </select>
                 </div>
                 {{/unless}}
-                {{#if area.isCustom}}
-                <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{area.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                  <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-                </button>
-                {{/if}}
-                {{! What this row is actually doing right now, whichever way it lost or won
-                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
-                    "beaten" - it says so itself instead. }}
-                {{#if area.isLayerActive}}
-                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
-                {{/if}}
-                {{#if area.beatenBy}}
-                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
-                {{/if}}
+                {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=area}}
                 <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
                   <label class="layer-toggle flexrow">
@@ -139,7 +213,7 @@
     <div class="tree-column combat-column">
     <!-- 2. Scene Phase Overrides (combat) -->
     <div class="tree-node scene-phases-node {{#if scenePhasesResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="scenePhases" data-default-collapsed="{{collapsed.scenePhases}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="scenePhases" data-default-collapsed="{{collapsed.scenePhases}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.scenePhases}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-skull"></i>
@@ -153,7 +227,7 @@
       <div class="tree-node-body mood-grid">
         {{#each scenePhases}}
         <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
             <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
             <i class="{{this.icon}}"></i>
             <span class="mood-label">{{localize this.label}}</span>
@@ -191,20 +265,7 @@
                   </select>
                 </div>
                 {{/unless}}
-                {{#if combat.isCustom}}
-                <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{combat.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                  <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-                </button>
-                {{/if}}
-                {{! What this row is actually doing right now, whichever way it lost or won
-                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
-                    "beaten" - it says so itself instead. }}
-                {{#if combat.isLayerActive}}
-                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
-                {{/if}}
-                {{#if combat.beatenBy}}
-                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
-                {{/if}}
+                {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=combat}}
                 <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
                   <label class="layer-toggle flexrow">
@@ -240,7 +301,7 @@
 
     <!-- 3. Scene Default Overrides -->
     <div class="tree-node scene-defaults-node {{#if sceneDefaultsResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="sceneDefaults" data-default-collapsed="{{collapsed.sceneDefaults}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="sceneDefaults" data-default-collapsed="{{collapsed.sceneDefaults}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.sceneDefaults}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-image"></i>
@@ -284,17 +345,7 @@
                 </select>
               </div>
               {{/unless}}
-              {{#if sceneDefaults.area.isCustom}}
-              <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{sceneDefaults.area.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-              </button>
-              {{/if}}
-              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
-                  default has no Advanced block: it is the thing overlays layer over, so the
-                  layer controls that live there for an overlay row would be inert here. }}
-              {{#if sceneDefaults.area.beatenBy}}
-              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.area.beatenBy}}</p>
-              {{/if}}
+              {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=sceneDefaults.area}}
               {{/if}}
             </div>
           </div>
@@ -330,17 +381,7 @@
                 </select>
               </div>
               {{/unless}}
-              {{#if sceneDefaults.combat.isCustom}}
-              <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{sceneDefaults.combat.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-              </button>
-              {{/if}}
-              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
-                  default has no Advanced block: it is the thing overlays layer over, so the
-                  layer controls that live there for an overlay row would be inert here. }}
-              {{#if sceneDefaults.combat.beatenBy}}
-              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{sceneDefaults.combat.beatenBy}}</p>
-              {{/if}}
+              {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=sceneDefaults.combat}}
               {{/if}}
             </div>
           </div>
@@ -350,14 +391,34 @@
     </div>
     {{/if}}
 
-    {{! Hidden when scoped to one scene: the world defaults are not this document's business. }}
+      </div>
+      {{/unless}}
+    </div>
+    {{/unless}}
+    {{! ========================== END SCENES ========================== }}
+
+    {{! ============================ WORLD =============================
+        Hidden entirely when scoped to one document: the world defaults are not its business. }}
     {{#unless isScoped}}
+    <div class="tree-group world-group {{#if worldGroupResolving}}is-resolving{{/if}}">
+      <div class="tree-group-header flexrow">
+        <div class="group-title clickable" data-action="toggleSection" data-collapse-key="groupWorld" data-default-collapsed="{{collapsed.groupWorld}}">
+          <i class="fas {{#if collapsed.groupWorld}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+          <i class="fas fa-globe"></i>
+          <span>{{localize "GameOrchestra.PlaylistTree.GroupWorld"}}</span>
+          {{#if worldGroupResolving}}
+          <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+          {{/if}}
+        </div>
+      </div>
+      {{#unless collapsed.groupWorld}}
+      <div class="tree-group-body flexcol">
     <!-- 4 & 5. Global Overrides - Area (moods) / Combat (phases), side by side -->
     <div class="tree-columns flexrow">
     <div class="tree-column area-column">
     <!-- 4. Global Mood Overrides (area) -->
     <div class="tree-node global-moods-node {{#if globalMoodsResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="globalMoods" data-default-collapsed="{{collapsed.globalMoods}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="globalMoods" data-default-collapsed="{{collapsed.globalMoods}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.globalMoods}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-globe"></i>
@@ -371,7 +432,7 @@
       <div class="tree-node-body mood-grid">
         {{#each globalMoods}}
         <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
             <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
             <i class="{{this.icon}}"></i>
             <span class="mood-label">{{localize this.label}}</span>
@@ -409,20 +470,7 @@
                   </select>
                 </div>
                 {{/unless}}
-                {{#if area.isCustom}}
-                <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{area.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                  <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-                </button>
-                {{/if}}
-                {{! What this row is actually doing right now, whichever way it lost or won
-                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
-                    "beaten" - it says so itself instead. }}
-                {{#if area.isLayerActive}}
-                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
-                {{/if}}
-                {{#if area.beatenBy}}
-                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{area.beatenBy}}</p>
-                {{/if}}
+                {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=area}}
                 <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
                   <label class="layer-toggle flexrow">
@@ -458,7 +506,7 @@
     <div class="tree-column combat-column">
     <!-- 5. Global Phase Overrides (combat) -->
     <div class="tree-node global-phases-node {{#if globalPhasesResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="globalPhases" data-default-collapsed="{{collapsed.globalPhases}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="globalPhases" data-default-collapsed="{{collapsed.globalPhases}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.globalPhases}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-skull"></i>
@@ -472,7 +520,7 @@
       <div class="tree-node-body mood-grid">
         {{#each globalPhases}}
         <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
-          <div class="mood-card-header clickable" data-action="toggleSection" data-section="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+          <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
             <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
             <i class="{{this.icon}}"></i>
             <span class="mood-label">{{localize this.label}}</span>
@@ -510,20 +558,7 @@
                   </select>
                 </div>
                 {{/unless}}
-                {{#if combat.isCustom}}
-                <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{combat.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                  <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-                </button>
-                {{/if}}
-                {{! What this row is actually doing right now, whichever way it lost or won
-                    (docs/wiki/ux.md UX-7). A layer never enters the contest, so it is never
-                    "beaten" - it says so itself instead. }}
-                {{#if combat.isLayerActive}}
-                <p class="layering-now"><i class="fas fa-layer-group"></i> {{localize "GameOrchestra.PlaylistTree.LayeringNow"}}</p>
-                {{/if}}
-                {{#if combat.beatenBy}}
-                <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{combat.beatenBy}}</p>
-                {{/if}}
+                {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=combat}}
                 <details class="advanced-disclosure" data-disclosure-key="{{this.advancedKey}}" {{#if this.advancedOpen}}open{{/if}}>
                   <summary>{{localize "GameOrchestra.PlaylistTree.Advanced"}}</summary>
                   <label class="layer-toggle flexrow">
@@ -559,7 +594,7 @@
 
     <!-- 6. Global World Defaults -->
     <div class="tree-node global-defaults-node {{#if globalDefaultsResolving}}is-resolving{{/if}}">
-      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-section="globalDefaults" data-default-collapsed="{{collapsed.globalDefaults}}">
+      <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="globalDefaults" data-default-collapsed="{{collapsed.globalDefaults}}">
         <div class="node-title">
           <i class="fas {{#if collapsed.globalDefaults}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
           <i class="fas fa-sliders-h"></i>
@@ -603,17 +638,7 @@
                 </select>
               </div>
               {{/unless}}
-              {{#if globalDefaults.area.isCustom}}
-              <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{globalDefaults.area.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-              </button>
-              {{/if}}
-              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
-                  default has no Advanced block: it is the thing overlays layer over, so the
-                  layer controls that live there for an overlay row would be inert here. }}
-              {{#if globalDefaults.area.beatenBy}}
-              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.area.beatenBy}}</p>
-              {{/if}}
+              {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=globalDefaults.area}}
               {{/if}}
             </div>
           </div>
@@ -649,17 +674,7 @@
                 </select>
               </div>
               {{/unless}}
-              {{#if globalDefaults.combat.isCustom}}
-              <button type="button" class="graph-btn" data-action="openCustomGraph" data-playlist-id="{{globalDefaults.combat.playlistId}}" data-tooltip="{{localize 'GameOrchestra.PlaylistTree.OpenGraph'}}">
-                <i class="fas fa-project-diagram"></i> {{localize "GameOrchestra.PlaylistTree.OpenGraphLabel"}}
-              </button>
-              {{/if}}
-              {{! Beaten-by is the answer a GM actually needs (docs/wiki/ux.md UX-7). A section
-                  default has no Advanced block: it is the thing overlays layer over, so the
-                  layer controls that live there for an overlay row would be inert here. }}
-              {{#if globalDefaults.combat.beatenBy}}
-              <p class="beaten-by"><i class="fas fa-circle-arrow-down"></i> {{localize "GameOrchestra.PlaylistTree.BeatenBy"}} {{globalDefaults.combat.beatenBy}}</p>
-              {{/if}}
+              {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=globalDefaults.combat}}
               {{/if}}
             </div>
           </div>
@@ -668,16 +683,21 @@
       {{/unless}}
     </div>
 
+      </div>
+      {{/unless}}
+    </div>
     {{/unless}}
+    {{! =========================== END WORLD ========================== }}
   </div>
 
-  <!-- Footer Bar: Launch Mood/Phase Configurators -->
+  {{! Footer Bar: the one door to the overlay dictionary.
+      ONE button, not two. Moods and Phases are a single window (OverlayConfigApp) that the two
+      former buttons both opened - same id, same markup, differing only in which tab was showing
+      (docs/wiki/ux.md D4). Two doors onto one room taught the GM that they were two rooms, and
+      named the destination in a third way besides ("Moods & Phases"). See UX-5. }}
   <div class="tree-footer-bar flexrow">
-    <button type="button" class="mood-config-btn" data-action="openMoodConfig" data-tooltip="{{localize 'GameOrchestra.MoodConfig.Title'}}">
-      <i class="fas fa-theater-masks"></i> {{localize "GameOrchestra.MoodConfig.Title"}}
-    </button>
-    <button type="button" class="mood-config-btn" data-action="openPhaseConfig" data-tooltip="{{localize 'GameOrchestra.PhaseConfig.Title'}}">
-      <i class="fas fa-skull"></i> {{localize "GameOrchestra.PhaseConfig.Title"}}
+    <button type="button" class="mood-config-btn" data-action="openOverlayConfig" data-tooltip="{{localize 'GameOrchestra.OverlayConfig.Hint'}}">
+      <i class="fas fa-masks-theater"></i> {{localize "GameOrchestra.OverlayConfig.Title"}}
     </button>
   </div>
 </div>

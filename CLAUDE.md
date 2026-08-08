@@ -13,7 +13,7 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **2023 tests, 43 files, all passing.** ~4s. |
+| `npm test` | Full vitest suite. Baseline: **2124 tests, 45 files, all passing.** ~9s. |
 | `npm run build` | Release artifact only — writes `dist/`. Not part of the dev loop. See [packaging.md](docs/wiki/packaging.md). |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
@@ -109,7 +109,7 @@ code it guards, update the comment to match.
   `graph-drawflow-bridge.mjs`, `graph-presets.mjs`, `native-mode-graph.mjs`, `graph-builder.mjs`,
   `graph-activity-highlight.mjs`, `graph-drop.mjs`, `graph-splice.mjs`, `graph-history.mjs`,
   `playlist-mix.mjs`, `playlist-mixer-render.mjs`, `custom-playlist-inspector.mjs`,
-  `custom-playlist-node-render.mjs`,
+  `custom-playlist-node-render.mjs`, `binding-cards.mjs`,
   `custom-playlist-connection-render.mjs`, `custom-playback-schema.mjs`.
   **Keep them pure.** If one needs live state, the caller reads it and passes it in — that is
   why `helpers.mjs#resolvePlaylistRef` exists as a thin Foundry-touching wrapper around
@@ -137,5 +137,10 @@ code it guards, update the comment to match.
   move or rename them; the citations would break.
 - Style load order is load-bearing: `drawflow.min.css` **must** load before `game-orchestra.css`
   (equal specificity, last wins). `tests/module-manifest.test.mjs` guards it.
+- `templates/parts/` holds **partials**, included by full path (`{{> "modules/game-orchestra/…"}}`)
+  and registered in `game-orchestra.mjs`'s `loadTemplates` call. Adding one means touching three
+  places — the file, that call, and nothing else — but missing the `loadTemplates` entry throws
+  only at render time, and `tools/build.mjs` must stay **recursive** or the partial never reaches
+  `dist/`. Both halves are test-guarded (`template-compile`, `dist-bundle`).
 - Drawflow is a UMD build loaded as a **classic script** (`module.json` `scripts`, not
   `esmodules`) and reaches the editor as the global `Drawflow`.

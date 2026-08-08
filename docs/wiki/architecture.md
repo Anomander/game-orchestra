@@ -17,14 +17,13 @@ bundler, no build step. Releases ship the same graph bundled into one minified f
 ```js
 game.gameOrchestra = {
   musicController,   // the singleton MusicController — all playback decisions
-  GameOrchestraConfig,     // per-scene / per-token music config window
-  MoodWidget,        // dockable mood/phase switcher
-  MoodConfigApp,     // world mood definitions
-  PhaseConfigApp,    // world phase definitions (same axis mechanism, see below)
-  CustomPlaylistEditor,
   moodWidget: null,  // live instance, when open
-  playlistTree: …    // live PlaylistTreeApp instance, when open
+  playlistTree: …,   // live PlaylistTreeApp instance, when open
+  …createApi()       // the supported surface — see api.md
 };
+// Plus LEGACY_APP_KEYS (game-orchestra.mjs): GameOrchestraConfig, MoodWidget, MoodConfigApp,
+// PhaseConfigApp, CustomPlaylistEditor, PlaylistMixerApp — still reachable, each logging a
+// one-time deprecation on first access.
 ```
 
 Everything else is Foundry hooks wired in `game-orchestra.mjs` to handlers in `hooks.mjs`.
@@ -455,15 +454,16 @@ Custom playlists never participate (H9) — a suspended graph run carries its ow
 
 | Window | Entry point | Notes |
 |---|---|---|
-| `GameOrchestraConfig` | Scene Config button, Token Config (Identity tab) | Per-document area (mood) + combat (phase) overrides. Token documents only ever show a combat/phase grid — see `isTokenPhaseGrid` |
-| `PlaylistTreeApp` | Settings menu (the module's **one** menu door), keybinding (`Alt+O`), scene control, Mood Widget | Every scene's assignments in one tree, mood and phase rows both, plus each overlay row's `layer`/`duck` behind `Advanced` |
-| `OverlayConfigApp` | Playlist tree footer | World mood **and** phase definitions — one window, two tabs. `MoodConfigApp`/`PhaseConfigApp` (`mood-config.mjs`) are doors that share its `id` and only pick the opening tab |
+| `PlaylistTreeApp` | Settings menu (the module's **one** menu door), keybinding (`Alt+O`), scene control, Mood Widget, **Scene Config button** (scoped), **Token/Prototype Token button** (scoped) | The hub. Three collapsible groups — **Actors / Scenes / World** — opening on what is audible. Actor rows are combat-only and carry `exclusive`/`duck`; overlay rows carry `layer`/`duck` behind `Advanced` |
+| `GameOrchestraConfig` | **legacy API only** (`game.gameOrchestra.GameOrchestraConfig`) | Renders the hub's own view model (`binding-cards.mjs`) through the hub's own partial. Nothing in the module opens it |
+| `OverlayConfigApp` | Playlist tree footer (**one** button) | World mood **and** phase definitions — one window, two tabs. `MoodConfigApp`/`PhaseConfigApp` (`mood-config.mjs`) are doors that share its `id` and only pick the opening tab |
 | `MoodWidget` | Scene control, keybinding | Dockable switcher: moods when idle, phases once `game.combat?.started`. Shows **only** the active axis — the inactive one is not rendered at all, not even dimmed |
 | `CustomPlaylistEditor` | Playlist Config button, playlist directory context menu, tree, mood widget | The graph editor — see [editor.md](editor.md). Never mode-gated: saving forces `UNSEQUENCED` itself |
 | `PlaylistMixerApp` | Playlist Config button, playlist directory context menu, graph editor Settings pane | Levels for **any** playlist type — see [mixer.md](mixer.md) |
 
 The first two share `GameOrchestraAppMixin` (`app-mixins.mjs`) for collapsed-section bookkeeping, the
-delegated `change`/`dragleave` listeners, and the DragDrop rebind lifecycle (HR-D).
+delegated `change`/`dragleave` listeners, and the DragDrop rebind lifecycle (HR-D) — plus, since
+step 9, one view model (`binding-cards.mjs`) and one set of partials (`templates/parts/`).
 `CustomPlaylistEditor` has a wholly different lifecycle and reuses only `dispatchChangeAction()`.
 
 Injected buttons (scene config, token config, playlist config) all follow the same shape: find a

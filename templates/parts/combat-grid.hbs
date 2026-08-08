@@ -1,0 +1,168 @@
+{{! One document's combat music: a phase card grid, the section default, and the exclusive/duck
+    pair. Shared by the hub's Actors group and GameOrchestraConfig's token grid - the same rows
+    for the same reason, so one copy (docs/wiki/ux.md UX-2).
+
+    Everything host-specific arrives in the view model from binding-cards.mjs#buildCombatPhaseGrid:
+    `actions.*` are the handler names, `dropScope` is the drag-and-drop scope, `phasesKey` and
+    `defaultKey` are the collapse keys. The caller supplies `phasesCollapsed`/`defaultCollapsed`
+    because only it knows its own collapse state.
+
+    Every context box declares `data-context-type="combat"` and `data-drop-scope`, and every
+    overlay control carries its `data-phase-id` - pinned by tests/binding-template.test.mjs,
+    because a box missing one of those renders perfectly and writes to the wrong place. }}
+
+{{! ---- Phase overrides ---- }}
+<div class="tree-node phases-node {{#if phasesResolving}}is-resolving{{/if}}">
+  <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="{{phasesKey}}" data-default-collapsed="{{phasesCollapsed}}">
+    <div class="node-title">
+      <i class="fas {{#if phasesCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+      <i class="fas fa-skull"></i>
+      <span>{{localize "GameOrchestra.PlaylistTree.PhaseOverrides"}}</span>
+    </div>
+    {{#if phasesResolving}}
+    <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+    {{/if}}
+  </div>
+  {{#unless phasesCollapsed}}
+  <div class="tree-node-body mood-grid">
+    {{#each phaseCards}}
+    <div class="mood-card {{#if this.isActive}}active-mood{{/if}} {{#if this.isResolving}}resolving-mood{{/if}}" style="--mood-color: {{this.color}};">
+      <div class="mood-card-header clickable" data-action="toggleSection" data-collapse-key="{{this.cardKey}}" data-default-collapsed="{{this.isCardCollapsed}}">
+        <i class="fas {{#if this.isCardCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+        <i class="{{this.icon}}"></i>
+        <span class="mood-label">{{localize this.label}}</span>
+        {{#if this.hasOverride}}<span class="override-indicator" style="color: {{this.color}};">●</span>{{/if}}
+      </div>
+      {{#unless this.isCardCollapsed}}
+      <div class="context-boxes flexrow">
+        <div class="context-box combat-box flexcol" data-drop-scope="{{../dropScope}}" data-context-type="combat" data-phase-id="{{this.phaseId}}">
+          <div class="context-box-header flexrow">
+            <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
+            {{#if this.combat.playlistId}}
+            <button type="button" class="clear-btn" data-action="{{../actions.clearOverlay}}" data-phase-id="{{this.phaseId}}" data-context-type="combat" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
+              <i class="fas fa-trash"></i>
+            </button>
+            {{/if}}
+          </div>
+          <div class="context-box-body flexcol">
+            <select class="playlist-select" data-change-action="{{../actions.overlay}}" data-phase-id="{{this.phaseId}}" data-context-type="combat">
+              <option value="">-- {{localize "GameOrchestra.None"}} --</option>
+              {{#each ../availablePlaylists}}
+              {{! `../combat`, NOT `../this.combat`. Inside this inner each the context is a
+                  playlist and `..` is the card, so the card's own entry is `../combat` - writing
+                  `../this.combat` resolves nothing and every option renders unselected, which
+                  reads as "no playlist bound" on a row that is audibly playing. }}
+              <option value="{{this.id}}" {{#if (eq this.id ../combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
+              {{/each}}
+            </select>
+            {{#if this.combat.playlistId}}
+            {{#unless this.combat.isCustom}}
+            <div class="track-row flexrow">
+              {{#if this.combat.isSoundboard}}
+              <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
+              {{/if}}
+              <select class="track-select" data-change-action="{{../actions.overlayTrack}}" data-phase-id="{{this.phaseId}}" data-context-type="combat">
+                {{#unless this.combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.PlaylistTree.DefaultTrack"}} --</option>{{/unless}}
+                {{#each this.combat.tracks}}
+                <option value="{{this.id}}" {{#if (eq this.id ../combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
+                {{/each}}
+              </select>
+            </div>
+            {{/unless}}
+            {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=this.combat}}
+            {{/if}}
+          </div>
+        </div>
+      </div>
+      {{/unless}}
+    </div>
+    {{/each}}
+  </div>
+  {{/unless}}
+</div>
+
+{{! ---- Section default ---- }}
+<div class="tree-node default-node {{#if defaultResolving}}is-resolving{{/if}}">
+  <div class="tree-node-header flexrow clickable" data-action="toggleSection" data-collapse-key="{{defaultKey}}" data-default-collapsed="{{defaultCollapsed}}">
+    <div class="node-title">
+      <i class="fas {{#if defaultCollapsed}}fa-chevron-right{{else}}fa-chevron-down{{/if}} section-chevron"></i>
+      <i class="fas fa-shield-halved"></i>
+      <span>{{localize "GameOrchestra.PlaylistTree.CombatDefault"}}</span>
+    </div>
+    {{#if defaultResolving}}
+    <span class="resolving-badge"><i class="fas fa-volume-up"></i> {{localize "GameOrchestra.PlaylistTree.Active"}}</span>
+    {{/if}}
+  </div>
+  {{#unless defaultCollapsed}}
+  <div class="tree-node-body">
+    <div class="context-boxes flexrow">
+      <div class="context-box combat-box flexcol" data-drop-scope="{{dropScope}}" data-context-type="combat" data-phase-id="">
+        <div class="context-box-header flexrow">
+          <span class="box-title"><i class="fas fa-swords"></i> {{localize "GameOrchestra.PlaylistSection.Combat"}}</span>
+          {{#if defaultEntry.combat.playlistId}}
+          <button type="button" class="clear-btn" data-action="{{actions.clearDefault}}" data-context-type="combat" data-phase-id="" data-tooltip="{{localize 'GameOrchestra.UI.Delete'}}">
+            <i class="fas fa-trash"></i>
+          </button>
+          {{/if}}
+        </div>
+        <div class="context-box-body flexcol">
+          <select class="playlist-select" data-change-action="{{actions.default}}" data-context-type="combat" data-phase-id="">
+            <option value="">-- {{localize "GameOrchestra.None"}} --</option>
+            {{#each availablePlaylists}}
+            <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.playlistId)}}selected{{/if}}>{{this.name}}{{#if this.isSoundboard}} ({{localize "GameOrchestra.Soundboard"}}){{/if}}{{#if this.isCustom}} ({{localize "GameOrchestra.Custom"}}){{/if}}</option>
+            {{/each}}
+          </select>
+          {{#if defaultEntry.combat.playlistId}}
+          {{#unless defaultEntry.combat.isCustom}}
+          <div class="track-row flexrow">
+            {{#if defaultEntry.combat.isSoundboard}}
+            <span class="soundboard-required-badge" data-tooltip="{{localize 'GameOrchestra.ErrorSoundboardTrackRequired'}}">*</span>
+            {{/if}}
+            <select class="track-select" data-change-action="{{actions.defaultTrack}}" data-context-type="combat" data-phase-id="">
+              {{#unless defaultEntry.combat.isSoundboard}}<option value="">-- {{localize "GameOrchestra.PlaylistTree.DefaultTrack"}} --</option>{{/unless}}
+              {{#each defaultEntry.combat.tracks}}
+              <option value="{{this.id}}" {{#if (eq this.id ../defaultEntry.combat.initialTrackId)}}selected{{/if}}>{{this.name}}</option>
+              {{/each}}
+            </select>
+          </div>
+          {{/unless}}
+          {{> "modules/game-orchestra/templates/parts/binding-tools.hbs" entry=defaultEntry.combat}}
+          {{/if}}
+        </div>
+      </div>
+    </div>
+  </div>
+  {{/unless}}
+</div>
+
+{{!-- ---- exclusive / duck ----
+     Section level, not per phase: one flag governs whichever playlist this section resolves to.
+     Only offered once something is actually bound - the choice is meaningless with no playlist
+     set, and this is the one place in the module where a control genuinely cannot work yet
+     (UX-9). Ducking only means anything while something else is still playing underneath, which
+     is exactly what layering is and replacing is not - hence the unless-block below.
+
+     NEVER write Handlebars delimiters inside a comment, in either comment form. A short comment
+     ends at its first closing pair and a long one at its first long closing pair, so either way
+     the comment terminates early and everything after it renders as literal text to the GM.
+     HR-L, and this exact comment shipped broken twice - once with a block expression in it, once
+     with the escape hatch that was supposed to explain the first. Describe the syntax in words. --}}
+{{#if hasAnyCombatPlaylist}}
+<div class="tree-node exclusive-node">
+  <label class="exclusive-toggle flexrow">
+    <input type="checkbox" class="exclusive-input" data-change-action="{{actions.exclusive}}" data-context-type="combat" {{checked combatExclusive}}>
+    <span>{{localize "GameOrchestra.TokenConfig.Exclusive"}}</span>
+  </label>
+  <p class="hint">{{localize "GameOrchestra.TokenConfig.ExclusiveHint"}}</p>
+  {{#unless combatExclusive}}
+  <div class="duck-row flexrow">
+    <label>{{localize "GameOrchestra.Layer.Duck"}}</label>
+    <input type="range" min="0" max="1" step="0.05" value="{{combatDuck}}"
+           data-change-action="{{actions.duck}}" data-context-type="combat"
+           aria-valuetext="{{localize 'GameOrchestra.Mixer.VolumeValue' percent=combatDuckPercent}}">
+    <output class="duck-readout">{{combatDuckPercent}}%</output>
+  </div>
+  <p class="hint">{{localize "GameOrchestra.Layer.DuckHint"}}</p>
+  {{/unless}}
+</div>
+{{/if}}

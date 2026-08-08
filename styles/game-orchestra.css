@@ -174,13 +174,30 @@
   display: none !important;
 }
 
-/* Compact mode is the docked, glanceable form: the axis pills and the suppression
-   toggles stay (they are the things a GM clicks mid-session), the prose pill goes -
-   it is the one part that needs reading rather than aiming at. */
+/* Compact mode is the docked, glanceable form: the axis pills and the suppression toggles stay
+   (they are the things a GM clicks mid-session).
+
+   The resolution pill used to be hidden outright here, and that was backwards. Compact is the
+   form meant for use AT THE TABLE, so hiding the pill removed the only always-on answer to "what
+   is playing and why" (UX-7) from precisely the mode where a GM needs it and has least time to
+   go looking. It stays, clipped to one line - it still reads at a glance, and the full text is on
+   the title attribute. UX-8 is about not rendering the inactive AXIS; it says nothing about the
+   resolution. */
 #ui-left-column-1 .game-orchestra-mood-widget.compact .mood-widget-resolution,
 #ui-left .game-orchestra-mood-widget.compact .mood-widget-resolution,
 .game-orchestra-mood-widget.compact .mood-widget-resolution {
-  display: none !important;
+  margin: 2px 0;
+  padding: 2px 4px;
+  font-size: 0.7em;
+}
+
+#ui-left-column-1 .game-orchestra-mood-widget.compact .mood-widget-resolution .active-text,
+#ui-left .game-orchestra-mood-widget.compact .mood-widget-resolution .active-text,
+.game-orchestra-mood-widget.compact .mood-widget-resolution .active-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Transport: resolution pill + suppression toggles (transport.mjs) */
@@ -447,6 +464,123 @@
 
 .game-orchestra-playlist-tree .tree-nodes-container {
   gap: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Top-level groups: Actors | Scenes | World.
+   One level above the numbered sections, so the hub opens on the group that is
+   audible rather than on everything that happens to be configured.
+   --------------------------------------------------------------------------- */
+.game-orchestra-playlist-tree .tree-group {
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.15));
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.game-orchestra-playlist-tree .tree-group.is-resolving {
+  border-color: #2ecc71;
+  box-shadow: 0 0 6px rgba(46, 204, 113, 0.35);
+}
+
+.game-orchestra-playlist-tree .tree-group-header {
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+/* Only the title toggles. The header row also holds the scene picker, and a
+   row-wide toggle target would collapse the group out from under the <select>
+   the GM was aiming at. */
+.game-orchestra-playlist-tree .group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.9em;
+  flex: 1;
+  min-width: 0;
+}
+
+.game-orchestra-playlist-tree .group-title.clickable {
+  cursor: pointer;
+}
+
+.game-orchestra-playlist-tree .group-title.clickable:hover {
+  color: var(--color-text-hyperlink, #ff6400);
+}
+
+.game-orchestra-playlist-tree .tree-group-header .scene-picker-select {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.game-orchestra-playlist-tree .tree-group-body {
+  gap: 12px;
+  padding: 0 10px 10px;
+}
+
+.game-orchestra-playlist-tree .group-count {
+  opacity: 0.6;
+  font-weight: normal;
+}
+
+/* ---------------------------------------------------------------------------
+   Actor rows and the drop zone that adds one.
+   --------------------------------------------------------------------------- */
+.game-orchestra-playlist-tree .actor-node .node-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.game-orchestra-playlist-tree .actor-thumb {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 3px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+/* Dashed rather than solid: this is a target, not a row of data. */
+.game-orchestra-playlist-tree .actor-add-zone {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--color-border-subtle, rgba(255, 255, 255, 0.25));
+  border-radius: 6px;
+  opacity: 0.65;
+  font-size: 0.9em;
+}
+
+.game-orchestra-playlist-tree .actor-add-zone.drop-hover {
+  opacity: 1;
+  border-style: solid;
+  border-color: #2ecc71;
+  background: rgba(46, 204, 113, 0.1);
+}
+
+/* The two workbench buttons on a bound row, side by side so neither reads as primary. */
+.game-orchestra-playlist-tree .binding-tools,
+.game-orchestra-mood-grid .binding-tools {
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.game-orchestra-playlist-tree .binding-tools > button,
+.game-orchestra-mood-grid .binding-tools > button {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Area (mood) / Combat (phase) tree-nodes laid out as two side-by-side

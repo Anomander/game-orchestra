@@ -28,6 +28,27 @@ describe.skipIf(!built)('the built dist/ bundle', () => {
     expect(Hooks.once.mock.calls.map(([event]) => event)).toContain('init');
   });
 
+  it('ships every partial the templates include, not just the top-level templates', () => {
+    // buildTemplates() used to be a flat readdir. templates/parts/ holds the partials that
+    // playlist-tree.hbs and music-config.hbs include by full path, so a flat copy produced a
+    // release that renders perfectly in development and throws "The partial ... could not be
+    // found" the first time a GM opens the hub - with nothing in the dev loop able to notice.
+    const templateDir = path.join(__dirname, '../dist/templates');
+    const collect = (dir, prefix = '') => fs.readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => (e.isDirectory()
+        ? collect(path.join(dir, e.name), `${prefix}${e.name}/`)
+        : (e.name.endsWith('.hbs') ? [`${prefix}${e.name}`] : [])));
+    const shipped = collect(templateDir);
+
+    for (const file of shipped) {
+      const source = fs.readFileSync(path.join(templateDir, file), 'utf8');
+      for (const match of source.match(/\{\{>\s*"([^"]+)"/g) || []) {
+        const name = match.match(/"([^"]+)"/)[1].replace('modules/game-orchestra/templates/', '');
+        expect(shipped, `${file} includes '${name}', which dist/ does not contain`).toContain(name);
+      }
+    }
+  });
+
   it('preserves the class names settings.mjs matches on (--keep-names)', () => {
     // P1 in docs/wiki/packaging.md, and the whole reason the build passes --keep-names.
     //

@@ -1,5 +1,5 @@
 import { CONST } from './config.mjs';
-import { resolveInitialTrack } from './helpers.mjs';
+import { resolveInitialTrack, getDocumentCategory } from './helpers.mjs';
 
 /**
  * The write half of **J1 (Bind)** - see docs/wiki/ux.md.
@@ -228,6 +228,80 @@ export async function applyBindingDuck(store, path, duck) {
   return duck < 1
     ? store.apply({ set: { [`${path}.duck`]: duck } })
     : store.apply({ unset: [`${path}.duck`] });
+}
+
+/**
+ * Set (or clear) whether a combatant's own combat music **replaces** the winning context instead
+ * of playing as an additive layer over it (architecture.md § Layers).
+ *
+ * Stored once per **section** (`music.combat.exclusive`), never per phase overlay: one flag
+ * governs whichever playlist the section resolves to for any phase.
+ *
+ * `false` UNSETS, exactly as {@link applyBindingLayer} does and for the same reason - absent
+ * means "layers", so writing the negative stores a field that means what its absence already
+ * meant. Note the two opt-in directions are *opposite*: a combatant layers unless it opts out
+ * here, while a mood/phase overlay replaces unless it opts in via `layer`. That asymmetry is
+ * deliberate and predates both flags; flipping either would silently change every configured
+ * world.
+ * @param {BindingStore} store
+ * @param {string} path - From {@link bindingPath}, section-scoped (no overlay id)
+ * @param {boolean} exclusive
+ * @returns {Promise<void>}
+ */
+export async function applyBindingExclusive(store, path, exclusive) {
+  return exclusive
+    ? store.apply({ set: { [`${path}.exclusive`]: true } })
+    : store.apply({ unset: [`${path}.exclusive`] });
+}
+
+/**
+ * Pick the {@link BindingStore} backing one binding target.
+ *
+ * Three of the four targets need no code of their own; the **prototype token is the exception**
+ * and is the reason this function exists rather than being inlined at each call site. It lives
+ * here rather than in `api.mjs` because three callers now need it - the public API, the hub's
+ * actor scope, and the hub's scoped popout - and the prototype-token branch is precisely the one
+ * that fails *silently* when it is copied slightly wrong (HR-J).
+ *
+ * The error is supplied by the caller rather than thrown as a fixed type, so `api.mjs` keeps
+ * raising its own `GameOrchestraApiError` with an `INVALID_ARGUMENT` code while a UI caller gets
+ * a plain `Error` - without this module having to know either type exists.
+ * @param {'default'|object} target - `'default'`, or a Scene / TokenDocument / Actor /
+ *   PrototypeToken document.
+ * @param {(message: string) => Error} [makeError] - Builds the error thrown on a bad target.
+ * @returns {BindingStore}
+ * @throws {Error} Whatever `makeError` returns, when the target cannot back a binding.
+ */
+export function storeForTarget(target, makeError = (message) => new Error(message)) {
+  if (target === 'default') return globalSettingStore();
+  if (!target || typeof target !== 'object') {
+    throw makeError("Expected 'default' or a Scene / TokenDocument / Actor / PrototypeToken document.");
+  }
+  if (getDocumentCategory(target) === 'PrototypeToken') {
+    const actor = target.parent;
+    if (!actor) {
+      throw makeError('That PrototypeToken has no parent Actor, so there is nothing to write to.');
+    }
+    // Mirrors GameOrchestraConfig#updateObject's PrototypeToken branch, and must keep mirroring
+    // it. Plain DOT NOTATION, never `flags['game-orchestra']`: Foundry expands update keys with
+    // expandObject -> setProperty, which splits on "." and has no bracket syntax (HR-J). The
+    // bracketed form produced a literal key the Actor schema dropped while cleaning - the update
+    // resolved successfully and wrote NOTHING, confirmed live.
+    //
+    // Headless on purpose (HR-I): there is no sheet here, so there is no `app.token` preview
+    // clone to be caught by. That immunity is an argument for this host over reusing the window's.
+    return updateObjectStore({
+      readData: () => target.flags?.[CONST.moduleId] ?? {},
+      updateObject: (data) => actor.update(Object.entries(data).reduce((acc, [key, value]) => {
+        acc[`prototypeToken.flags.${CONST.moduleId}.${key}`] = value;
+        return acc;
+      }, {}))
+    });
+  }
+  if (typeof target.setFlag !== 'function') {
+    throw makeError(`Cannot bind against a ${target.constructor?.name ?? 'value'} - it is not a Document.`);
+  }
+  return documentFlagStore(target);
 }
 
 /**

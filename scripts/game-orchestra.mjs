@@ -42,7 +42,7 @@ import {
  * would fire the module's deprecation at itself.
  */
 const LEGACY_APP_KEYS = {
-  GameOrchestraConfig: [GameOrchestraConfig, 'no replacement yet - the token binding surface is still being merged into the hub (docs/wiki/ux.md step 6b)'],
+  GameOrchestraConfig: [GameOrchestraConfig, "PlaylistTreeApp.openScopedDocument(doc) - the hub scoped to one document - or api.bind.* headless"],
   MoodWidget: [MoodWidget, 'no replacement yet'],
   MoodConfigApp: [MoodConfigApp, 'no replacement yet'],
   PhaseConfigApp: [PhaseConfigApp, 'no replacement yet'],
@@ -105,11 +105,16 @@ Hooks.once('init', async () => {
   registerSettings();
   registerKeybindings();
 
+  // The `parts/` entries are PARTIALS, included by both the hub and GameOrchestraConfig rather
+  // than rendered on their own (docs/wiki/ux.md UX-2). loadTemplates registers each under its
+  // full path, which is the name the {{> "modules/game-orchestra/..."}} includes use.
   await loadTemplates([
     'modules/game-orchestra/templates/music-config.hbs',
     'modules/game-orchestra/templates/mood-widget.hbs',
     'modules/game-orchestra/templates/overlay-config.hbs',
-    'modules/game-orchestra/templates/custom-playlist-editor.hbs'
+    'modules/game-orchestra/templates/custom-playlist-editor.hbs',
+    'modules/game-orchestra/templates/parts/combat-grid.hbs',
+    'modules/game-orchestra/templates/parts/binding-tools.hbs'
   ]);
 });
 Hooks.once('ready', handleReady);

@@ -89,39 +89,6 @@ describe('GameOrchestraConfig', () => {
     });
   });
 
-  describe('formHandler Soundboard validation (H2 guard)', () => {
-    it('auto-assigns the first track when saving a plain Soundboard playlist with no explicit track', async () => {
-      const soundboardPlaylist = createMockPlaylist('pl-sfx', 'SFX Soundboard', [{ id: 'tr-1', name: 'Alarm' }], -1);
-      game.playlists.push(soundboardPlaylist);
-      game.playlists.get = vi.fn((id) => (id === 'pl-sfx' ? soundboardPlaylist : null));
-
-      const mockApp = { updateObject: vi.fn().mockResolvedValue(), close: vi.fn() };
-      const formData = { object: { 'music.combat.playlist': 'pl-sfx' } };
-
-      await GameOrchestraConfig.formHandler.call(mockApp, new Event('submit'), null, formData);
-
-      expect(mockApp.updateObject).toHaveBeenCalledWith(
-        expect.objectContaining({ 'music.combat.playlist': 'pl-sfx', 'music.combat.initialTrack': 'tr-1' })
-      );
-    });
-
-    it('does NOT auto-assign a track when saving a custom (graph) playlist, even in UNSEQUENCED mode', async () => {
-      const customPlaylist = createMockPlaylist('pl-custom', 'Custom Playlist', [{ id: 'tr-1', name: 'Track 1' }], -1);
-      customPlaylist.setFlag('game-orchestra', 'customPlayback', { version: 1, nodes: [], edges: [] });
-      game.playlists.push(customPlaylist);
-      game.playlists.get = vi.fn((id) => (id === 'pl-custom' ? customPlaylist : null));
-
-      const mockApp = { updateObject: vi.fn().mockResolvedValue(), close: vi.fn() };
-      const formData = { object: { 'music.combat.playlist': 'pl-custom' } };
-
-      await GameOrchestraConfig.formHandler.call(mockApp, new Event('submit'), null, formData);
-
-      const savedData = mockApp.updateObject.mock.calls[0][0];
-      expect(savedData['music.combat.playlist']).toBe('pl-custom');
-      expect(savedData['music.combat.initialTrack']).toBeUndefined();
-    });
-  });
-
   describe('handleUpdatePhaseEntry / handleClearPhaseEntry', () => {
     it('sets the phase-scoped combat playlist flag when a playlist is selected', async () => {
       const target = { value: 'pl-area', dataset: { phaseId: 'tense' }, closest: () => null };
