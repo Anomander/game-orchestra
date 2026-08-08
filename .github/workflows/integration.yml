@@ -21,6 +21,11 @@ on:
         description: 'Override the Foundry version (defaults to module.json compatibility.verified)'
         required: false
         type: string
+      against_dist:
+        description: 'Run the specs against the minified dist/ build rather than the working tree'
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       foundry_version:
@@ -29,6 +34,11 @@ on:
         type: string
       require_credentials:
         description: 'Fail instead of skipping when the Foundry licence secrets are absent'
+        required: false
+        default: false
+        type: boolean
+      against_dist:
+        description: 'Run the specs against the minified dist/ build rather than the working tree'
         required: false
         default: false
         type: boolean
@@ -124,6 +134,13 @@ jobs:
         working-directory: itest
         run: npm run fixtures
 
+      # `ITEST_AGAINST_DIST` makes up.sh build dist/ and mount that instead of the working tree.
+      #
+      # On by default for the release gate (release.yml passes `against_dist: true`) and for the
+      # nightly, which is the canary: a build regression found at 4am is a fixable morning, the
+      # same regression found while a release is publishing is not. On-demand and per-PR runs stay
+      # on the source tree, where a failure points at the code someone just changed rather than at
+      # the bundler.
       - name: Start Foundry
         if: steps.credentials.outputs.available == 'true'
         working-directory: itest
@@ -132,6 +149,7 @@ jobs:
           FOUNDRY_PASSWORD: ${{ secrets.FOUNDRY_PASSWORD }}
           FOUNDRY_ADMIN_KEY: itest-admin
           FOUNDRY_VERSION: ${{ inputs.foundry_version }}
+          ITEST_AGAINST_DIST: ${{ (inputs.against_dist || github.event_name == 'schedule') && '1' || '' }}
         run: npm run up
 
       - name: Bootstrap world

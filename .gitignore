@@ -4,6 +4,11 @@ node_modules/
 package-lock.json
 coverage/
 
+# Release build output (`npm run build`). Generated on every release from the tree; never a
+# source of truth, and never committed - a stale dist/ that disagreed with scripts/ would be
+# indistinguishable from a working one until a user loaded it.
+dist/
+
 .claude/
 
 # Integration tier: generated tone fixtures and Playwright output. The fixtures are rendered from

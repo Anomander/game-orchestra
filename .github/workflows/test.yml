@@ -21,5 +21,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # The release build, on every push - it takes under a second and it is the only thing that
+      # checks the bundle at all. It fails on an unreachable module, a template that stops
+      # compiling once minified, and a manifest path the build does not produce. Catching those
+      # here makes them a red push; catching them at release time makes them a blocked release.
+      #
+      # Before the tests, not after: tests/dist-bundle.test.mjs skips itself when dist/ is absent
+      # (a clean checkout has none), so building first is what makes that guard actually run.
+      - name: Build the release bundle
+        run: npm run build
+
       - name: Run unit tests
         run: npm test

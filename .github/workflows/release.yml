@@ -25,6 +25,9 @@ jobs:
     secrets: inherit
     with:
       require_credentials: true
+      # Certify the artifact, not the tree. The zip ships a minified bundle; running the audio
+      # specs against unbundled source would pass on code no user ever loads.
+      against_dist: true
 
   build:
     needs: audio
@@ -95,26 +98,28 @@ jobs:
           fi
           echo "Version verified: $MODULE_VERSION"
 
-      # Create zip with module files
+      # Build dist/ - the minified tree that ships.
+      #
+      # Order matters: this runs AFTER the module.json substitution above, because the build copies
+      # module.json into dist/ and the copy must carry the release's version and download URLs. Run
+      # the other way round and the published manifest points at an empty `download`.
+      - name: Build
+        run: npm run build
+
+      # Zip the built tree, not the source. `cd dist` keeps the archive rooted at the module - a zip
+      # with a leading `dist/` component installs as a module Foundry cannot find.
+      #
+      # The sourcemap is excluded deliberately: it is four times the size of everything else and is
+      # published as a separate release asset below, for anyone triaging a minified stack trace.
       - name: Zip Files
         run: |
-          zip -r ${{ env.ZIP_NAME }} \
-            lang/ \
-            scripts/ \
-            styles/ \
-            templates/ \
-            LICENSE \
-            module.json \
-            release_notes.txt \
-            README.md \
-            -x "*.lock" \
-            -x "package*.json" \
-            -x "node_modules/*"
+          cd dist
+          zip -r "../${{ env.ZIP_NAME }}" . -x "*.map"
 
-      # The audio gate tests the working tree; the release ships a zip built from the explicit
-      # file list above. Those are not the same thing: a file added to module.json but forgotten
-      # in that list passes every test and ships a module that 404s on load. Verify that every
-      # path the manifest declares is actually inside the archive.
+      # The audio gate now tests dist/, and the build itself verifies the manifest against dist/ -
+      # but neither covers the archiving step. A file present in dist/ and missing from the zip
+      # (an exclude pattern that matched too much, say) still ships a module that 404s on load, and
+      # every test upstream stays green. Verify the archive itself.
       - name: Verify the zip contains everything module.json declares
         run: |
           MISSING=0
@@ -131,6 +136,7 @@ jobs:
             exit 1
           fi
           echo "All manifest-declared paths are present in the archive."
+          ls -l "${{ env.ZIP_NAME }}"
 
       # Fetch existing release body if it exists
       - name: Fetch Release Body
@@ -142,7 +148,13 @@ jobs:
           tag: ${{ env.TAG_NAME }}
           doNotFailIfNotFound: true
 
-      # Update release with the built files
+      # Update release with the built files.
+      #
+      # The sourcemap rides along as a third asset. The shipped bundle carries no
+      # `//# sourceMappingURL` comment - linking one would cost every user a 404 per load for a
+      # file that is not in the zip - so this is opt-in triage equipment: download it next to the
+      # release, load it in devtools, and a stack trace against minified line 1 resolves back to
+      # the module and line it came from.
       - name: Update Release with Files
         id: create_version_release
         uses: ncipollo/release-action@v1
@@ -154,7 +166,7 @@ jobs:
           omitDraftDuringUpdate: true
           omitPrereleaseDuringUpdate: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: './module.json, ./${{ env.ZIP_NAME }}'
+          artifacts: './module.json, ./${{ env.ZIP_NAME }}, ./dist/scripts/game-orchestra.mjs.map'
           tag: ${{ env.TAG_NAME }}
           body: |
             ${{ steps.release.outputs.body }}

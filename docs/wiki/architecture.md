@@ -7,7 +7,10 @@ How a change in game state becomes a change in audio.
 ## Execution model
 
 The module loads as one native ESM graph from `scripts/game-orchestra.mjs` (declared in `module.json`
-`esmodules`). No bundler, no build step.
+`esmodules`). In development that graph is 41 separate module requests straight from the tree — no
+bundler, no build step. Releases ship the same graph bundled into one minified file by
+`npm run build`; the module boundaries are a source-organisation fact, not a runtime one. See
+[packaging.md](packaging.md).
 
 `Hooks.once('init')` builds the single global namespace:
 

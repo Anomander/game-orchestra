@@ -3,12 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node tools/build.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^3.2.7",
+    "esbuild": "^0.28.1",
     "handlebars": "^4.7.9",
     "vitest": "^3.2.0"
   }

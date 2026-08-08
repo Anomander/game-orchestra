@@ -54,6 +54,18 @@ if [[ ! -f "$repo/itest/fixtures/out/tone-alpha.wav" ]]; then
   exit 1
 fi
 
+# Which tree the container mounts as the module. Default is the working tree - the fast local loop.
+#
+# ITEST_AGAINST_DIST=1 builds and mounts `dist/` instead: the minified bundle that actually ships.
+# The release workflow sets it, because a gate that certifies the source while the zip carries a
+# bundle is a gate for code no user runs. Build here rather than making the caller remember to,
+# so that a stale dist/ can never be silently certified as a fresh one.
+if [[ -n "${ITEST_AGAINST_DIST:-}" ]]; then
+  echo "Building dist/ (ITEST_AGAINST_DIST is set); the suite will run against the shipped bundle."
+  (cd "$repo" && npm run build)
+  export MODULE_MOUNT="../../dist"
+fi
+
 compose="$repo/itest/docker/docker-compose.yml"
 
 echo "Starting Foundry ${FOUNDRY_VERSION} on port ${FOUNDRY_PORT}..."

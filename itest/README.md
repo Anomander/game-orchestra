@@ -30,8 +30,41 @@ npm run ci
 | `npm run bootstrap` | Create and launch the test world |
 | `npm test` | Run the specs |
 | `npm run test:headed` / `test:ui` | Debug |
-| `npm run down` | Stop and wipe the container |
+| `npm run down` | Stop the container and **destroy the data volume** — read the warning below |
 | `npm run ci` | All of the above, in order |
+
+Set `ITEST_AGAINST_DIST=1` to run the suite against the minified release build rather than the
+working tree — `up.sh` runs `npm run build` and mounts `dist/`. The release gate and the nightly
+both do this; see [docs/wiki/packaging.md](../docs/wiki/packaging.md). It is also the reason specs
+and harness helpers may only reach the module through `game.modules.get('game-orchestra').api` and
+`game.gameOrchestra`: `dist/` ships one bundled `scripts/game-orchestra.mjs`, so a deep import like
+`import('/modules/game-orchestra/scripts/helpers.mjs')` 404s there.
+
+### `npm run down` destroys your Foundry licence activation
+
+It is `docker compose down -v`, and the `-v` takes the data volume with it. The volume holds
+`/data/Config/license.json`. The host-side cache in `.cache/` preserves the 140 MB *download*, not
+the *activation* — so without `FOUNDRY_USERNAME`/`FOUNDRY_PASSWORD` to hand, the next `up` lands on
+`/license` and every spec fails in `globalSetup` waiting for a user list that never renders.
+
+**This matters because the failure that tempts you to run it is not fixed by running it.** After a
+container is recreated (changing the module mount does this), Foundry can die on:
+
+```
+A fatal error occurred while trying to start the Foundry Virtual Tabletop server:
+Foundry VTT cannot start in this directory which is already locked by another process.
+```
+
+That is a stale lock left by the previous container, not a broken volume. Clear it in place:
+
+```bash
+docker compose -f docker/docker-compose.yml down          # no -v
+docker run --rm -v docker_foundry-data:/data alpine rm -rf /data/Config/options.json.lock
+npm run up
+```
+
+It is a *directory*, not a file — `rm -f` fails on it, which is its own small trap. Reserve
+`npm run down` for when you actually want a clean world and have credentials available.
 
 ### The port is 30001, not 30000
 

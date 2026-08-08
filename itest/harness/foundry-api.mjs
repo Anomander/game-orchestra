@@ -138,14 +138,18 @@ export async function bindScenePlaylist(page, spec) {
 export async function applyGraphPreset(page, playlistId, presetId, toneOrder) {
   return page.evaluate(
     async ({ id, preset, order }) => {
-      const { getPreset } = await import('/modules/game-orchestra/scripts/graph-presets.mjs');
       const playlist = game.playlists.get(id);
       const sounds = order.map((name) => {
         const sound = playlist.sounds.contents.find((s) => s.name === name);
         if (!sound) throw new Error(`No track named '${name}' on playlist '${playlist.name}'`);
         return sound;
       });
-      const builder = getPreset(preset);
+      // `api.graph.presets` rather than a deep import of graph-presets.mjs: the release build
+      // bundles every module into one file, so `scripts/graph-presets.mjs` does not exist in the
+      // shipped tree and the import would 404. This tier gates that artifact, so it may only reach
+      // the module through surfaces the bundle exposes. Same array, same builders, so the point of
+      // the comment above - that these specs cannot drift from the schema - still holds.
+      const builder = game.modules.get('game-orchestra').api.graph.presets.find((p) => p.id === preset);
       if (!builder) throw new Error(`Unknown graph preset '${preset}'`);
       const graph = builder.build(sounds);
       await playlist.setFlag('game-orchestra', 'customPlayback', graph);
@@ -325,11 +329,12 @@ export async function describeState(page) {
     // `isHeadGM` is a module-level export in helpers.mjs, **not** a method on the controller.
     // Reading it as `controller.isHeadGM?.()` yields undefined and therefore a confident,
     // permanent `false` - which reads as "the engine is not running here" and sends you looking
-    // for a headship bug that does not exist. Import the real helper instead; the module is
-    // served by Foundry, so a dynamic import in the page gets the same instance the module uses.
-    const { isHeadGM } = await import('/modules/game-orchestra/scripts/helpers.mjs');
+    // for a headship bug that does not exist.
+    //
+    // Reached through `api.isHeadGM` rather than a deep import of helpers.mjs, which the release
+    // build does not ship as its own file - see docs/wiki/packaging.md. It is the same helper.
     return {
-      isHeadGM: isHeadGM(),
+      isHeadGM: game.modules.get('game-orchestra').api.isHeadGM(),
       audioLocked: !!game.audio?.locked,
       currentContext: controller?.currentContext?.playlist?.name ?? null,
       playing: game.playlists.contents.flatMap((playlist) =>

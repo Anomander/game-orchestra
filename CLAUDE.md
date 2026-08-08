@@ -14,12 +14,25 @@ read the page that matches your task before writing code.**
 | Command | What it does |
 |---|---|
 | `npm test` | Full vitest suite. Baseline: **2023 tests, 43 files, all passing.** ~4s. |
+| `npm run build` | Release artifact only — writes `dist/`. Not part of the dev loop. See [packaging.md](docs/wiki/packaging.md). |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |
 | `cd itest && npm run ci` | **Audio integration tier** — real Foundry in Docker, real Web Audio, ~10 min, 19 specs. Needs a Foundry licence. Also runs as a **gate on every release**. See [integration-testing.md](docs/wiki/integration-testing.md). |
 
-There is **no build step, no bundler, no TypeScript, and no linter.** `scripts/*.mjs` ships
-verbatim to the browser as native ESM. `node --check <file>` is the fastest syntax check.
+There is **no build step for development, no TypeScript, and no linter.** `scripts/*.mjs` is loaded
+by Foundry as native ESM straight from the tree — edit, reload, done. `node --check <file>` is the
+fastest syntax check.
+
+`npm run build` exists only to produce the **release** artifact (`dist/`): one minified bundle
+instead of 41 modules, 119 KB zipped instead of 380 KB. Nothing in the dev loop needs it, and
+`dist/` is gitignored. Two things about it are load-bearing rather than cosmetic — see
+[packaging.md](docs/wiki/packaging.md):
+
+- The bundle **must** be built with `--keep-names`. The minifier renames classes, and
+  `settings.mjs` gates a re-render on `app.constructor?.name` matching `'MoodWidget'` /
+  `'PlaylistTreeApp'` / `'GameOrchestraConfig'`. Without it those windows silently stop
+  refreshing — no throw, no console error.
+- Property mangling must stay off, or it rewrites the `api.mjs` surface third parties call.
 
 ---
 
@@ -82,6 +95,7 @@ code it guards, update the comment to match.
 | [ux.md](docs/wiki/ux.md) | **Adding, moving, or renaming any UI surface** — the five jobs + UX-1–UX-9 principles |
 | [node-anatomy.md](docs/wiki/node-anatomy.md) | **Adding a node type**, or putting anything new on a node |
 | [module-map.md](docs/wiki/module-map.md) | Locating code — file-by-file index with purity notes |
+| [packaging.md](docs/wiki/packaging.md) | **Touching `tools/build.mjs`, the release workflow, or anything about what ships** |
 | [testing.md](docs/wiki/testing.md) | Writing or fixing tests |
 | [integration-testing.md](docs/wiki/integration-testing.md) | **Touching anything under `itest/`**, or before trusting a green suite about playback |
 | [playbook.md](docs/wiki/playbook.md) | Step-by-step recipes for common change types |

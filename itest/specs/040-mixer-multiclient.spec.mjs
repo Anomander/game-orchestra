@@ -86,10 +86,17 @@ test.describe('mixer across clients', () => {
     // Marked on both clients - see the note in the spec above; the player's timeline is its own.
     const soloGm = await probeNow(gm);
     const soloPlayer = await probeNow(player);
+    // Through the public API, deliberately - `api.mix.setSolo` is `toggleSolo` followed by
+    // `applyMixToPlaylist`, which is what this used to do by hand via a direct
+    // `import('/modules/game-orchestra/scripts/playlist-mix-apply.mjs')`.
+    //
+    // That direct import cannot survive the release build: dist/ carries one bundled
+    // `scripts/game-orchestra.mjs`, so a deep path into an individual module 404s. Since this tier
+    // is the gate that certifies the built artifact (see docs/wiki/packaging.md), a spec may only
+    // reach the module through surfaces the bundle actually exposes - the API and
+    // `game.gameOrchestra`. Do not reintroduce a deep import here.
     await gm.evaluate(async ({ playlistId, soundId }) => {
-      const { toggleSolo, applyMixToPlaylist } = await import('/modules/game-orchestra/scripts/playlist-mix-apply.mjs');
-      toggleSolo(playlistId, soundId);
-      await applyMixToPlaylist(game.playlists.get(playlistId));
+      await game.modules.get('game-orchestra').api.mix.setSolo(playlistId, soundId);
     }, { playlistId: area.id, soundId: area.soundIds.alpha });
     await record(gm, 5000);
     const endGm = await probeNow(gm);

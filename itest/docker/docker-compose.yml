@@ -32,9 +32,17 @@ services:
       # bootstrapped world survives between local runs (world creation is the slow part) while CI
       # starts from empty every time.
       - foundry-data:/data
-      # The module under test, live from the working tree - no packaging step, which matches how
-      # the module actually ships (no bundler, native ESM straight to the browser).
-      - ../..:/data/Data/modules/game-orchestra:ro
+      # The module under test. Defaults to the working tree, which is what you want locally: edit
+      # a file, re-run a spec, no build in between.
+      #
+      # `up.sh` overrides MODULE_MOUNT to `../../dist` when ITEST_AGAINST_DIST is set, which the
+      # release gate does. That is not a nicety. This tier is the gate that lets a release publish
+      # to the Foundry Package API, and testing the source while shipping a minified bundle would
+      # certify something nobody downloads - the two differ by a bundler, a minifier, and a
+      # class-name-preserving transform, each of which can break playback silently.
+      #
+      # Paths here resolve relative to this file (itest/docker/), not the repo root.
+      - ${MODULE_MOUNT:-../..}:/data/Data/modules/game-orchestra:ro
       # The generated tone bank, addressable inside the world as `gameorchestra-itest/*.wav`.
       - ../fixtures/out:/data/Data/gameorchestra-itest:ro
       # The downloaded Foundry release, kept on the host so it survives `down -v`. Without this the
