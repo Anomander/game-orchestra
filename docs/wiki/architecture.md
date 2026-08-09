@@ -326,8 +326,21 @@ An overlay entry is `{ playlist, initialTrack, priority, layer?, duck? }`. **`la
 of the replacement above**: the section resolves to its own base config as if the overlay weren't
 there, and the overlay plays over it instead — see § *Layers*.
 
-Baseline priorities live in `config.mjs`: scene area `-20`, scene combat `-15`, token combat
-`+20`.
+Baseline priorities live in `config.mjs#playlistSections`. Sorting is **descending**, so a higher
+number wins:
+
+| Scope | area | combat | with the `+10` overlay offset |
+|---|---|---|---|
+| World default | `-40` | `-35` | `-30` / `-25` |
+| Scene | `-20` | `-15` | `-10` / `-5` |
+| Token | — | `+20` | `+30` |
+
+**Every scope needs a real entry in that table, and the gaps must stay wider than the `+10`
+overlay offset.** The world default had no entry for a long time and fell through
+`sectionBaselinePriority`'s `?? 0` — and `0` outranks the scene's `-20`, so a global binding beat
+every scene binding and the whole hierarchy resolved backwards. It survived review because `0`
+reads as the bottom of the ladder next to a negative number, and because the tests asserted the
+numbers rather than their order. Assert the **order** (`tests/config.test.mjs` § *scope ladder*).
 
 `PlaylistContext.fromDocument(document, type, scopeEntity, overlayId)`'s fourth parameter defaults
 to reading the setting named by `CONST.overlayAxes[CONST.sectionAxis[type]].activeSetting` when

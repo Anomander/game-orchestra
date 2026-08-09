@@ -32,7 +32,25 @@ export const CONST = {
     { id: 'enrage', label: 'GameOrchestra.Phase.Enrage', icon: 'fas fa-fire', color: '#f44336' },
     { id: 'victory', label: 'GameOrchestra.Phase.Victory', icon: 'fas fa-trophy', color: '#ffeb3b' }
   ],
+  /**
+   * Per-scope, per-section baseline priorities. Resolution sorts **descending**
+   * (`MusicController#sortPlaylists`), so a HIGHER number wins - the ladder below reads
+   * bottom-up: world default < scene < token.
+   *
+   * The world default's entry is load-bearing and was missing for a long time. Without it
+   * `sectionBaselinePriority` fell through to its `?? 0` "scope has no such section" default,
+   * and 0 outranks the scene's -20/-15 - so a global binding beat every scene binding and the
+   * whole scope hierarchy resolved backwards. It read as correct because 0 *looks* like the
+   * bottom of the ladder next to a negative number. Confirmed live: a scene default lost to a
+   * global mood and the tree correctly reported it as "overridden by Global Mood".
+   *
+   * The 20-point gaps are not decoration either. An overlay (mood/phase) binding is resolved at
+   * its section's baseline **+10** (`PlaylistContext._extractSectionConfig`), so a gap smaller
+   * than 10 would let one scope's mood jump over the next scope's default. At -40/-20, the
+   * global mood lands at -30 and stays under the scene default's -20.
+   */
   playlistSections: {
+    DefaultMusic: { area: { label: 'GameOrchestra.PlaylistSection.Area', priority: -40 }, combat: { label: 'GameOrchestra.PlaylistSection.Combat', priority: -35 } },
     Scene: { area: { label: 'GameOrchestra.PlaylistSection.Area', priority: -20 }, combat: { label: 'GameOrchestra.PlaylistSection.Combat', priority: -15 } },
     Token: { combat: { label: 'GameOrchestra.PlaylistSection.Combat', priority: 20 } }
   },

@@ -13,7 +13,7 @@ read the page that matches your task before writing code.**
 
 | Command | What it does |
 |---|---|
-| `npm test` | Full vitest suite. Baseline: **2124 tests, 45 files, all passing.** ~9s. |
+| `npm test` | Full vitest suite. Baseline: **2157 tests, 46 files, all passing.** ~9s. |
 | `npm run build` | Release artifact only — writes `dist/`. Not part of the dev loop. See [packaging.md](docs/wiki/packaging.md). |
 | `npm run test:watch` | Watch mode. |
 | `npm run test:coverage` | Coverage report. |

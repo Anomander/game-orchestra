@@ -2026,6 +2026,112 @@ describe('MusicController', () => {
       expect(contexts[0].playlist).toBe(tokenMoodPl);
       expect(contexts[0].priority).toBe(30);
     });
+
+    // Everything above hand-writes `priority` into the mock flags. That is a *stored override*
+    // (helpers.mjs#sectionBaselinePriority), so those tests rank numbers the test itself chose
+    // and never touch the baselines - which is how the world default sat above the scene for a
+    // long time with this suite fully green. A binding made in the UI stores no priority at all.
+    //
+    // These re-run the same ladder with the priorities left out, which is the only shape a real
+    // world produces. Confirmed live: a scene default lost to a global mood, and the tree
+    // correctly reported "Currently overridden by Global Mood".
+    describe('with no stored priority anywhere - the shape a binding made in the UI actually has', () => {
+      beforeEach(() => {
+        setMockSetting('game-orchestra', 'defaultMusic', {
+          documentName: 'DefaultMusic',
+          data: {
+            'game-orchestra': {
+              music: {
+                area: { playlist: 'g-def', overlays: { calm: { playlist: 'g-mood' } } },
+                combat: { playlist: 'g-def' }
+              }
+            }
+          }
+        });
+      });
+
+      /**
+       * A scene bound through the UI: a playlist id and nothing else.
+       *
+       * `documentName` matters here in a way it does not in the tests above. With no stored
+       * priority the baseline is the whole answer, and `sectionBaselinePriority` reaches it by
+       * document name - omit it and the scene silently resolves at the `?? 0` fallback, which
+       * is the very inversion these tests exist to catch.
+       */
+      const sceneBoundTo = (area) => new MockDocument({
+        name: 'Test Scene',
+        id: 'sc1',
+        documentName: 'Scene',
+        getFlag: vi.fn((mod, key) => (key === 'music.area' ? area : null))
+      });
+
+      const winner = (combat = null) => {
+        const contexts = controller.getAllCurrentPlaylists();
+        contexts.sort((a, b) => controller.sortPlaylists(a, b, combat));
+        return contexts[0];
+      };
+
+      it('ranks a global mood above a global default', () => {
+        setMockSetting('game-orchestra', 'activeMood', 'calm');
+        game.scenes.active = null;
+
+        expect(winner().playlist).toBe(globalMoodPl);
+      });
+
+      it('ranks a scene default above a global default', () => {
+        game.scenes.active = sceneBoundTo({ playlist: 's-def' });
+
+        expect(winner().playlist).toBe(sceneDefaultPl);
+      });
+
+      it('ranks a scene default above a global MOOD - the regression', () => {
+        // The overlay's +10 must not carry a global binding over a scene one. With the world
+        // default missing from playlistSections this resolved to the global mood at +10 while
+        // the scene default sat at -20.
+        setMockSetting('game-orchestra', 'activeMood', 'calm');
+        game.scenes.active = sceneBoundTo({ playlist: 's-def' });
+
+        const top = winner();
+        expect(top.playlist).toBe(sceneDefaultPl);
+        expect(top.priority).toBe(-20);
+      });
+
+      it('ranks a scene mood above everything global', () => {
+        setMockSetting('game-orchestra', 'activeMood', 'calm');
+        game.scenes.active = sceneBoundTo({ playlist: 's-def', overlays: { calm: { playlist: 's-mood' } } });
+
+        const top = winner();
+        expect(top.playlist).toBe(sceneMoodPl);
+        expect(top.priority).toBe(-10);
+      });
+
+      it('ranks a scene combat section above the global combat section', () => {
+        game.scenes.active = new MockDocument({
+          name: 'Test Scene',
+          id: 'sc1',
+          documentName: 'Scene',
+          getFlag: vi.fn((mod, key) => (key === 'music.combat' ? { playlist: 's-def' } : null))
+        });
+        game.combats = { active: { started: true, combatant: null, combatants: [] } };
+
+        expect(winner(game.combats.active).playlist).toBe(sceneDefaultPl);
+      });
+
+      it('ranks a token combat theme above every scene and global binding', () => {
+        setMockSetting('game-orchestra', 'activePhase', 'p2');
+        game.scenes.active = sceneBoundTo({ playlist: 's-def' });
+
+        function PrototypeToken() {
+          this.flags = { 'game-orchestra': { music: { combat: { playlist: 't-def', exclusive: true } } } };
+        }
+        const token = new PrototypeToken();
+        game.combats = { active: { started: true, combatant: { token }, combatants: [{ token }] } };
+
+        const top = winner(game.combats.active);
+        expect(top.playlist).toBe(tokenDefaultPl);
+        expect(top.priority).toBe(20);
+      });
+    });
   });
 
   describe('reconcileRestoredPlayback (playback resurrected from a previous session)', () => {

@@ -137,12 +137,28 @@ describe('helpers.mjs', () => {
       expect(sectionBaselinePriority({ documentName: 'Actor' }, 'combat')).toBe(20);
     });
 
-    it('puts the world default at 0, below both scene baselines', () => {
-      // "Fallback" is exactly what a lower baseline than every configured scope means.
-      expect(sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'area')).toBe(0);
+    it('gives the world default its own baselines rather than falling through to 0', () => {
+      // This used to short-circuit to 0 - which is ABOVE the scene's -20, so the world
+      // default beat every scene binding and the hierarchy ran backwards. Asserting the
+      // number is not enough on its own; see the relational tests just below.
+      expect(sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'area')).toBe(-40);
+      expect(sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'combat')).toBe(-35);
+    });
+
+    it('ranks world default < scene < token, which is the promise the module makes', () => {
+      const world = sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'combat');
+      const scene = sectionBaselinePriority({ documentName: 'Scene' }, 'combat');
+      const token = sectionBaselinePriority({ documentName: 'Token' }, 'combat');
+      expect(world).toBeLessThan(scene);
+      expect(scene).toBeLessThan(token);
+
+      expect(sectionBaselinePriority({ documentName: 'DefaultMusic' }, 'area'))
+        .toBeLessThan(sectionBaselinePriority({ documentName: 'Scene' }, 'area'));
     });
 
     it('returns 0 for a section a scope has no entry for, rather than undefined', () => {
+      // Only reachable for a scope/section pair nothing can bind to (Token has no `area`),
+      // which is why 0 is safe here even though it would outrank a scene if it ever leaked.
       expect(sectionBaselinePriority({ documentName: 'Token' }, 'area')).toBe(0);
       expect(sectionBaselinePriority(null, 'area')).toBe(0);
     });

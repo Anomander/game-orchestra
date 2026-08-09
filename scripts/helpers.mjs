@@ -263,8 +263,13 @@ export function getAvailablePlaylists() {
  *
  * This is the hierarchy the module actually promises - a token's theme outranks the
  * scene it stands in, which outranks the world default - expressed as the numbers in
- * `config.mjs#playlistSections`. The world default has no entry there and sits at 0,
- * below both scene baselines, which is exactly what "fallback" means.
+ * `config.mjs#playlistSections`. Sorting is descending, so higher wins.
+ *
+ * **Every scope must have a real entry in that table, including the world default.** It
+ * used to short-circuit to 0 here instead, which is ABOVE the scene's -20/-15 and so
+ * inverted the entire hierarchy - see the comment on `playlistSections`. The `?? 0`
+ * below is now only what it says it is: the answer for a section a scope does not have
+ * (Token has no `area`), which is a section nothing can ever bind to anyway.
  *
  * Applied at resolution time by `PlaylistContext._extractSectionConfig`. Nothing
  * writes it into a flag; a stored `priority` is a deliberate *override* of this, and
@@ -275,7 +280,6 @@ export function getAvailablePlaylists() {
  */
 export function sectionBaselinePriority(document, type) {
   const category = getDocumentCategory(document);
-  if (category === 'DefaultMusic') return 0;
   const documentName = category === 'PrototypeToken' ? 'Token' : document?.documentName;
   // Actors speak for their prototype token, so they share the Token baseline.
   const key = documentName === 'Actor' ? 'Token' : documentName;
@@ -581,8 +585,8 @@ export class PlaylistContext {
     const overlay = entry?.layer === true ? null : entry;
     const isOverlay = !!overlay;
     const config = overlay || section;
-    // `baseline` is the scope's inherent standing - scene area -20, scene combat -15,
-    // token combat +20 (config.mjs#playlistSections), 0 for the world default. It is
+    // `baseline` is the scope's inherent standing - world default area -40 / combat -35,
+    // scene area -20, scene combat -15, token combat +20 (config.mjs#playlistSections). It is
     // applied HERE, at resolution time, rather than being written into a flag when a
     // binding happens to be created by drag-and-drop.
     //
